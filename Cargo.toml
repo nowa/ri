@@ -1,0 +1,26 @@
+[workspace]
+members = [
+    "crates/ri-agent-core",
+    "crates/ri-llm-provider",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/earendil-works/pi-mono"
+rust-version = "1.92"
+
+[workspace.dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+futures = "0.3"
+parking_lot = "0.12"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-stream = "0.1"
+uuid = { version = "1", features = ["v7", "serde"] }
+

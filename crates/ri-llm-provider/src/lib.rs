@@ -1,0 +1,64 @@
+//! LLM provider abstractions migrated from `pi-ai`.
+//!
+//! The crate keeps the pi event protocol and model concepts, but exposes them
+//! as Rust enums, traits, and async streams.
+
+pub mod anthropic;
+pub mod anthropic_compat;
+pub mod anthropic_oauth;
+pub mod api_registry;
+pub mod azure_openai;
+pub mod bedrock;
+pub mod env_api_keys;
+pub mod event_stream;
+pub mod faux;
+pub mod github_copilot_oauth;
+pub mod google_shared;
+pub mod google_vertex;
+pub mod http_api_provider;
+pub mod image_models;
+pub mod images_api_registry;
+pub mod json_repair;
+pub mod message_transform;
+pub mod mistral;
+pub mod models;
+pub mod node_http_proxy;
+pub mod openai_codex_oauth;
+pub mod openai_codex_responses;
+pub mod openai_completions;
+pub mod openai_responses;
+pub mod openrouter_images;
+pub mod overflow;
+pub mod stream;
+pub mod types;
+pub mod validation;
+
+pub use anthropic::*;
+pub use anthropic_compat::*;
+pub use anthropic_oauth::*;
+pub use api_registry::*;
+pub use azure_openai::*;
+pub use bedrock::*;
+pub use env_api_keys::*;
+pub use event_stream::*;
+pub use faux::*;
+pub use github_copilot_oauth::*;
+pub use google_shared::*;
+pub use google_vertex::*;
+pub use http_api_provider::*;
+pub use image_models::*;
+pub use images_api_registry::*;
+pub use json_repair::*;
+pub use message_transform::*;
+pub use mistral::*;
+pub use models::*;
+pub use node_http_proxy::*;
+pub use openai_codex_oauth::*;
+pub use openai_codex_responses::*;
+pub use openai_completions::*;
+pub use openai_responses::*;
+pub use openrouter_images::*;
+pub use overflow::*;
+pub use stream::*;
+pub use types::*;
+pub use validation::*;

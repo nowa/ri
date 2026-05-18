@@ -1,0 +1,30 @@
+[package]
+name = "ri-llm-provider"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Rust LLM provider abstractions migrated from pi-ai"
+
+[dependencies]
+async-trait.workspace = true
+base64 = "0.22.1"
+chrono.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+regex.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+ring = "0.17.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = "1"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls = "0.26"
+tokio-stream.workspace = true
+webpki-roots = "1"
+
+[dev-dependencies]
+tokio.workspace = true
