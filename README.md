@@ -14,10 +14,11 @@ async streams instead of a direct TypeScript API translation.
 
 ## Packages
 
-| Crate | Pi package | Purpose |
+| Rust surface | Pi package | Purpose |
 | --- | --- | --- |
 | `ri-llm-provider` | `packages/ai` / `pi-ai` | Unified multi-provider LLM API, model registry, streaming events, tool calls, usage tracking, provider payloads, OAuth helpers, and image APIs. |
-| `ri-agent-core` | `packages/agent` / `pi-agent-core` | Stateful agent runtime with event streaming, tool execution, queues, hooks, context transforms, session storage, resources, and harness utilities. |
+| `ri-agent-core` | `packages/agent` / `pi-agent-core` | Stateful agent runtime with event streaming, tool execution, message queues, lifecycle events, and turn orchestration. |
+| `ri_agent_core::harness` | `packages/agent` harness utilities | Session storage, prompt formatting, compaction, skills/resources, local execution env, provider hooks, and harness-level orchestration utilities. |
 
 ## Status
 
@@ -63,6 +64,20 @@ event tests.
 - Context transforms and custom `AgentMessage` conversion before LLM calls.
 - Prompt templates, skills/resources loading, session storage, compaction, and
   local execution environment utilities.
+
+`ri_agent_core::harness` includes:
+
+- `AgentHarness`, a higher-level runtime facade around `Agent`.
+- Persistent and in-memory session storage.
+- System prompt formatting with model, thinking level, active tools, resources,
+  session, and local environment context.
+- Skills and prompt template loading.
+- Branch summary and context compaction helpers.
+- Local execution environment utilities for file and shell operations.
+- Provider auth, request, and payload hooks.
+- Before-agent-start, context, tool-call, and tool-result hooks.
+- Model selection, thinking-level selection, resource updates, queue updates,
+  save points, aborts, and settled lifecycle events.
 
 ## Quick Start
 
@@ -161,6 +176,29 @@ Agent runs emit events for:
 The `Agent` updates its state from these events and notifies sync or async
 subscribers.
 
+### Agent Harness
+
+The harness is a core part of `ri-agent-core`, but it is intentionally kept as
+the `ri_agent_core::harness` module instead of a separate crate. It sits above
+the lower-level `Agent` and owns the application-facing runtime concerns that a
+coding agent or UI needs around the raw agent loop.
+
+`AgentHarness` combines:
+
+- `Session` state and storage.
+- `LocalExecutionEnv` file and shell utilities.
+- model and thinking-level selection.
+- active tool filtering and tool execution mode.
+- loaded skills and prompt templates.
+- generated system prompts.
+- provider authentication and stream option patching.
+- provider payload patching before network dispatch.
+- message queues for steering, follow-up, and next-turn work.
+- save-point and settlement events for durable app state.
+
+This keeps crate boundaries simple while still making the harness API visible as
+a first-class Rust surface.
+
 ## Development
 
 Run all tests:
@@ -178,6 +216,14 @@ cargo fmt
 ```
 
 The workspace currently targets Rust 2024 edition.
+
+## Contributing And Security
+
+- See [CONTRIBUTING.md](CONTRIBUTING.md) for development and pull request
+  guidelines.
+- See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+- See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency license
+  notes.
 
 ## Compatibility Notes
 
