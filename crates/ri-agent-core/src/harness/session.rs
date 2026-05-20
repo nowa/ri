@@ -7,6 +7,7 @@ use std::{
     error::Error,
     fmt::{Display, Formatter},
     fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -748,6 +749,17 @@ impl Session {
         first_kept_entry_id: impl Into<String>,
         tokens_before: u64,
     ) -> Result<String, SessionError> {
+        self.append_compaction_with_details(summary, first_kept_entry_id, tokens_before, None, None)
+    }
+
+    pub fn append_compaction_with_details(
+        &mut self,
+        summary: impl Into<String>,
+        first_kept_entry_id: impl Into<String>,
+        tokens_before: u64,
+        details: Option<Value>,
+        from_hook: Option<bool>,
+    ) -> Result<String, SessionError> {
         let id = self.storage.lock().create_entry_id();
         let parent_id = self.storage.lock().leaf_id()?;
         self.append_entry(SessionTreeEntry::Compaction {
@@ -757,8 +769,8 @@ impl Session {
             summary: summary.into(),
             first_kept_entry_id: first_kept_entry_id.into(),
             tokens_before,
-            details: None,
-            from_hook: None,
+            details,
+            from_hook,
         })
     }
 
@@ -1200,7 +1212,7 @@ pub fn load_jsonl_session_metadata(
     file_path: impl AsRef<Path>,
 ) -> Result<JsonlSessionMetadata, SessionError> {
     let file_path = file_path.as_ref();
-    let content = fs::read_to_string(file_path).map_err(|error| {
+    let file = fs::File::open(file_path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             SessionError::new(
                 SessionErrorCode::NotFound,
@@ -1210,11 +1222,19 @@ pub fn load_jsonl_session_metadata(
             storage_error(error)
         }
     })?;
-    let line = content
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .ok_or_else(|| invalid_session(file_path, "missing session header"))?;
-    let header = parse_header_line(line, file_path)?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let bytes_read = reader.read_line(&mut line).map_err(storage_error)?;
+        if bytes_read == 0 {
+            return Err(invalid_session(file_path, "missing session header"));
+        }
+        if !line.trim().is_empty() {
+            break;
+        }
+    }
+    let header = parse_header_line(line.trim_end_matches(['\r', '\n']), file_path)?;
     Ok(JsonlSessionMetadata {
         id: header.id,
         created_at: header.timestamp,

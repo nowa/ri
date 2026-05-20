@@ -122,7 +122,10 @@ fn truncate_tail_keeps_utf8_suffix_and_marks_partial_last_line() {
     assert_eq!(result.truncated_by, Some(TruncatedBy::Bytes));
     assert!(result.last_line_partial);
     assert_eq!(result.output_bytes, 5);
+}
 
+#[test]
+fn truncate_tail_drops_oversized_trailing_character_when_it_cannot_fit() {
     let oversized = truncate_tail(
         "abc🙂",
         TruncationOptions {

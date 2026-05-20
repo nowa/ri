@@ -1339,7 +1339,7 @@ fn summary_options(
     SimpleStreamOptions {
         stream: StreamOptions {
             max_tokens: Some(max_tokens),
-            api_key: Some(api_key),
+            api_key: (!api_key.is_empty()).then_some(api_key),
             headers: headers.unwrap_or_default(),
             ..Default::default()
         },

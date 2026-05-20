@@ -471,6 +471,26 @@ pub struct ImagesContext {
     pub input: Vec<ImagesContent>,
 }
 
+pub trait ImagesPayloadHook: Send + Sync {
+    fn on_payload(&self, model: &ImagesModel, payload: Value) -> Result<Value, String>;
+}
+
+impl std::fmt::Debug for dyn ImagesPayloadHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ImagesPayloadHook")
+    }
+}
+
+pub trait ImagesResponseHook: Send + Sync {
+    fn on_response(&self, model: &ImagesModel, response: ProviderResponse) -> Result<(), String>;
+}
+
+impl std::fmt::Debug for dyn ImagesResponseHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ImagesResponseHook")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImagesOptions {
@@ -478,15 +498,57 @@ pub struct ImagesOptions {
     pub api_key: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_retries: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_retry_delay_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub metadata: Map<String, Value>,
     #[serde(skip)]
     pub abort_flag: Option<Arc<AtomicBool>>,
+    #[serde(skip)]
+    pub payload_hooks: Vec<Arc<dyn ImagesPayloadHook>>,
+    #[serde(skip)]
+    pub response_hooks: Vec<Arc<dyn ImagesResponseHook>>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub extra: Map<String, Value>,
 }
 
 impl PartialEq for ImagesOptions {
     fn eq(&self, other: &Self) -> bool {
-        self.api_key == other.api_key && self.headers == other.headers && self.extra == other.extra
+        self.api_key == other.api_key
+            && self.headers == other.headers
+            && self.timeout_ms == other.timeout_ms
+            && self.max_retries == other.max_retries
+            && self.max_retry_delay_ms == other.max_retry_delay_ms
+            && self.metadata == other.metadata
+            && self.extra == other.extra
+    }
+}
+
+impl ImagesOptions {
+    pub fn apply_payload_hooks(
+        &self,
+        model: &ImagesModel,
+        mut payload: Value,
+    ) -> Result<Value, String> {
+        for hook in &self.payload_hooks {
+            payload = hook.on_payload(model, payload)?;
+        }
+        Ok(payload)
+    }
+
+    pub fn emit_response_hooks(
+        &self,
+        model: &ImagesModel,
+        response: ProviderResponse,
+    ) -> Result<(), String> {
+        for hook in &self.response_hooks {
+            hook.on_response(model, response.clone())?;
+        }
+        Ok(())
     }
 }
 

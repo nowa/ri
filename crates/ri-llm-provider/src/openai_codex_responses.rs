@@ -1,6 +1,8 @@
 use crate::{
     AssistantMessage, Context, Message, Model, ThinkingLevel, Tool, Usage,
-    json_repair::parse_json_with_repair, openai_responses::parse_openai_responses_usage,
+    json_repair::parse_json_with_repair,
+    node_http_proxy::resolve_http_proxy_url_for_websocket_target,
+    openai_responses::parse_openai_responses_usage,
 };
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -275,27 +277,16 @@ impl OpenAICodexWebSocket {
         let port = url
             .port_or_known_default()
             .ok_or_else(|| "WebSocket URL is missing a port".to_owned())?;
-        let tcp = TcpStream::connect((host, port))
-            .await
-            .map_err(|error| error.to_string())?;
-        let stream: Box<dyn AsyncReadWrite> = if scheme == "wss" {
-            let mut root_store = rustls::RootCertStore::empty();
-            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let config = rustls::ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_no_client_auth();
-            let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
-            let server_name = rustls_pki_types::ServerName::try_from(host.to_owned())
-                .map_err(|error| error.to_string())?;
-            Box::new(
-                connector
-                    .connect(server_name, tcp)
+
+        let stream =
+            if let Some(proxy_url) = resolve_http_proxy_url_for_websocket_target(url.as_str())? {
+                connect_websocket_proxy_stream(&url, proxy_url.as_str()).await?
+            } else {
+                let tcp = TcpStream::connect((host, port))
                     .await
-                    .map_err(|error| error.to_string())?,
-            )
-        } else {
-            Box::new(tcp)
-        };
+                    .map_err(|error| error.to_string())?;
+                maybe_tls_websocket_stream(scheme, host, Box::new(tcp)).await?
+            };
 
         let mut socket = Self { stream };
         socket.handshake(&url, headers).await?;
@@ -506,6 +497,131 @@ impl OpenAICodexWebSocket {
             .map_err(|error| error.to_string())?;
         self.stream.flush().await.map_err(|error| error.to_string())
     }
+}
+
+async fn connect_websocket_proxy_stream(
+    target_url: &reqwest::Url,
+    proxy_url: &str,
+) -> Result<Box<dyn AsyncReadWrite>, String> {
+    let proxy = reqwest::Url::parse(proxy_url)
+        .map_err(|error| format!("Invalid proxy URL {proxy_url:?}: {error}"))?;
+    let proxy_scheme = proxy.scheme();
+    if !matches!(proxy_scheme, "http" | "https") {
+        return Err(format!(
+            "{} Got {proxy_scheme}:",
+            crate::node_http_proxy::UNSUPPORTED_PROXY_PROTOCOL_MESSAGE
+        ));
+    }
+    let proxy_host = proxy
+        .host_str()
+        .ok_or_else(|| "Proxy URL is missing a host".to_owned())?;
+    let proxy_port = proxy
+        .port_or_known_default()
+        .ok_or_else(|| "Proxy URL is missing a port".to_owned())?;
+    let tcp = TcpStream::connect((proxy_host, proxy_port))
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut stream = maybe_tls_websocket_stream(proxy_scheme, proxy_host, Box::new(tcp)).await?;
+
+    let target_authority = websocket_connect_authority(target_url)?;
+    let mut connect_request =
+        format!("CONNECT {target_authority} HTTP/1.1\r\nHost: {target_authority}\r\n");
+    if let Some(auth) = proxy_basic_auth(&proxy) {
+        connect_request.push_str(&format!("Proxy-Authorization: Basic {auth}\r\n"));
+    }
+    connect_request.push_str("\r\n");
+    stream
+        .write_all(connect_request.as_bytes())
+        .await
+        .map_err(|error| error.to_string())?;
+    stream.flush().await.map_err(|error| error.to_string())?;
+    read_proxy_connect_response(&mut stream).await?;
+
+    let target_host = target_url
+        .host_str()
+        .ok_or_else(|| "WebSocket URL is missing a host".to_owned())?;
+    maybe_tls_websocket_stream(target_url.scheme(), target_host, stream).await
+}
+
+async fn maybe_tls_websocket_stream(
+    scheme: &str,
+    host: &str,
+    stream: Box<dyn AsyncReadWrite>,
+) -> Result<Box<dyn AsyncReadWrite>, String> {
+    if !matches!(scheme, "https" | "wss") {
+        return Ok(stream);
+    }
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+    let server_name = rustls_pki_types::ServerName::try_from(host.to_owned())
+        .map_err(|error| error.to_string())?;
+    Ok(Box::new(
+        connector
+            .connect(server_name, stream)
+            .await
+            .map_err(|error| error.to_string())?,
+    ))
+}
+
+fn websocket_connect_authority(url: &reqwest::Url) -> Result<String, String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "WebSocket URL is missing a host".to_owned())?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "WebSocket URL is missing a port".to_owned())?;
+    Ok(format!("{host}:{port}"))
+}
+
+fn proxy_basic_auth(proxy: &reqwest::Url) -> Option<String> {
+    let username = proxy.username();
+    if username.is_empty() {
+        return None;
+    }
+    let credentials = match proxy.password() {
+        Some(password) => format!("{username}:{password}"),
+        None => format!("{username}:"),
+    };
+    Some(encode_base64(credentials.as_bytes()))
+}
+
+async fn read_proxy_connect_response(stream: &mut Box<dyn AsyncReadWrite>) -> Result<(), String> {
+    let mut response = Vec::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        let n = stream
+            .read(&mut buf)
+            .await
+            .map_err(|error| error.to_string())?;
+        if n == 0 {
+            break;
+        }
+        response.extend_from_slice(&buf[..n]);
+        if response.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        if response.len() > 16 * 1024 {
+            return Err("Proxy CONNECT response exceeded 16 KiB".to_owned());
+        }
+    }
+    let text = String::from_utf8_lossy(&response);
+    let status = text
+        .lines()
+        .next()
+        .ok_or_else(|| "Proxy CONNECT response was empty".to_owned())?;
+    let status_code = status
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or_else(|| format!("Invalid proxy CONNECT response: {status}"))?;
+    if !(200..300).contains(&status_code) {
+        return Err(format!("Proxy CONNECT failed: {status}"));
+    }
+    Ok(())
 }
 
 fn websocket_key() -> String {
@@ -747,7 +863,29 @@ pub fn openai_codex_retry_delay_ms(
     attempt: usize,
     now_ms: i64,
 ) -> Option<u64> {
-    if attempt >= OPENAI_CODEX_MAX_RETRIES || !is_openai_codex_retryable_error(status, error_text) {
+    openai_codex_retry_delay_ms_with_limits(
+        status,
+        error_text,
+        retry_after_ms,
+        retry_after,
+        attempt,
+        now_ms,
+        OPENAI_CODEX_MAX_RETRIES,
+        None,
+    )
+}
+
+pub fn openai_codex_retry_delay_ms_with_limits(
+    status: u16,
+    error_text: &str,
+    retry_after_ms: Option<&str>,
+    retry_after: Option<&str>,
+    attempt: usize,
+    now_ms: i64,
+    max_retries: usize,
+    max_retry_delay_ms: Option<u64>,
+) -> Option<u64> {
+    if attempt >= max_retries || !is_openai_codex_retryable_error(status, error_text) {
         return None;
     }
 
@@ -774,7 +912,7 @@ pub fn openai_codex_retry_delay_ms(
         }
     }
 
-    Some(delay_ms)
+    Some(max_retry_delay_ms.map_or(delay_ms, |max| delay_ms.min(max)))
 }
 
 fn build_openai_codex_base_headers(

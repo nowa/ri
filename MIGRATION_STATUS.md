@@ -9,8 +9,22 @@ counterparts that pass.
 
 - Source agent package: `/home/nowa/Projects/src/pi/packages/agent`
 - Source AI package: `/home/nowa/Projects/src/pi/packages/ai`
-- Source agent tests counted: 16 `*.test.ts` files, about 150 `it/test` cases.
-- Source AI tests counted: 68 `*.test.ts` files, about 721 `it/test` cases.
+- Source agent tests counted: 16 `*.test.ts` files, 150 direct simple `it/test`
+  cases.
+- Source AI tests counted: 68 `*.test.ts` files, 721 direct simple `it/test`
+  cases after excluding direct `it.skip`, `it.skipIf`, and `it.each`/`test.each`
+  declarations.
+- Current simple baseline denominator: 871 direct source `it/test` cases across
+  `packages/agent` and `packages/ai`. This excludes 8 explicit skipped simple
+  cases, 126 direct conditional `it.skipIf` live cases, and 7
+  `it.each`/`test.each` declarations that are not statically expanded in this
+  baseline. It intentionally does not subtract the ordinary `it(...)` cases
+  nested under the 221 conditional `describe.skipIf` live suites; those
+  suite-level live conditions are tracked in this document and represented by
+  gated Rust live tests, but they are not part of the simple denominator.
+- This source scope intentionally excludes `packages/coding-agent`, which has
+  its own much larger test suite: 121 `*.test.ts` files and about 1,233 broad
+  static `it/test` declarations.
 
 ## Rust Artifacts Created
 
@@ -30,7 +44,13 @@ counterparts that pass.
   - Context-overflow detection with provider-specific error-shape corpus and
     silent/length-stop overflow signals.
   - Environment API key lookup.
-  - HTTP proxy URL resolution with `NO_PROXY` handling and unsupported protocol errors.
+  - HTTP proxy URL resolution with `NO_PROXY` and `npm_config_*` handling,
+    unsupported protocol errors, proxy-aware `reqwest` client construction for
+    provider, image, Bedrock runtime ConverseStream, Google ADC token-refresh,
+    Anthropic/OpenAI Codex OAuth authorization-code token exchanges,
+    Anthropic/GitHub Copilot/OpenAI Codex OAuth token-refresh HTTP paths,
+    GitHub Copilot OAuth device-flow requests, plus OpenAI Codex WebSocket HTTP
+    CONNECT proxy tunneling.
   - Bedrock endpoint/region config helpers plus Converse payload helpers for
     message conversion, Claude thinking fields, GovCloud display omission, and
     application-inference-profile cache points, including image tool-result
@@ -47,6 +67,11 @@ counterparts that pass.
     function calls, usage, and safety/error finish reasons.
   - Fireworks and Together model metadata/base-URL/provider compatibility overrides.
   - OpenCode Zen/Go model metadata/base-URL/provider compatibility overrides.
+  - Source-compatible base URL/API/header mappings for additional
+    OpenAI-compatible and Anthropic-compatible providers used by live source
+    tests: xAI, Groq, Cerebras, Hugging Face, Together, z.ai, MiniMax, Kimi
+    Coding, Vercel AI Gateway, Xiaomi MiMo token-plan variants, and OpenRouter
+    text backends.
   - Mistral chat payload helpers for tool schema serialization, image
     tool-result content, cross-provider tool-call ID normalization, missing
     tool-result synthesis, request header/session-affinity handling, stream
@@ -63,21 +88,44 @@ counterparts that pass.
     Fireworks tool-field compatibility omissions.
   - Anthropic client/header config helpers for GitHub Copilot Claude Bearer auth,
     Copilot static/dynamic headers, vision request detection, Fireworks
-    session-affinity headers, and adaptive-model interleaved-thinking beta
-    omission.
-  - Anthropic Claude Code tool-name casing helpers.
-  - Anthropic OAuth helpers for authorization URL construction, token/refresh
-    JSON requests, localhost callback preservation, and token response parsing.
+    session-affinity headers, Cloudflare AI Gateway `cf-aig-authorization`
+    and BYOK upstream authorization preservation, and adaptive-model
+    interleaved-thinking beta omission.
+  - Anthropic Claude Code tool-name casing helpers, including OAuth payload,
+    assistant-history replay, stream inbound restoration, and built-in provider
+    wiring integration.
+  - Anthropic OAuth helpers for PKCE generation, authorization URL
+    construction, local callback server/state validation, manual redirect input
+    login flow, token/refresh JSON requests, localhost callback preservation,
+    token response parsing, and proxy-aware async authorization-code/refresh
+    token exchange primitives.
   - OpenAI Codex OAuth helpers for authorization URL construction,
-    form-encoded token/refresh requests, and refresh failure message formatting.
+    local callback server/state validation, callback-driven login flow,
+    form-encoded token/refresh requests, refresh failure message formatting,
+    and proxy-aware async authorization-code/refresh token exchange primitives.
   - OpenAI Codex Responses helpers for ChatGPT JWT account-id extraction,
     SSE/WebSocket headers, request-body construction, URL resolution, reasoning
     effort mapping, cached WebSocket input-delta continuation, SSE frame parsing
-    and retry-delay calculation, WebSocket debug-stat accounting, and
+    and retry/backoff request handling, WebSocket debug-stat accounting, and
     service-tier usage cost resolution.
   - GitHub Copilot OAuth helpers for device-flow request construction,
     slow-down-aware polling intervals, enterprise domain normalization,
-    Copilot token refresh headers, and base-URL derivation.
+    Copilot token refresh headers, base-URL derivation, proxy-aware async
+    device-code/access-token poll/token-refresh primitives, complete
+    device-flow orchestration with refresh-token exchange, and post-login
+    model-policy enable requests for known GitHub Copilot models.
+  - OAuth provider metadata registry for built-in Anthropic, GitHub Copilot,
+    and OpenAI Codex providers, including callback-server markers and
+    source-style register/unregister/reset behavior. The live external
+    requirements manifest is guarded against this built-in provider set so
+    each built-in OAuth provider has a stored-token auth-storage requirement
+    before its live paths can be considered covered.
+  - Source-compatible `~/.pi/agent/auth.json` auth storage resolution for API
+    keys and OAuth credentials, including expired-token refresh/writeback,
+    private file permissions, unknown OAuth provider pre-refresh validation,
+    Anthropic/OpenAI Codex callback and manual-input login-to-auth-storage
+    round trips, and GitHub Copilot device-flow auth-storage round trips with
+    `enterpriseUrl` preservation.
   - OpenAI Responses stream and message conversion helpers for function-call
     partial JSON cleanup, foreign tool-call ID normalization, tool-result
     images, prompt-cache fields, session-affinity headers, default reasoning
@@ -89,12 +137,80 @@ counterparts that pass.
     strict-mode compatibility, provider reasoning fields, z.ai tool streaming,
     Anthropic-style cache-control markers, tool-result image replay, and
     thinking-as-text replay, prompt-cache fields, session-affinity headers,
-    empty user-block pruning, stream usage parsing, streamed text/thinking/tool
-    delta aggregation, finish-reason mapping, and routed response model metadata.
+    Cloudflare AI Gateway `cf-aig-authorization` and BYOK upstream
+    authorization preservation, empty user-block pruning, stream usage parsing,
+    streamed text/thinking/tool delta aggregation, finish-reason mapping, and
+    routed response model metadata.
   - Images API provider registry and `generate_images` dispatch, plus
-    OpenRouter image model registry and image payload/response helpers for
-    chat-completions image generation, inline data URLs, headers, usage, and
+    the full 28-model OpenRouter image model registry from the source generated
+    catalog and image payload/response helpers for chat-completions image
+    generation, inline data URLs, caller-supplied authorization/header
+    preservation, usage, payload/response hooks,
+    request timeout behavior, retry/backoff handling for retryable HTTP/network
+    failures, non-retryable HTTP errors, invalid JSON responses, and
     aborted/error result mapping.
+  - JSONL session metadata loading now reads only the first non-empty header
+    line, matching the source line-reading metadata path without requiring the
+    whole session file to decode successfully.
+  - Gated live provider smoke tests for OpenAI Responses, OpenAI Completions,
+    Anthropic Messages, Google/Gemini, Google Vertex API-key/ADC,
+    Mistral Conversations, Azure OpenAI Responses, Bedrock Converse, and
+    OpenRouter Images, plus gated live
+    `response_id`, abort/token-usage shape across the non-skipped source
+    `tokens` provider set, immediate pre-abort parity across the source
+    `abort.test.ts` provider set, Bedrock abort-then-new-message parity from
+    `abort.test.ts`, total-usage component consistency across the source
+    `total-tokens` provider set, empty-message handling across the source
+    `empty` provider set, orphaned tool-call-without-result handling across
+    the source `tool-call-without-result` provider set, Unicode/emoji
+    tool-result handling across the source `unicode-surrogate` provider set
+    for Rust-representable strings, user image-input handling across the
+    source `stream.test.ts` image-capable provider set, image tool-result
+    handling across the source `image-tool-result` provider set, Responses API
+    tool-result image `function_call_output` payload placement, Anthropic OAuth tool-name
+    normalization, context-overflow live detection across the source remote
+    and local provider sets, Cloudflare Workers AI and Cloudflare AI Gateway Workers
+    `/compat` `stream.test.ts` live parity, Cloudflare AI Gateway
+    OpenAI/Anthropic BYOK `stream.test.ts` live parity, OpenAI
+    Responses/OpenAI Codex cache-affinity E2E, OpenAI Responses reasoning
+    replay E2E, OpenRouter cache-write E2E, Anthropic Opus 4.7 reasoning smoke,
+    Anthropic/Bedrock interleaved-thinking E2E, provider thinking-disable
+    E2E, Anthropic Messages eager tool input streaming and long
+    cache-retention E2E probes across the generated Anthropic-compatible
+    provider catalog, Google Vertex ADC streaming-delta, thinking-delta,
+    multi-turn context, live tool-call streaming, and total-usage checks,
+    source `stream.test.ts` positive live matrices for OpenAI Responses
+    `gpt-5.4`, Google/Gemini thinking/tool-followup, Bedrock
+    streaming/thinking/tool-followup, DeepSeek, xAI, Groq, Cerebras,
+    Hugging Face, Together, OpenRouter, z.ai, Mistral
+    Devstral/Magistral/Pixtral, MiniMax, Kimi Coding, Xiaomi MiMo token-plan
+    variants, Vercel AI Gateway Google/Anthropic/OpenAI routes, and
+    local Ollama `gpt-oss:20b` positive stream parity, stored-token OAuth
+    `stream.test.ts` matrices for Anthropic OAuth Sonnet/Opus, GitHub Copilot
+    OpenAI/Anthropic, and OpenAI Codex SSE/WebSocket, and live provider-error
+    checks for OpenAI Responses, OpenAI Completions,
+    Anthropic, Google/Gemini, Mistral, and Azure OpenAI Responses. Bedrock has smoke,
+    opt-in extensive per-model catalog smoke,
+    empty-message, orphaned tool-call,
+    Unicode/emoji tool-result, tool-call, streaming, thinking, tool-followup,
+    immediate abort, abort-then-new-message, abort/token-usage, and
+    total-usage live coverage. The
+    OpenRouter Images live coverage asserts `response_id`, provider-error
+    mapping, text+image output, and image-input generation. Anthropic OAuth,
+    GitHub Copilot OAuth, and OpenAI Codex OAuth also have gated auth-storage
+    live smoke/`response_id`/source `stream.test.ts` basic/tool/stream/thinking
+    and follow-up coverage/empty-message/orphaned-tool-call/Unicode
+    tool-result/image tool-result/immediate-abort/abort-token/total-usage coverage via
+    `~/.pi/agent/auth.json`.
+    These default to a no-network pass unless `RI_LIVE_PROVIDER_TESTS=1` and
+    provider credentials are present. `RI_LIVE_PROVIDER_STRICT=1` makes any
+    credential/service skip fail, turning the suite into a hard proof gate for
+    a fully configured environment. Gate parsing/default-off behavior,
+    strict-skip behavior, strict readiness reporting, and stored-OAuth
+    `auth.json` readiness are covered by behavior tests. The previous
+    migration meta-tests that scanned `provider_live.rs` or this status file to
+    prove live-test matrix entries have been removed; live coverage should now
+    be judged by the actual gated live tests and strict readiness behavior.
   - Usage helpers for enforcing `total_tokens == input + output + cache_read +
     cache_write` across provider usage parsers.
 
@@ -127,12 +243,17 @@ counterparts that pass.
     selection, compaction preparation, file-operation metadata extraction, and
     summarization conversation serialization/generation, compact execution, and
     branch-summary collection/preparation/generation, UUID v7 session id.
-  - Minimal high-level `AgentHarness` foundation with env/session/model access,
+  - High-level `AgentHarness` implementation with env/session/model access,
     thinking-level and queue-mode state, subscriptions, queue update events,
-    `before_agent_start` message/system-prompt hooks, `context` hooks with
+    `before_agent_start` message/system-prompt hooks, before/after lifecycle
+    hook error-path pending-write flushes, `after_agent_finish`
+    observation/persisted-message hooks including provider-start failure and
+    aborted-turn settlement,
+    `context` hooks with
     assistant-error persistence on hook failure, `tool_call`/`tool_result`
     hooks through the direct loop, fixed skill/prompt-template resources with
-    `resources_update` events, direct skill and prompt-template invocation,
+    `resources_update` events, source-style resource `source` metadata
+    preservation, direct skill and prompt-template invocation,
     stream-options accessors, model/thinking selection events with session
     persistence, listener-safe pending `append_message`, custom-entry,
     custom-message, label, and session-name writes, dynamic system-prompt
@@ -141,7 +262,16 @@ counterparts that pass.
     `save_point` events for flushed pending writes, `next_turn`
     injection/persistence, tool/active-tool state management with request-time
     active-tool filtering, running-turn steering/follow-up queues, abort queue
-    clearing that preserves next-turn messages, and idle waiting.
+    clearing that preserves next-turn messages, source-parity
+    `abort_and_wait` idle/event-listener settlement, idle waiting, and
+    high-level session compaction that persists generated summaries through the session
+    with `session_before_compact` cancellation/provided-summary hooks and
+    hook success/error and generation-error pending-write flushes, session
+    compact events, plus high-level
+    session branch moves that generate and persist branch summaries with
+    `session_before_branch_summary` supplied-summary/skip hooks,
+    hook success/error and generation-error pending-write flushes, and
+    branch-summary events.
   - In-memory and JSONL session storage/repositories with branching, labels, metadata, and context building.
   - Skill and prompt-template invocation formatting plus skill/prompt-template
     loading, argument substitution, and skill ignore-file handling.
@@ -154,315 +284,96 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 276 passing.
+Current Rust tests: 1086 enumerated by `cargo test --workspace -- --list`.
 
-- `crates/ri-llm-provider/tests/provider_core.rs`
-  - `supports_xhigh_model_metadata_port`
-  - `fireworks_and_together_model_metadata_match_provider_catalog`
-  - `fireworks_and_together_env_keys_resolve_from_provider_specific_variables`
-  - `cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog`
-  - `opencode_model_metadata_and_env_key_match_provider_catalog`
-  - `openrouter_image_model_registry_matches_generated_catalog`
-  - `openrouter_images_payload_uses_chat_completions_image_modalities`
-  - `openrouter_images_payload_formats_image_input_and_image_only_output`
-  - `openrouter_images_response_returns_text_images_response_id_and_usage`
-  - `openrouter_images_usage_and_error_mapping_match_provider`
-  - `images_api_registry_dispatches_generate_images_and_reports_missing_provider`
-  - `mistral_payload_serializes_tool_schema_as_plain_json`
-  - `mistral_simple_payload_selects_prompt_or_effort_reasoning_controls`
-  - `mistral_payload_preserves_image_tool_results_for_vision_models`
-  - `mistral_payload_synthesizes_missing_tool_results_and_normalizes_ids`
-  - `mistral_request_headers_apply_session_affinity_without_overriding_callers`
-  - `mistral_stream_chunks_preserve_response_id_usage_and_tool_calls`
-  - `bedrock_model_registry_exposes_available_models`
-  - `bedrock_endpoint_resolution_matches_region_and_profile_rules`
-  - `bedrock_raw_message_conversion_skips_unknown_user_content_blocks`
-  - `bedrock_raw_message_conversion_skips_unknown_assistant_content_blocks`
-  - `bedrock_raw_message_conversion_skips_user_messages_with_only_unknown_blocks`
-  - `bedrock_raw_message_conversion_skips_assistant_messages_with_only_unknown_blocks`
-  - `bedrock_payload_uses_adaptive_thinking_for_claude_opus_47`
-  - `bedrock_payload_maps_xhigh_to_native_opus_47_effort`
-  - `bedrock_payload_omits_display_for_govcloud_nonadaptive_thinking`
-  - `bedrock_payload_omits_display_for_govcloud_adaptive_region`
-  - `bedrock_payload_uses_model_name_for_application_profile_adaptive_thinking`
-  - `bedrock_payload_injects_cache_points_when_application_profile_name_supports_claude_cache`
-  - `bedrock_payload_uses_model_name_for_application_profile_fixed_budget_thinking`
-  - `bedrock_payload_preserves_image_tool_results_in_converse_messages`
-  - `bedrock_stream_events_preserve_blocks_usage_and_stop_reason`
-  - `bedrock_stream_events_format_exception_as_error_event`
-  - `azure_openai_base_url_normalization_matches_provider_rules`
-  - `azure_openai_config_builds_default_resource_url_from_env`
-  - `azure_openai_deployment_name_prefers_option_env_map_then_model_id`
-  - `azure_openai_responses_payload_uses_deployment_tools_session_and_reasoning`
-  - `google_vertex_client_config_resolves_api_keys_adc_and_custom_base_urls`
-  - `google_vertex_client_config_forwards_custom_base_url_to_api_key_client`
-  - `google_convert_tools_strips_schema_meta_keys_for_parameters`
-  - `google_convert_tools_recursively_strips_nested_schema_meta_keys`
-  - `google_convert_tools_preserves_ref_when_stripping_meta_keys`
-  - `google_convert_tools_does_not_mutate_original_parameters`
-  - `google_convert_tools_preserves_schema_for_parameters_json_schema`
-  - `google_convert_tools_handles_tools_without_schema_meta`
-  - `google_convert_tools_returns_none_for_empty_tools`
-  - `google_thinking_detection_uses_explicit_thought_marker_only`
-  - `google_simple_payload_disables_thinking_for_gemini_reasoning_models`
-  - `google_simple_payload_maps_reasoning_to_budget_or_level`
-  - `google_retain_thought_signature_preserves_and_updates_non_empty_values`
-  - `google_stream_chunks_preserve_response_id_signatures_usage_and_tool_calls`
-  - `google_stream_chunks_map_safety_finish_to_error_event`
-  - `google_convert_messages_keeps_separate_image_turn_for_gemini_2`
-  - `google_convert_messages_nests_image_tool_results_for_gemini_3`
-  - `google_convert_messages_omits_validator_marker_for_unsigned_gemini_3_tool_calls`
-  - `google_convert_messages_omits_validator_marker_for_unsigned_vertex_tool_calls`
-  - `google_convert_messages_preserves_valid_same_model_thought_signature`
-  - `google_convert_messages_does_not_add_thought_signature_for_non_gemini_3_models`
-  - `message_transform_normalizes_cross_provider_tool_call_ids`
-  - `message_transform_copilot_openai_to_anthropic_downgrades_thinking_and_signatures`
-  - `message_transform_synthesizes_only_missing_trailing_tool_results_after_normalization`
-  - `message_transform_downgrades_images_thinking_and_orphaned_tool_calls`
-  - `anthropic_sse_parser_repairs_malformed_event_and_streamed_tool_json`
-  - `anthropic_sse_parser_ignores_unknown_events_after_message_stop`
-  - `anthropic_sse_parser_preserves_response_id_and_initial_input_usage`
-  - `anthropic_sse_parser_preserves_start_usage_when_delta_omits_fields`
-  - `anthropic_payload_sends_per_tool_eager_input_streaming_by_default`
-  - `anthropic_payload_uses_legacy_fine_grained_tool_streaming_beta_when_eager_disabled`
-  - `anthropic_payload_omits_fine_grained_beta_when_no_tools`
-  - `anthropic_payload_adds_short_cache_control_to_system_last_user_and_last_tool`
-  - `anthropic_payload_sets_one_hour_cache_ttl_for_long_retention`
-  - `anthropic_payload_omits_cache_control_for_none_and_ttl_when_unsupported`
-  - `anthropic_payload_preserves_assistant_tool_use_and_image_tool_results`
-  - `anthropic_simple_payload_disables_budget_reasoning_when_thinking_is_off`
-  - `anthropic_simple_payload_disables_adaptive_reasoning_when_thinking_is_off`
-  - `anthropic_simple_payload_uses_adaptive_thinking_for_opus_47`
-  - `anthropic_simple_payload_maps_xhigh_to_opus_47_effort`
-  - `anthropic_claude_code_tool_name_normalization_round_trips_known_tools`
-  - `anthropic_oauth_authorize_url_uses_localhost_callback`
-  - `anthropic_oauth_authorization_code_request_keeps_localhost_redirect_uri`
-  - `anthropic_oauth_refresh_request_omits_scope`
-  - `anthropic_oauth_token_response_maps_credentials_and_expiry`
-  - `openai_codex_oauth_authorize_url_matches_cli_flow_parameters`
-  - `openai_codex_oauth_refresh_request_uses_form_encoded_body`
-  - `openai_codex_oauth_refresh_failure_message_includes_status_and_body`
-  - `openai_codex_responses_extracts_account_id_and_builds_transport_headers`
-  - `openai_codex_responses_omits_session_affinity_without_session_id`
-  - `openai_codex_responses_resolves_urls`
-  - `openai_codex_responses_payload_matches_request_body_defaults_and_session`
-  - `openai_codex_responses_payload_maps_minimal_reasoning_to_low`
-  - `openai_codex_responses_sse_parser_maps_text_and_terminal_statuses`
-  - `openai_codex_responses_cached_websocket_request_sends_only_input_delta`
-  - `openai_codex_responses_websocket_debug_stats_match_cached_request_accounting`
-  - `openai_codex_responses_retry_delay_respects_headers_and_backoff`
-  - `openai_codex_responses_usage_uses_client_tier_when_response_echoes_default`
-  - `github_copilot_oauth_device_flow_requests_match_provider`
-  - `github_copilot_oauth_poll_waits_before_first_poll_and_slows_down`
-  - `github_copilot_oauth_poll_uses_remaining_lifetime_before_slow_down_timeout`
-  - `github_copilot_oauth_refresh_and_base_url_helpers_match_provider`
-  - `github_copilot_anthropic_client_config_matches_provider_headers`
-  - `fireworks_anthropic_client_config_applies_session_affinity_rules`
-  - `fireworks_anthropic_payload_applies_tool_compat_rules`
-  - `openai_responses_stream_cleans_partial_json_from_tool_calls`
-  - `openai_responses_message_conversion_hashes_foreign_tool_item_ids`
-  - `openai_responses_message_conversion_keeps_tool_result_images_in_function_output`
-  - `openai_responses_stream_maps_text_deltas_and_replays_text_signature`
-  - `openai_responses_payload_sets_prompt_cache_fields_for_long_retention`
-  - `openai_responses_payload_includes_function_tools_with_default_strict_false`
-  - `openai_responses_payload_sets_long_retention_for_proxy_when_supported`
-  - `openai_responses_payload_omits_cache_fields_when_retention_is_none`
-  - `openai_responses_payload_omits_long_retention_when_compat_disables_it`
-  - `openai_responses_default_headers_apply_session_affinity_and_overrides`
-  - `openai_responses_payload_sends_default_none_reasoning_for_supported_openai_models`
-  - `openai_responses_payload_omits_default_reasoning_when_off_is_unsupported`
-  - `openai_responses_payload_omits_default_reasoning_for_github_copilot`
-  - `openai_responses_payload_maps_explicit_reasoning_and_includes_encrypted_content`
-  - `openai_responses_payload_skips_aborted_reasoning_only_history`
-  - `openai_responses_payload_omits_function_call_item_id_for_same_provider_model_handoff`
-  - `openai_responses_usage_applies_service_tier_cost_multiplier`
-  - `openai_responses_stream_maps_response_incomplete_event_to_length`
-  - `openai_completions_payload_omits_empty_tools_unless_tool_history_exists`
-  - `openai_completions_payload_forwards_tool_choice_and_strict_compat`
-  - `openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat`
-  - `openai_completions_payload_keeps_normal_groq_reasoning_effort_without_mapping`
-  - `openai_completions_zai_tool_stream_metadata_override_and_no_tools_match_provider`
-  - `openai_completions_cloudflare_gateway_compat_uses_conservative_payload_and_headers`
-  - `openai_completions_payload_applies_anthropic_cache_control_format`
-  - `openai_completions_messages_batch_tool_result_images_after_tool_results`
-  - `openai_completions_messages_replay_thinking_as_text_parts`
-  - `openai_completions_messages_replay_reasoning_signature_and_details`
-  - `openai_completions_messages_add_empty_reasoning_content_when_required`
-  - `openai_completions_payload_sets_prompt_cache_fields_for_direct_openai`
-  - `openai_completions_payload_sets_long_retention_for_proxy_when_supported`
-  - `openai_completions_payload_omits_proxy_cache_fields_and_uses_env_retention`
-  - `openai_completions_default_headers_apply_session_affinity_and_overrides`
-  - `openai_completions_chunk_usage_preserves_cache_write_tokens_and_totals`
-  - `openai_completions_chunk_usage_does_not_double_count_reasoning_tokens`
-  - `openai_completions_chunk_metadata_preserves_choice_usage_cache_write_tokens`
-  - `openai_completions_stream_coalesces_tool_call_deltas_by_stable_index`
-  - `openai_completions_stream_accumulates_mixed_deltas_independently`
-  - `openai_completions_stream_normalizes_reasoning_field_by_provider`
-  - `openai_completions_stream_ignores_null_chunks_and_finishes`
-  - `openai_completions_stream_maps_finish_reason_errors_and_requires_terminal_reason`
-  - `openai_completions_stream_attaches_reasoning_details_to_tool_calls`
-  - `usage_total_tokens_match_components_for_provider_parsers`
-  - `openai_completions_chunk_metadata_sets_response_model_without_changing_requested_model`
-  - `faux_provider_registers_and_estimates_usage`
-  - `faux_provider_supports_helper_blocks_and_stream_order`
-  - `faux_provider_supports_multiple_models_factories_and_message_rewrites`
-  - `faux_provider_replaces_appends_exhausts_and_unregisters`
-  - `faux_provider_streams_multiple_tool_call_deltas`
-  - `faux_provider_streams_terminal_error_and_aborted_messages`
-  - `faux_provider_respects_abort_flag_before_and_during_streaming`
-  - `faux_provider_consumes_responses_and_caches_per_session`
-  - `validation_coerces_json_schema_primitives`
-  - `validation_matches_ajv_style_plain_schema_coercions`
-  - `env_api_keys_ignore_generic_github_tokens_for_copilot`
-  - `empty_message_conversion_skips_empty_user_blocks_and_empty_assistant_turns`
-  - `node_http_proxy_respects_no_proxy_and_rejects_unsupported_protocols`
-  - `overflow_detects_error_and_silent_overflow_modes`
-  - `overflow_matches_provider_error_shapes_without_rate_limit_false_positives`
-  - `overflow_matches_context_overflow_provider_error_corpus`
-  - `json_repair_and_hash_match_core_semantics`
-  - `unicode_surrogate_repair_preserves_pairs_and_replaces_unpaired_escapes`
+- `ri-llm-provider`: 914 tests: 1 library test, 282 `provider_core` tests, and
+  631 `provider_live` tests. This is 193 above the 721 direct simple source
+  cases counted under `packages/ai/test`, because the Rust suite also includes
+  Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
+  live/E2E coverage.
+- `ri-agent-core`: 172 tests across `agent_core`, `agent_harness`,
+  `execution_env`, `harness_compaction`, `harness_truncate`, `resources`, and
+  `session_storage`. This is 22 above the 150 direct simple source cases counted
+  under `packages/agent/test`, because several Rust tests cover grouped source
+  behavior plus Rust-specific session, harness, and execution-environment
+  contracts.
+- On 2026-05-20, 52 migration meta/audit/implementation-shape tests were
+  removed. Those tests read Rust source, TypeScript source,
+  `MIGRATION_STATUS.md`, or `Cargo.toml` to prove that source case titles,
+  evidence markers, live-test runner names, documentation entries, source
+  metadata, or implementation details existed. The remaining coverage claims
+  should be based on behavior tests and explicit status notes, not tests that
+  inspect the test suite, implementation source, or this document for proof.
+- The proxy-aware `reqwest`/raw-TCP source-scanner tests were removed as
+  over-specific implementation-shape tests.
 
-- `crates/ri-agent-core/tests/agent_core.rs`
-  - `agent_loop_emits_lifecycle_events_and_messages`
-  - `agent_loop_executes_tool_calls_and_appends_results`
-  - `agent_loop_injects_queued_messages_before_initial_provider_request`
-  - `agent_loop_injects_queued_messages_after_all_tool_results`
-  - `agent_loop_uses_prepare_next_turn_snapshot_before_continuing`
-  - `agent_loop_should_stop_after_current_turn_when_hook_returns_true`
-  - `agent_loop_processes_follow_up_messages_after_agent_would_stop`
-  - `agent_loop_stops_after_tool_batch_when_all_results_terminate`
-  - `agent_loop_continues_after_parallel_tool_batch_when_not_all_results_terminate`
-  - `agent_loop_prepares_tool_arguments_before_execution`
-  - `agent_loop_tool_call_hook_can_replace_arguments_before_execution`
-  - `agent_loop_parallel_tool_execution_emits_completion_order_and_persists_source_order`
-  - `agent_loop_forces_sequential_execution_when_tool_requires_it`
-  - `agent_loop_forces_sequential_execution_when_any_tool_requires_it`
-  - `agent_loop_runs_parallel_tools_in_parallel_by_default`
-  - `agent_loop_transforms_context_before_converting_to_llm`
-  - `agent_loop_runs_tool_call_and_tool_result_hooks`
-  - `agent_loop_tool_result_hook_can_terminate_tool_batch`
-  - `agent_loop_continue_validates_context_tail`
-  - `agent_loop_continue_from_existing_context_omits_existing_user_events`
-  - `agent_stateful_wrapper_initializes_state_and_forwards_thinking_level`
-  - `agent_stateful_wrapper_updates_state_and_notifies_subscribers`
-  - `agent_stateful_wrapper_rejects_prompt_and_continue_while_streaming`
-  - `agent_stateful_wrapper_validates_continue_tail_before_loop`
-  - `agent_stateful_wrapper_forwards_session_id_to_provider_options`
-  - `agent_prompt_with_images_builds_multimodal_user_message`
-  - `agent_stateful_wrapper_persists_provider_start_failures_as_error_messages`
-  - `agent_abort_handle_cancels_active_provider_stream`
-  - `agent_queues_steering_and_follow_up_without_mutating_state`
-  - `agent_has_queued_messages_tracks_steering_follow_up_and_clears`
-  - `agent_prompt_injects_queued_steering_before_first_provider_request`
-  - `agent_clear_queues_prevents_queued_messages_from_running`
-  - `agent_reset_clears_state_and_queued_messages`
-  - `agent_continue_from_assistant_tail_processes_queued_follow_up`
-  - `agent_continue_from_assistant_tail_drains_steering_one_at_a_time`
-  - `harness_utilities_cover_utf8_truncation_compaction_and_uuid`
+## Source Parity Audit Notes
 
-- `crates/ri-agent-core/tests/agent_harness.rs`
-  - `agent_harness_constructs_and_exposes_queue_modes`
-  - `agent_harness_resources_getters_clone_and_emit_update_events`
-  - `agent_harness_model_and_thinking_setters_emit_selection_events`
-  - `agent_harness_tracks_tools_and_uses_only_active_tools_in_requests`
-  - `agent_harness_injects_next_turn_messages_into_next_prompt`
-  - `agent_harness_before_agent_start_appends_messages_and_persists_them`
-  - `agent_harness_context_hook_failures_persist_assistant_error_messages`
-  - `agent_harness_runs_tool_call_and_tool_result_hooks_through_direct_loop`
-  - `agent_harness_drains_steering_one_at_a_time_and_emits_queue_updates`
-  - `agent_harness_abort_clears_steer_and_follow_up_but_preserves_next_turn`
+- The active source denominator remains 871 direct simple `it/test` cases: 721
+  under `packages/ai/test` plus 150 under `packages/agent/test`. The
+  `packages/coding-agent` suite is intentionally outside this migration scope.
+- Provider behavior coverage now includes built-in HTTP providers for OpenAI
+  Responses, OpenAI Completions, OpenAI Codex, Anthropic, Bedrock,
+  Google/Gemini, Google Vertex, Mistral, Azure OpenAI Responses, OpenRouter
+  Images, proxy-aware networking, OAuth auth-storage, Bedrock credential
+  resolution/signing, streaming/SSE/eventstream parsing, payload transforms,
+  model registries, and gated live provider matrices.
+- Agent behavior coverage now includes the advanced loop, queue handling,
+  stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
+  summary persistence, JSONL/session storage, resources, prompt templates,
+  skills, truncation, and local execution environment behavior.
+- The raw 1086-vs-871 count is not completion proof. Rust tests sometimes
+  aggregate several source assertions, some source cases are Node/SDK-loader
+  specific, and many provider live/E2E tests require credentials, local
+  services, or manual OAuth interaction before they prove external parity.
 
-- `crates/ri-agent-core/tests/execution_env.rs`
-  - `local_execution_env_reads_writes_lists_and_removes_files`
-  - `local_execution_env_reports_symlinks_without_following_them`
-  - `local_execution_env_lists_symlinks_as_symlinks`
-  - `local_execution_env_read_text_lines_stops_at_requested_limit`
-  - `local_execution_env_returns_file_errors_for_missing_and_wrong_kinds`
-  - `local_execution_env_appends_creates_temps_and_removes_recursively`
-  - `local_execution_env_executes_shell_commands_in_cwd_with_env`
-  - `local_execution_env_returns_spawn_error_for_non_executable_shell`
-  - `local_execution_env_cleanup_is_best_effort`
-  - `local_execution_env_streams_stdout_and_stderr_callbacks`
-  - `local_execution_env_returns_callback_errors_from_exec_handlers`
-  - `local_execution_env_times_out_long_running_commands`
-  - `local_execution_env_returns_aborted_for_aborted_commands`
-  - `local_execution_env_returns_aborted_for_pre_aborted_file_operations`
-  - `shell_capture_sanitizes_and_writes_large_output_file`
+## Completion Audit
 
-- `crates/ri-agent-core/tests/harness_compaction.rs`
-  - `compaction_calculates_context_tokens_from_usage_and_thresholds`
-  - `compaction_estimates_tokens_and_uses_latest_valid_assistant_usage`
-  - `compaction_finds_cut_points_and_turn_start_edges`
-  - `compaction_prepares_entries_previous_summary_split_turn_and_file_ops`
-  - `compaction_prepares_custom_branch_messages_and_serializes_tool_results`
-  - `compaction_generate_summary_builds_prompt_and_passes_reasoning_options`
-  - `compaction_generate_summary_maps_error_and_aborted_results`
-  - `compaction_compact_returns_summary_details_and_clamps_max_tokens`
-  - `compaction_compact_summarizes_split_turn_and_maps_prefix_errors`
-  - `branch_summary_collects_abandoned_branch_entries`
-  - `branch_summary_prepares_messages_budget_and_file_ops`
-  - `branch_summary_generate_builds_prompt_options_and_file_details`
-  - `branch_summary_generate_replaces_prompt_and_maps_errors`
+This migration is not complete.
 
-- `crates/ri-agent-core/tests/session_storage.rs`
-  - `in_memory_storage_matches_core_storage_behaviour`
-  - `in_memory_storage_walks_paths_to_root`
-  - `in_memory_storage_finds_entries_by_type`
-  - `jsonl_storage_writes_loads_metadata_entries_leaf_and_labels`
-  - `jsonl_storage_rejects_missing_files_and_finds_entries_by_type`
-  - `jsonl_storage_label_lookup_can_be_cleared_and_reloaded`
-  - `jsonl_storage_rejects_malformed_headers_and_entries`
-  - `session_supports_branching_for_memory_and_jsonl_storage`
-  - `session_builds_context_tracks_model_thinking_and_moves_to_root_for_storage_kinds`
-  - `session_move_with_branch_summary_appears_in_context_for_storage_kinds`
-  - `session_builds_model_thinking_compaction_custom_and_branch_summary_context`
-  - `session_labels_and_session_info_do_not_affect_context`
-  - `jsonl_session_persists_leaf_entries_and_wire_entry_types`
-  - `in_memory_repo_opens_deletes_and_forks_by_metadata`
-  - `jsonl_repo_stores_lists_opens_deletes_and_forks_by_metadata`
-
-- `crates/ri-agent-core/tests/resources.rs`
-  - `formats_skill_and_prompt_template_invocations`
-  - `formats_visible_skills_for_system_prompt`
-  - `loads_skills_from_skill_files_and_root_markdown`
-  - `loads_skills_through_symlinked_directories`
-  - `load_skills_honors_ignore_files`
-  - `sourced_skills_preserve_source_and_attach_diagnostics`
-  - `loads_prompt_templates_non_recursively_from_dirs_and_files`
-  - `loads_prompt_templates_from_symlinked_markdown_files`
-  - `sourced_prompt_templates_preserve_source_and_attach_diagnostics`
-  - `prompt_template_argument_substitution_matches_pi_placeholders`
-
-- `crates/ri-agent-core/tests/harness_truncate.rs`
-  - `truncate_counts_utf8_bytes_without_buffer_dependencies`
-  - `truncate_head_uses_complete_utf8_lines_and_reports_first_line_overflow`
-  - `truncate_tail_keeps_utf8_suffix_and_marks_partial_last_line`
-  - `truncate_tail_matches_buffer_semantics_for_multibyte_edges`
-  - `truncate_tail_matches_buffer_semantics_across_deterministic_fuzz_cases`
-  - `truncate_line_and_format_size_match_harness_helpers`
-
-Verified with:
-
-```sh
-cargo test --workspace
-```
+- Local behavior-test coverage is substantially broader than the original
+  baseline, but strict external proof is still missing for the full provider
+  live matrix with real credentials, local model services, and manual browser or
+  device OAuth flows.
+- Remaining provider risk is case-by-case semantic parity for provider-specific
+  payload transforms, streaming edge cases, OAuth refresh/writeback behavior,
+  image API networking, proxy behavior, and live E2E flows that cannot be
+  certified by default-off gated tests alone.
+- Remaining agent risk is case-by-case semantic parity for advanced abort/error
+  termination paths, async listener settlement, lifecycle hook ordering, and
+  session/harness integration edge cases even where Rust behavior tests now
+  cover the main contracts. High-level compaction and branch-summary
+  persistence hooks have direct Rust behavior coverage, including hook removal,
+  supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-20 after removing the meta-tests and
+  adding summary hook removal, Bedrock runtime proxy coverage, and OpenRouter
+  Images custom authorization preservation:
+  `cargo fmt --check`,
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_removes_registered_summary_hooks -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_bedrock_provider_routes_runtime_request_through_resolved_proxy -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_openrouter_images_provider_preserves_custom_authorization_header -- --exact`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1086 tests.
 
 ## Known Missing Work
 
 This migration is not complete.
 
-- Most `pi-ai` real provider implementations are not migrated yet:
-  OpenAI Responses, OpenAI Completions, OpenAI Codex, Anthropic, Bedrock,
-  Google/Gemini, Google Vertex, Mistral, Azure OpenAI Responses, remaining
-  image API networking behavior, remaining OAuth providers and live OAuth flows,
-  HTTP proxy agent construction, and provider-specific payload transforms.
-- Most provider E2E behavior tests are not ported.
-- `pi-agent-core` advanced loop behavior is incomplete:
-  remaining high-level AgentHarness hooks/events beyond queue update basics,
-  remaining before/after lifecycle hooks,
-  remaining termination edge cases across abort/error paths, and async listener
-  settlement.
-- Harness/session implementation is only a foundation:
-  higher-level harness integration for summary persistence/hooks remains to be ported.
-- Test parity is far from complete: 276 Rust tests currently cover only the first
-  slice of roughly 871 source test cases.
+- Strict provider live/E2E completion still requires running the gated provider
+  matrix with real API keys, provider-specific environment configuration,
+  local Ollama/LM Studio/llama.cpp services, and stored OAuth credentials.
+- Manual interactive OAuth proof still requires real Anthropic callback,
+  GitHub Copilot device, and OpenAI Codex callback login flows with
+  `RI_LIVE_PROVIDER_TESTS=1` and `RI_LIVE_OAUTH_INTERACTIVE_TESTS=1`.
+- Provider-specific parity still needs continued source-by-source review for
+  edge transforms, streaming deltas, usage accounting, cache behavior,
+  response-id handling, image inputs/outputs, error mapping, and proxy routing
+  across all providers.
+- Agent-core parity still needs continued case-by-case review for termination
+  edge cases, before/after lifecycle hook ordering, async listener settlement,
+  and session/harness integration behavior outside the covered high-level
+  compaction and branch-summary hook contracts.
+- Test parity is not certified by raw count alone: 1086 Rust tests cover the
+  current Rust-representable provider and agent matrix, but the 871 source-case
+  denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

@@ -11,6 +11,7 @@ pub struct Skill {
     pub description: String,
     pub content: String,
     pub file_path: String,
+    pub source: Option<String>,
     pub disable_model_invocation: bool,
 }
 
@@ -430,6 +431,7 @@ fn load_skill_from_file(path: &Path) -> (Option<Skill>, Vec<SkillDiagnostic>) {
             description,
             content: parsed.body,
             file_path,
+            source: None,
             disable_model_invocation: parsed.disable_model_invocation,
         }),
         diagnostics,

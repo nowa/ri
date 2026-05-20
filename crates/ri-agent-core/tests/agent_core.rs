@@ -91,6 +91,21 @@ impl AgentToolExecutor for EchoExecutor {
     }
 }
 
+struct RecordingValueExecutor {
+    executed: Arc<Mutex<Vec<Value>>>,
+}
+
+#[async_trait]
+impl AgentToolExecutor for RecordingValueExecutor {
+    async fn execute(&self, _tool_call_id: &str, params: Value) -> Result<AgentToolResult, String> {
+        self.executed.lock().expect("mutex").push(params.clone());
+        Ok(AgentToolResult::text(format!(
+            "echoed: {}",
+            params.get("value").cloned().unwrap_or(Value::Null)
+        )))
+    }
+}
+
 struct FailingExecutor;
 
 #[async_trait]
@@ -255,6 +270,22 @@ impl AgentToolCallHook for ReplacingToolCallHook {
             Some("original")
         );
         Ok(Some(json!({ "value": "hooked" })))
+    }
+}
+
+struct NumberReplacingToolCallHook;
+
+#[async_trait]
+impl AgentToolCallHook for NumberReplacingToolCallHook {
+    async fn on_tool_call(
+        &self,
+        context: AgentToolCallHookContext,
+    ) -> Result<Option<Value>, String> {
+        assert_eq!(
+            context.input.get("value").and_then(Value::as_str),
+            Some("original")
+        );
+        Ok(Some(json!({ "value": 123 })))
     }
 }
 
@@ -1577,6 +1608,73 @@ async fn agent_loop_tool_call_hook_can_replace_arguments_before_execution() {
 }
 
 #[tokio::test]
+async fn agent_loop_executes_hook_replaced_args_without_schema_revalidation() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call(
+                "echo",
+                json!({ "value": "original" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(Map::new),
+                Some("tool-1".to_owned()),
+            ),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let tool = AgentTool {
+        definition: Tool {
+            name: "echo".to_owned(),
+            description: "Echo tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Echo".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(RecordingValueExecutor {
+            executed: executed.clone(),
+        }),
+    };
+
+    let mut context = context_with_model(&registration.get_model());
+    context.tools.push(tool);
+    let mut config = AgentLoopConfig::new(registration.get_model());
+    config
+        .tool_call_hooks
+        .push(Arc::new(NumberReplacingToolCallHook));
+    let (messages, events) = agent_loop_prompt(context, "run tool", config)
+        .await
+        .expect("loop");
+
+    assert_eq!(
+        *executed.lock().expect("mutex"),
+        vec![json!({ "value": 123 })]
+    );
+    assert_eq!(text_of(&messages[2]), Some("echoed: 123"));
+    let tool_start_args = events.iter().find_map(|event| match event {
+        AgentEvent::ToolExecutionStart { args, .. } => Some(args),
+        _ => None,
+    });
+    assert_eq!(
+        tool_start_args.and_then(|args| args.get("value")),
+        Some(&json!(123))
+    );
+    registration.unregister();
+}
+
+#[tokio::test]
 async fn agent_loop_parallel_tool_execution_emits_completion_order_and_persists_source_order() {
     let registration = register_faux_provider(RegisterFauxProviderOptions::default());
     registration.set_responses(vec![
@@ -2296,6 +2394,96 @@ async fn agent_stateful_wrapper_initializes_state_and_forwards_thinking_level() 
 }
 
 #[tokio::test]
+async fn agent_stateful_wrapper_basic_prompt_updates_state_with_response_text() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![faux_assistant_message("4", Default::default()).into()]);
+    let mut options = AgentOptions::new(registration.get_model());
+    options.system_prompt = "You are a helpful assistant. Keep your responses concise.".to_owned();
+    options.thinking_level = ThinkingLevel::Off;
+    options.tools = Vec::new();
+    let agent = Agent::new(options);
+
+    let messages = agent
+        .prompt("What is 2+2? Answer with just the number.")
+        .await
+        .expect("prompt");
+
+    assert_eq!(
+        messages.iter().map(role_of).collect::<Vec<_>>(),
+        vec!["user", "assistant"]
+    );
+    assert!(!agent.state().is_streaming);
+    assert_eq!(
+        agent
+            .state()
+            .messages
+            .iter()
+            .map(role_of)
+            .collect::<Vec<_>>(),
+        vec!["user", "assistant"]
+    );
+    assert_eq!(text_of(&agent.state().messages[1]), Some("4"));
+    registration.unregister();
+}
+
+#[test]
+fn agent_stateful_wrapper_state_mutators_update_fields_without_notifications() {
+    let initial_model = Model::faux("state-api", "state-provider", "state-model");
+    let agent = Agent::new(AgentOptions::new(initial_model));
+    let seen_events = Arc::new(Mutex::new(Vec::new()));
+    let seen_events_ref = seen_events.clone();
+    let listener_id = agent.subscribe(move |event| {
+        seen_events_ref
+            .lock()
+            .expect("mutex")
+            .push(event_name(event).to_owned());
+    });
+
+    let next_model = Model::faux("state-api", "state-provider", "state-next-model");
+    let tool = AgentTool {
+        definition: Tool {
+            name: "test".to_owned(),
+            description: "test tool".to_owned(),
+            parameters: json!({ "type": "object" }),
+        },
+        label: "Test".to_owned(),
+        execution_mode: Some(ToolExecutionMode::Parallel),
+        argument_preparer: None,
+        executor: Arc::new(EchoExecutor {
+            executed: Arc::new(Mutex::new(Vec::new())),
+        }),
+    };
+    let user_message = AgentMessage::User(UserMessage::text("Hello"));
+    let assistant_message =
+        AgentMessage::Assistant(faux_assistant_message("Hi", Default::default()));
+
+    {
+        let mut state = agent.state_mut();
+        state.system_prompt = "Custom prompt".to_owned();
+        state.model = next_model.clone();
+        state.thinking_level = ThinkingLevel::High;
+        state.tools = vec![tool.clone()];
+        state.messages = vec![user_message.clone()];
+        state.messages.push(assistant_message.clone());
+    }
+
+    {
+        let state = agent.state();
+        assert_eq!(state.system_prompt, "Custom prompt");
+        assert_eq!(state.model, next_model);
+        assert_eq!(state.thinking_level, ThinkingLevel::High);
+        assert_eq!(state.tools.len(), 1);
+        assert_eq!(state.tools[0].definition.name, "test");
+        assert_eq!(state.messages, vec![user_message, assistant_message]);
+    }
+    assert!(seen_events.lock().expect("mutex").is_empty());
+
+    agent.unsubscribe(listener_id);
+    agent.state_mut().system_prompt = "Another prompt".to_owned();
+    assert!(seen_events.lock().expect("mutex").is_empty());
+}
+
+#[tokio::test]
 async fn agent_stateful_wrapper_preserves_thinking_content_blocks() {
     let mut model_def = FauxModelDefinition::new("faux-reasoning");
     model_def.reasoning = true;
@@ -2375,6 +2563,144 @@ async fn agent_stateful_wrapper_maintains_context_across_prompt_turns() {
         text_of(second_turn.last().expect("assistant")),
         Some("Your name is Alice.")
     );
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_stateful_wrapper_tracks_pending_tool_calls_during_events() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call(
+                "echo",
+                json!({ "value": "abc" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(Map::new),
+                Some("calc-1".to_owned()),
+            ),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let tool = AgentTool {
+        definition: Tool {
+            name: "echo".to_owned(),
+            description: "Echo tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Echo".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(EchoExecutor {
+            executed: executed.clone(),
+        }),
+    };
+    let mut options = AgentOptions::new(registration.get_model());
+    options.tools = vec![tool];
+    let agent = Arc::new(Agent::new(options));
+    let observations = Arc::new(Mutex::new(Vec::<(String, Vec<String>)>::new()));
+    let observations_ref = observations.clone();
+    let agent_ref = agent.clone();
+    agent.subscribe(move |event| match event {
+        AgentEvent::ToolExecutionStart { .. } => {
+            observations_ref.lock().expect("mutex").push((
+                "tool_execution_start".to_owned(),
+                agent_ref
+                    .state()
+                    .pending_tool_calls
+                    .iter()
+                    .cloned()
+                    .collect(),
+            ));
+        }
+        AgentEvent::ToolExecutionEnd { .. } => {
+            observations_ref.lock().expect("mutex").push((
+                "tool_execution_end".to_owned(),
+                agent_ref
+                    .state()
+                    .pending_tool_calls
+                    .iter()
+                    .cloned()
+                    .collect(),
+            ));
+        }
+        _ => {}
+    });
+
+    let messages = agent.prompt("run tool").await.expect("prompt");
+
+    assert_eq!(*executed.lock().expect("mutex"), vec!["abc".to_owned()]);
+    assert_eq!(
+        messages.iter().map(role_of).collect::<Vec<_>>(),
+        vec!["user", "assistant", "toolResult", "assistant"]
+    );
+    assert_eq!(text_of(&agent.state().messages[2]), Some("echoed: abc"));
+    assert!(agent.state().pending_tool_calls.is_empty());
+    assert_eq!(
+        *observations.lock().expect("mutex"),
+        vec![
+            ("tool_execution_start".to_owned(), vec!["calc-1".to_owned()]),
+            ("tool_execution_end".to_owned(), Vec::<String>::new())
+        ]
+    );
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_stateful_wrapper_emits_streaming_lifecycle_updates() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions {
+        token_size: Some(TokenSize { min: 1, max: 1 }),
+        ..Default::default()
+    });
+    registration.set_responses(vec![
+        faux_assistant_message("1 2 3 4 5", Default::default()).into(),
+    ]);
+
+    let agent = Agent::new(AgentOptions::new(registration.get_model()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let events_ref = events.clone();
+    agent.subscribe(move |event| {
+        events_ref
+            .lock()
+            .expect("mutex")
+            .push(event_name(event).to_owned());
+    });
+
+    agent.prompt("Count from 1 to 5.").await.expect("prompt");
+
+    let events = events.lock().expect("mutex").clone();
+    for required in [
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "message_update",
+        "message_end",
+        "turn_end",
+        "agent_end",
+    ] {
+        assert!(events.contains(&required.to_owned()), "missing {required}");
+    }
+    let index_of = |name: &str| {
+        events
+            .iter()
+            .position(|event| event == name)
+            .unwrap_or_else(|| panic!("missing {name}"))
+    };
+    assert!(index_of("agent_start") < index_of("message_start"));
+    assert!(index_of("message_start") < index_of("message_end"));
+    assert!(index_of("message_end") < index_of("agent_end"));
+    assert!(!agent.state().is_streaming);
+    assert_eq!(agent.state().messages.len(), 2);
     registration.unregister();
 }
 
@@ -3017,6 +3343,66 @@ async fn agent_reset_clears_state_and_queued_messages() {
     assert!(agent.state().streaming_message.is_none());
     assert!(agent.state().pending_tool_calls.is_empty());
     assert!(agent.state().error_message.is_none());
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_continue_from_user_tail_gets_assistant_response() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    let observed_user_texts = Arc::new(Mutex::new(Vec::new()));
+    let observed_user_texts_ref = observed_user_texts.clone();
+    registration.set_responses(vec![faux_response_factory(move |context, _, _, _| {
+        observed_user_texts_ref
+            .lock()
+            .expect("mutex")
+            .extend(context.messages.iter().filter_map(|message| match message {
+                Message::User(user) => match &user.content {
+                    UserContentValue::Plain(text) => Some(text.clone()),
+                    UserContentValue::Blocks(_) => None,
+                },
+                _ => None,
+            }));
+        faux_assistant_message("HELLO WORLD", Default::default())
+    })]);
+
+    let agent = Agent::new(AgentOptions::new(registration.get_model()));
+    {
+        let mut state = agent.state_mut();
+        state.system_prompt =
+            "You are a helpful assistant. Follow instructions exactly.".to_owned();
+        state.thinking_level = ThinkingLevel::Off;
+        state.tools = Vec::new();
+        state.messages = vec![AgentMessage::User(UserMessage::text(
+            "Say exactly: HELLO WORLD",
+        ))];
+    }
+
+    let messages = agent.continue_run().await.expect("continue");
+
+    assert_eq!(registration.state().call_count(), 1);
+    assert_eq!(
+        *observed_user_texts.lock().expect("mutex"),
+        vec!["Say exactly: HELLO WORLD".to_owned()]
+    );
+    assert_eq!(
+        messages.iter().map(role_of).collect::<Vec<_>>(),
+        vec!["assistant"]
+    );
+    assert_eq!(text_of(&messages[0]), Some("HELLO WORLD"));
+    assert_eq!(
+        agent
+            .state()
+            .messages
+            .iter()
+            .map(role_of)
+            .collect::<Vec<_>>(),
+        vec!["user", "assistant"]
+    );
+    assert_eq!(
+        text_of(agent.state().messages.last().expect("assistant")),
+        Some("HELLO WORLD")
+    );
+    assert!(!agent.state().is_streaming);
     registration.unregister();
 }
 

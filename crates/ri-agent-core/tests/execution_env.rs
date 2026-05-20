@@ -241,6 +241,58 @@ fn local_execution_env_appends_creates_temps_and_removes_recursively() {
 }
 
 #[test]
+fn local_execution_env_honors_create_dir_recursive_false_and_remove_options() {
+    let root = temp_dir();
+    let env = LocalExecutionEnv::new(&root);
+
+    let create = env
+        .create_dir("missing/child", CreateDirOptions { recursive: false })
+        .expect_err("missing parent");
+    assert_eq!(create.code, FileErrorCode::NotFound);
+
+    env.write_file("dir/child/file.txt", b"hello")
+        .expect("dir file");
+    assert!(
+        env.remove(
+            "dir",
+            RemoveOptions {
+                recursive: false,
+                force: true
+            }
+        )
+        .is_err()
+    );
+    env.remove(
+        "dir",
+        RemoveOptions {
+            recursive: true,
+            force: true,
+        },
+    )
+    .expect("recursive remove");
+    assert!(!env.exists("dir"));
+
+    let missing = env
+        .remove(
+            "missing",
+            RemoveOptions {
+                recursive: false,
+                force: false,
+            },
+        )
+        .expect_err("missing remove");
+    assert_eq!(missing.code, FileErrorCode::NotFound);
+    env.remove(
+        "missing",
+        RemoveOptions {
+            recursive: false,
+            force: true,
+        },
+    )
+    .expect("force remove");
+}
+
+#[test]
 fn local_execution_env_executes_shell_commands_in_cwd_with_env() {
     let root = temp_dir();
     let env = LocalExecutionEnv::new(&root);
@@ -265,6 +317,20 @@ fn local_execution_env_executes_shell_commands_in_cwd_with_env() {
         .exec("printf ok", ExecOptions::default())
         .expect_err("missing shell");
     assert_eq!(error.code, FileErrorCode::ShellUnavailable);
+}
+
+#[test]
+fn local_execution_env_returns_non_zero_exit_codes_as_successful_execution_results() {
+    let root = temp_dir();
+    let env = LocalExecutionEnv::new(&root);
+
+    let output = env
+        .exec("printf out; printf err >&2; exit 7", ExecOptions::default())
+        .expect("non-zero exit is still an execution result");
+
+    assert_eq!(output.stdout, "out");
+    assert_eq!(output.stderr, "err");
+    assert_eq!(output.exit_code, 7);
 }
 
 #[cfg(unix)]

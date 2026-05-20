@@ -1,7 +1,7 @@
 use crate::{
     anthropic::{
         AnthropicClientOptions, AnthropicStreamProcessor, build_anthropic_client_config,
-        build_anthropic_simple_payload,
+        build_anthropic_simple_payload_for_client,
     },
     api_registry::{ApiProvider, ProviderError, ensure_model_api, register_api_provider},
     azure_openai::{
@@ -10,7 +10,7 @@ use crate::{
     },
     bedrock::{
         BedrockClientConfig, BedrockClientOptions, BedrockConverseStreamProcessor,
-        BedrockPayloadOptions, build_bedrock_payload, resolve_aws_credentials,
+        BedrockPayloadOptions, build_bedrock_payload, resolve_aws_credentials_with_runtime,
         resolve_aws_profile_region, resolve_bedrock_client_config, sign_aws_sigv4_headers,
         standard_bedrock_endpoint_region,
     },
@@ -25,13 +25,14 @@ use crate::{
     mistral::{
         MistralChatStreamProcessor, build_mistral_request_headers, build_mistral_simple_payload,
     },
+    node_http_proxy::reqwest_client_for_target,
     openai_codex_responses::{
         OpenAICodexCachedWebSocketContinuation, OpenAICodexResponsesPayloadOptions,
         OpenAICodexWebSocket, build_openai_codex_cached_websocket_continuation,
         build_openai_codex_cached_websocket_request_body, build_openai_codex_responses_payload,
         build_openai_codex_sse_headers, build_openai_codex_websocket_headers,
-        extract_openai_codex_account_id, resolve_openai_codex_url,
-        resolve_openai_codex_websocket_url,
+        extract_openai_codex_account_id, openai_codex_retry_delay_ms_with_limits,
+        resolve_openai_codex_url, resolve_openai_codex_websocket_url,
     },
     openai_completions::{
         OpenAICompletionsPayloadOptions, OpenAICompletionsStreamProcessor,
@@ -45,7 +46,7 @@ use crate::{
     },
     types::{
         AssistantMessage, AssistantMessageEvent, Context, Model, SimpleStreamOptions, StopReason,
-        Transport, Usage, now_millis,
+        Tool, Transport, Usage, now_millis,
     },
 };
 use futures::StreamExt;
@@ -416,7 +417,6 @@ impl ApiProvider for AnthropicMessagesHttpProvider {
         options: SimpleStreamOptions,
     ) -> Result<AssistantMessageEventStream, ProviderError> {
         ensure_model_api(model, self.api())?;
-        let payload = build_anthropic_simple_payload(model, &context, options.clone());
         let api_key = options
             .stream
             .api_key
@@ -433,6 +433,12 @@ impl ApiProvider for AnthropicMessagesHttpProvider {
                 cache_retention: options.stream.cache_retention,
                 ..Default::default()
             },
+        );
+        let payload = build_anthropic_simple_payload_for_client(
+            model,
+            &context,
+            options.clone(),
+            config.is_oauth_token,
         );
         let mut headers = config.default_headers.clone();
         headers
@@ -454,6 +460,8 @@ impl ApiProvider for AnthropicMessagesHttpProvider {
             endpoint_url(&config.base_url, "messages"),
             headers,
             payload,
+            context.tools.clone(),
+            config.is_oauth_token,
         )
     }
 }
@@ -837,7 +845,7 @@ fn spawn_openai_codex_responses_request(
             }
         }
 
-        if let Err(error) = stream_openai_responses_sse_json(
+        if let Err(error) = stream_openai_codex_sse_json(
             &model,
             &options,
             &sse_url,
@@ -954,6 +962,8 @@ fn spawn_anthropic_sse_request(
     url: String,
     headers: BTreeMap<String, String>,
     payload: Value,
+    tools: Vec<Tool>,
+    use_claude_code_tool_names: bool,
 ) -> Result<AssistantMessageEventStream, ProviderError> {
     let (sender, stream) = assistant_message_event_stream();
     let payload = options
@@ -961,8 +971,17 @@ fn spawn_anthropic_sse_request(
         .map_err(ProviderError::Provider)?;
     tokio::spawn(async move {
         let mut output = empty_assistant_message(&model);
-        if let Err(error) =
-            stream_anthropic_sse_json(&options, &url, &headers, payload, &sender, &mut output).await
+        if let Err(error) = stream_anthropic_sse_json(
+            &options,
+            &url,
+            &headers,
+            payload,
+            tools,
+            use_claude_code_tool_names,
+            &sender,
+            &mut output,
+        )
+        .await
         {
             push_provider_error(&sender, &mut output, StopReason::Error, error);
         }
@@ -1135,7 +1154,7 @@ async fn stream_openai_completions_sse_json(
         return Ok(());
     }
 
-    let request = build_json_request(model, options, url, headers, payload);
+    let request = build_json_request(model, options, url, headers, payload)?;
     let response = request.send().await.map_err(|error| error.to_string())?;
     let status = response.status();
     if !status.is_success() {
@@ -1190,7 +1209,7 @@ async fn stream_openai_responses_sse_json(
         return Ok(());
     }
 
-    let request = build_json_request(model, options, url, headers, payload);
+    let request = build_json_request(model, options, url, headers, payload)?;
     let response = request.send().await.map_err(|error| error.to_string())?;
     let status = response.status();
     if !status.is_success() {
@@ -1198,6 +1217,77 @@ async fn stream_openai_responses_sse_json(
         return Err(provider_error_from_body(status.as_u16(), &body));
     }
 
+    stream_openai_responses_sse_response(model, options, response, sender, output).await
+}
+
+async fn stream_openai_codex_sse_json(
+    model: &Model,
+    options: &SimpleStreamOptions,
+    url: &str,
+    headers: &BTreeMap<String, String>,
+    payload: Value,
+    sender: &crate::AssistantMessageEventSender,
+    output: &mut AssistantMessage,
+) -> Result<(), String> {
+    let mut attempt = 0usize;
+    loop {
+        if push_abort_if_requested(sender, options, output) {
+            return Ok(());
+        }
+
+        let request = build_json_request(model, options, url, headers, payload.clone())?;
+        let response = request.send().await.map_err(|error| error.to_string())?;
+        let status = response.status();
+        if status.is_success() {
+            return stream_openai_responses_sse_response(model, options, response, sender, output)
+                .await;
+        }
+
+        let status = status.as_u16();
+        let retry_after_ms = response
+            .headers()
+            .get("retry-after-ms")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let body = response.text().await.map_err(|error| error.to_string())?;
+        let error = provider_error_from_body(status, &body);
+        let max_retries = options
+            .stream
+            .max_retries
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(crate::openai_codex_responses::OPENAI_CODEX_MAX_RETRIES);
+        let Some(delay_ms) = openai_codex_retry_delay_ms_with_limits(
+            status,
+            &error,
+            retry_after_ms.as_deref(),
+            retry_after.as_deref(),
+            attempt,
+            now_millis(),
+            max_retries,
+            options.stream.max_retry_delay_ms,
+        ) else {
+            return Err(error);
+        };
+
+        if delay_ms > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        }
+        attempt += 1;
+    }
+}
+
+async fn stream_openai_responses_sse_response(
+    model: &Model,
+    options: &SimpleStreamOptions,
+    response: reqwest::Response,
+    sender: &crate::AssistantMessageEventSender,
+    output: &mut AssistantMessage,
+) -> Result<(), String> {
     sender.push(AssistantMessageEvent::Start {
         partial: output.clone(),
     });
@@ -1271,7 +1361,7 @@ async fn stream_google_sse_json(
             })?;
         request_headers.insert("authorization".to_owned(), format!("Bearer {token}"));
     }
-    let request = build_json_request_without_default_auth(options, url, &request_headers, payload);
+    let request = build_json_request_without_default_auth(options, url, &request_headers, payload)?;
     let response = request.send().await.map_err(|error| error.to_string())?;
     let status = response.status();
     if !status.is_success() {
@@ -1330,8 +1420,10 @@ async fn stream_bedrock_eventstream_json(
     let body = serde_json::to_vec(&payload).map_err(|error| error.to_string())?;
     let mut request_headers = headers.clone();
     if !headers_contain(&request_headers, "authorization") {
-        let credentials = resolve_aws_credentials(config.profile.as_deref()).ok_or_else(|| {
-            "Bedrock HTTP provider requires AWS credentials from AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, AWS_PROFILE, AWS_BEARER_TOKEN_BEDROCK, an api_key option, or an Authorization header"
+        let credentials = resolve_aws_credentials_with_runtime(config.profile.as_deref())
+            .await?
+            .ok_or_else(|| {
+            "Bedrock HTTP provider requires AWS credentials from AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, AWS_PROFILE, AWS_WEB_IDENTITY_TOKEN_FILE/AWS_ROLE_ARN, AWS_CONTAINER_CREDENTIALS_RELATIVE_URI/FULL_URI, AWS_BEARER_TOKEN_BEDROCK, an api_key option, or an Authorization header"
                 .to_owned()
         })?;
         let region = bedrock_signing_region(config, url);
@@ -1346,7 +1438,7 @@ async fn stream_bedrock_eventstream_json(
             chrono::Utc::now(),
         )?;
     }
-    let client = reqwest::Client::new();
+    let client = reqwest_client_for_target(url)?;
     let mut request = client.post(url).body(body);
     for (name, value) in &request_headers {
         request = request.header(name, value);
@@ -1400,6 +1492,8 @@ async fn stream_anthropic_sse_json(
     url: &str,
     headers: &BTreeMap<String, String>,
     payload: Value,
+    tools: Vec<Tool>,
+    use_claude_code_tool_names: bool,
     sender: &crate::AssistantMessageEventSender,
     output: &mut AssistantMessage,
 ) -> Result<(), String> {
@@ -1407,7 +1501,7 @@ async fn stream_anthropic_sse_json(
         return Ok(());
     }
 
-    let request = build_json_request_without_default_auth(options, url, headers, payload);
+    let request = build_json_request_without_default_auth(options, url, headers, payload)?;
     let response = request.send().await.map_err(|error| error.to_string())?;
     let status = response.status();
     if !status.is_success() {
@@ -1418,7 +1512,8 @@ async fn stream_anthropic_sse_json(
     let mut byte_stream = response.bytes_stream();
     let mut parser = SseJsonParser::default();
     let mut events = Vec::new();
-    let mut processor = AnthropicStreamProcessor::new();
+    let mut processor =
+        AnthropicStreamProcessor::with_tool_name_options(tools, use_claude_code_tool_names);
     while let Some(chunk) = byte_stream.next().await {
         if push_abort_if_requested(sender, options, output) {
             return Ok(());
@@ -1463,7 +1558,7 @@ async fn stream_mistral_sse_json(
         return Ok(());
     }
 
-    let request = build_json_request(model, options, url, headers, payload);
+    let request = build_json_request(model, options, url, headers, payload)?;
     let response = request.send().await.map_err(|error| error.to_string())?;
     let status = response.status();
     if !status.is_success() {
@@ -1550,8 +1645,8 @@ fn build_json_request(
     url: &str,
     headers: &BTreeMap<String, String>,
     payload: Value,
-) -> reqwest::RequestBuilder {
-    let client = reqwest::Client::new();
+) -> Result<reqwest::RequestBuilder, String> {
+    let client = reqwest_client_for_target(url)?;
     let mut request = client.post(url).json(&payload);
     let api_key = options
         .stream
@@ -1561,7 +1656,13 @@ fn build_json_request(
     for (name, value) in headers {
         request = request.header(name, value);
     }
-    if !headers_contain(headers, "authorization")
+    if model.provider == "cloudflare-ai-gateway" {
+        if !headers_contain(headers, "cf-aig-authorization")
+            && let Some(api_key) = api_key
+        {
+            request = request.header("cf-aig-authorization", format!("Bearer {api_key}"));
+        }
+    } else if !headers_contain(headers, "authorization")
         && !headers_contain(headers, "api-key")
         && !headers_contain(headers, "x-api-key")
         && let Some(api_key) = api_key
@@ -1571,7 +1672,7 @@ fn build_json_request(
     if let Some(timeout_ms) = options.stream.timeout_ms {
         request = request.timeout(std::time::Duration::from_millis(timeout_ms));
     }
-    request
+    Ok(request)
 }
 
 fn build_json_request_without_default_auth(
@@ -1579,8 +1680,8 @@ fn build_json_request_without_default_auth(
     url: &str,
     headers: &BTreeMap<String, String>,
     payload: Value,
-) -> reqwest::RequestBuilder {
-    let client = reqwest::Client::new();
+) -> Result<reqwest::RequestBuilder, String> {
+    let client = reqwest_client_for_target(url)?;
     let mut request = client.post(url).json(&payload);
     for (name, value) in headers {
         request = request.header(name, value);
@@ -1588,7 +1689,7 @@ fn build_json_request_without_default_auth(
     if let Some(timeout_ms) = options.stream.timeout_ms {
         request = request.timeout(std::time::Duration::from_millis(timeout_ms));
     }
-    request
+    Ok(request)
 }
 
 fn endpoint_url(base_url: &str, path: &str) -> String {

@@ -1,4 +1,4 @@
-use crate::Model;
+use crate::{Model, node_http_proxy::reqwest_client_for_target};
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
@@ -211,7 +211,7 @@ async fn refresh_google_service_account_token(credentials: &Value) -> Result<Str
 }
 
 async fn request_google_adc_token(token_uri: &str, body: String) -> Result<String, String> {
-    let response = reqwest::Client::new()
+    let response = reqwest_client_for_target(token_uri)?
         .post(token_uri)
         .header("content-type", "application/x-www-form-urlencoded")
         .body(body)

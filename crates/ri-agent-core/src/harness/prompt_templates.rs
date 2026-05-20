@@ -9,6 +9,7 @@ pub struct PromptTemplate {
     pub name: String,
     pub description: String,
     pub content: String,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +149,7 @@ fn load_template_from_file(path: &Path) -> Result<PromptTemplate, PromptTemplate
         name: basename_env_path(path).trim_end_matches(".md").to_owned(),
         description,
         content: parsed.body,
+        source: None,
     })
 }
 

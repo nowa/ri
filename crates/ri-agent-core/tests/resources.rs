@@ -17,6 +17,7 @@ fn formats_skill_and_prompt_template_invocations() {
         description: "Inspect things".to_owned(),
         content: "Use inspection tools.".to_owned(),
         file_path: "/project/.pi/skills/inspect/SKILL.md".to_owned(),
+        source: None,
         disable_model_invocation: false,
     };
 
@@ -29,6 +30,7 @@ fn formats_skill_and_prompt_template_invocations() {
         name: "review".to_owned(),
         description: String::new(),
         content: "Review $1 with $ARGUMENTS".to_owned(),
+        source: None,
     };
     assert_eq!(
         format_prompt_template_invocation(&template, &["a.ts".to_owned(), "care".to_owned()]),
@@ -43,6 +45,7 @@ fn formats_visible_skills_for_system_prompt() {
         description: "Use <this> & that".to_owned(),
         content: "visible content".to_owned(),
         file_path: "/skills/visible/SKILL.md".to_owned(),
+        source: None,
         disable_model_invocation: false,
     };
     let disabled = Skill {
@@ -50,6 +53,7 @@ fn formats_visible_skills_for_system_prompt() {
         description: "Hidden".to_owned(),
         content: "hidden content".to_owned(),
         file_path: "/skills/hidden/SKILL.md".to_owned(),
+        source: None,
         disable_model_invocation: true,
     };
     let second = Skill {
@@ -57,6 +61,7 @@ fn formats_visible_skills_for_system_prompt() {
         description: "Second skill".to_owned(),
         content: "second content".to_owned(),
         file_path: "/skills/second/SKILL.md".to_owned(),
+        source: None,
         disable_model_invocation: false,
     };
 
@@ -71,6 +76,7 @@ fn formats_visible_skills_for_system_prompt() {
         description: "Quote \"double\" and 'single'".to_owned(),
         content: "content".to_owned(),
         file_path: "/skills/<bad>&\"quote\"/SKILL.md".to_owned(),
+        source: None,
         disable_model_invocation: false,
     }]);
     assert!(escaped.contains("<name>a&amp;b</name>"));
@@ -105,6 +111,7 @@ fn loads_skills_from_skill_files_and_root_markdown() {
                 .join(".agents/skills/example/SKILL.md")
                 .to_string_lossy()
                 .to_string(),
+            source: None,
             disable_model_invocation: true,
         }]
     );
@@ -276,11 +283,13 @@ fn loads_prompt_templates_non_recursively_from_dirs_and_files() {
                 name: "one".to_owned(),
                 description: "One template".to_owned(),
                 content: "Hello $1".to_owned(),
+                source: None,
             },
             PromptTemplate {
                 name: "two".to_owned(),
                 description: "First line description".to_owned(),
                 content: "First line description\nBody".to_owned(),
+                source: None,
             },
         ]
     );
@@ -311,11 +320,13 @@ fn loads_prompt_templates_from_symlinked_markdown_files() {
                 name: "target".to_owned(),
                 description: "Target".to_owned(),
                 content: "Target body".to_owned(),
+                source: None,
             },
             PromptTemplate {
                 name: "link".to_owned(),
                 description: "Target".to_owned(),
                 content: "Target body".to_owned(),
+                source: None,
             },
         ]
     );
@@ -363,6 +374,7 @@ fn prompt_template_argument_substitution_matches_pi_placeholders() {
         name: "one".to_owned(),
         description: String::new(),
         content: content.to_owned(),
+        source: None,
     };
     assert_eq!(
         format_prompt_template_invocation(

@@ -13,10 +13,15 @@ use crate::{
         now_millis,
     },
 };
+use futures::FutureExt;
 use parking_lot::Mutex;
 use serde_json::{Map, Value};
 use std::{
+    any::Any,
     collections::{BTreeMap, VecDeque},
+    future::Future,
+    panic::AssertUnwindSafe,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -151,11 +156,15 @@ fn normalize_content(content: FauxContent) -> Vec<AssistantContent> {
 type FauxResponseFactory = Arc<
     dyn Fn(&Context, &SimpleStreamOptions, FauxState, &Model) -> AssistantMessage + Send + Sync,
 >;
+type FauxResponseFuture = Pin<Box<dyn Future<Output = AssistantMessage> + Send>>;
+type FauxAsyncResponseFactory =
+    Arc<dyn Fn(Context, SimpleStreamOptions, FauxState, Model) -> FauxResponseFuture + Send + Sync>;
 
 #[derive(Clone)]
 pub enum FauxResponseStep {
     Message(AssistantMessage),
     Factory(FauxResponseFactory),
+    AsyncFactory(FauxAsyncResponseFactory),
 }
 
 impl From<AssistantMessage> for FauxResponseStep {
@@ -171,6 +180,16 @@ pub fn faux_response_factory(
     + 'static,
 ) -> FauxResponseStep {
     FauxResponseStep::Factory(Arc::new(factory))
+}
+
+pub fn faux_async_response_factory<F, Fut>(factory: F) -> FauxResponseStep
+where
+    F: Fn(Context, SimpleStreamOptions, FauxState, Model) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = AssistantMessage> + Send + 'static,
+{
+    FauxResponseStep::AsyncFactory(Arc::new(move |context, options, state, model| {
+        Box::pin(factory(context, options, state, model))
+    }))
 }
 
 #[derive(Debug, Clone)]
@@ -324,17 +343,52 @@ impl FauxProvider {
 
         tokio::spawn(async move {
             let message = match step {
-                Some(FauxResponseStep::Message(message)) => message,
+                Some(FauxResponseStep::Message(message)) => Ok(message),
                 Some(FauxResponseStep::Factory(factory)) => {
                     let state = FauxState { call_count };
-                    factory(&context, &options, state, &model)
+                    std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        factory(&context, &options, state, &model)
+                    }))
+                    .map_err(|panic| panic_payload_to_string(panic.as_ref()))
                 }
-                None => create_error_message(
+                Some(FauxResponseStep::AsyncFactory(factory)) => {
+                    let state = FauxState { call_count };
+                    let future = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        factory(context.clone(), options.clone(), state, model.clone())
+                    }))
+                    .map_err(|panic| panic_payload_to_string(panic.as_ref()));
+                    match future {
+                        Ok(future) => AssertUnwindSafe(future)
+                            .catch_unwind()
+                            .await
+                            .map_err(|panic| panic_payload_to_string(panic.as_ref())),
+                        Err(error) => Err(error),
+                    }
+                }
+                None => Ok(create_error_message(
                     "No more faux responses queued",
                     &api,
                     &provider,
                     &model.id,
-                ),
+                )),
+            };
+
+            let message = match message {
+                Ok(message) => message,
+                Err(error) => {
+                    let error = with_usage_estimate(
+                        create_error_message(error, &api, &provider, &model.id),
+                        &context,
+                        &options.stream,
+                        &prompt_cache,
+                    );
+                    sender.push(AssistantMessageEvent::Error {
+                        reason: StopReason::Error,
+                        error: error.clone(),
+                    });
+                    sender.end(error);
+                    return;
+                }
             };
 
             let mut message = clone_message(message, &api, &provider, &model.id);
@@ -421,6 +475,16 @@ pub fn register_faux_provider(options: RegisterFauxProviderOptions) -> FauxProvi
         provider,
         source_id,
         models,
+    }
+}
+
+fn panic_payload_to_string(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "Faux response factory panicked".to_owned()
     }
 }
 

@@ -9,12 +9,60 @@ fn temp_dir() -> PathBuf {
     dir
 }
 
+fn assert_uuid_v7_layout(id: &str) {
+    assert_eq!(id.len(), 36);
+    for (index, character) in id.chars().enumerate() {
+        match index {
+            8 | 13 | 18 | 23 => assert_eq!(character, '-'),
+            _ => assert!(
+                character.is_ascii_hexdigit() && !character.is_ascii_uppercase(),
+                "invalid uuid character {character:?} in {id}"
+            ),
+        }
+    }
+    assert_eq!(id.chars().nth(14), Some('7'));
+    assert!(matches!(id.chars().nth(19), Some('8' | '9' | 'a' | 'b')));
+}
+
+fn uuid_v7_timestamp(id: &str) -> u64 {
+    let timestamp_hex = id
+        .chars()
+        .filter(|character| *character != '-')
+        .take(12)
+        .collect::<String>();
+    u64::from_str_radix(&timestamp_hex, 16).expect("uuid timestamp")
+}
+
 fn entry(id: &str, parent_id: Option<&str>, message: Message) -> SessionTreeEntry {
     SessionTreeEntry::Message {
         id: id.to_owned(),
         parent_id: parent_id.map(str::to_owned),
         timestamp: "2026-01-01T00:00:00.000Z".to_owned(),
         message,
+    }
+}
+
+#[test]
+fn uuidv7_uses_rfc_layout_and_preserves_monotonic_order() {
+    let ids = (0..32).map(|_| uuidv7()).collect::<Vec<_>>();
+
+    for id in &ids {
+        assert_uuid_v7_layout(id);
+    }
+    for pair in ids.windows(2) {
+        assert!(
+            pair[0] < pair[1],
+            "uuidv7 ids should sort by generation order: {:?}",
+            pair
+        );
+    }
+
+    let timestamps = ids
+        .iter()
+        .map(|id| uuid_v7_timestamp(id))
+        .collect::<Vec<_>>();
+    for pair in timestamps.windows(2) {
+        assert!(pair[0] <= pair[1], "timestamps should be non-decreasing");
     }
 }
 
@@ -162,9 +210,77 @@ fn jsonl_storage_writes_loads_metadata_entries_leaf_and_labels() {
         Some("/tmp/parent.jsonl")
     );
 
+    let metadata_only_path = dir.join("metadata-only.jsonl");
+    let header = json!({
+        "type": "session",
+        "version": 3,
+        "id": "metadata-session",
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "cwd": dir.to_string_lossy(),
+    });
+    let mut bytes = header.to_string().into_bytes();
+    bytes.extend_from_slice(b"\n");
+    bytes.extend_from_slice(&[0xff, 0xfe, 0xfd]);
+    fs::write(&metadata_only_path, bytes).expect("write metadata-only session");
+    let metadata = load_jsonl_session_metadata(&metadata_only_path).expect("metadata-only header");
+    assert_eq!(metadata.id, "metadata-session");
+    assert_eq!(metadata.cwd, dir.to_string_lossy());
+
     let loaded = JsonlSessionStorage::open(&path).expect("open");
     assert_eq!(loaded.leaf_id().expect("leaf"), Some("label-1".to_owned()));
     assert_eq!(loaded.label("root"), Some("checkpoint"));
+    assert_eq!(
+        loaded
+            .path_to_root(Some("child"))
+            .expect("path")
+            .iter()
+            .map(SessionTreeEntry::id)
+            .collect::<Vec<_>>(),
+        vec!["root", "child"]
+    );
+}
+
+#[test]
+fn jsonl_storage_reconstructs_leaf_and_persists_explicit_leaf_override() {
+    let dir = temp_dir();
+    let path = dir.join("session.jsonl");
+    let mut storage = JsonlSessionStorage::create(&path, dir.to_string_lossy(), "session-1", None)
+        .expect("create");
+
+    storage
+        .append_entry(entry("root", None, user_message_text("root")))
+        .expect("append root");
+    storage
+        .append_entry(entry(
+            "child",
+            Some("root"),
+            assistant_message_text("child"),
+        ))
+        .expect("append child");
+
+    let mut loaded = JsonlSessionStorage::open(&path).expect("open");
+    assert_eq!(loaded.leaf_id().expect("leaf"), Some("child".to_owned()));
+    assert_eq!(
+        loaded
+            .entries()
+            .iter()
+            .map(SessionTreeEntry::id)
+            .collect::<Vec<_>>(),
+        vec!["root", "child"]
+    );
+
+    loaded
+        .set_leaf_id(Some("root".to_owned()))
+        .expect("set leaf");
+    let reloaded = JsonlSessionStorage::open(&path).expect("reopen");
+    assert_eq!(reloaded.leaf_id().expect("leaf"), Some("root".to_owned()));
+    assert!(matches!(
+        reloaded.entries().last(),
+        Some(SessionTreeEntry::Leaf {
+            target_id: Some(target),
+            ..
+        }) if target == "root"
+    ));
     assert_eq!(
         loaded
             .path_to_root(Some("child"))

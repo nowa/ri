@@ -26,8 +26,9 @@ pub fn resolve_http_proxy_url_for_target(target_url: &str) -> Result<Option<Prox
     if !should_proxy_hostname(&target.hostname, target.port) {
         return Ok(None);
     }
-    let mut proxy = proxy_env(&format!("{}_proxy", target.protocol))
-        .or_else(|| proxy_env("all_proxy"))
+    let mut proxy = proxy_env_with_npm_fallback(&format!("{}_proxy", target.protocol))
+        .or_else(|| proxy_env("npm_config_proxy"))
+        .or_else(|| proxy_env_with_npm_fallback("all_proxy"))
         .unwrap_or_default();
     if proxy.is_empty() {
         return Ok(None);
@@ -48,6 +49,31 @@ pub fn resolve_http_proxy_url_for_target(target_url: &str) -> Result<Option<Prox
     }))
 }
 
+pub fn resolve_http_proxy_url_for_websocket_target(
+    target_url: &str,
+) -> Result<Option<ProxyUrl>, String> {
+    let http_target = if let Some(rest) = target_url.strip_prefix("wss://") {
+        format!("https://{rest}")
+    } else if let Some(rest) = target_url.strip_prefix("ws://") {
+        format!("http://{rest}")
+    } else {
+        target_url.to_owned()
+    };
+    resolve_http_proxy_url_for_target(&http_target)
+}
+
+pub fn reqwest_client_for_target(target_url: &str) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder().no_proxy();
+    if let Some(proxy_url) = resolve_http_proxy_url_for_target(target_url)? {
+        let proxy = reqwest::Proxy::all(proxy_url.as_str())
+            .map_err(|error| format!("Invalid proxy URL {:?}: {error}", proxy_url.as_str()))?;
+        builder = builder.proxy(proxy);
+    }
+    builder
+        .build()
+        .map_err(|error| format!("Could not build HTTP client: {error}"))
+}
+
 fn proxy_env(key: &str) -> Option<String> {
     env::var(key.to_ascii_lowercase())
         .ok()
@@ -55,8 +81,12 @@ fn proxy_env(key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn proxy_env_with_npm_fallback(key: &str) -> Option<String> {
+    proxy_env(key).or_else(|| proxy_env(&format!("npm_config_{key}")))
+}
+
 fn should_proxy_hostname(hostname: &str, port: u16) -> bool {
-    let no_proxy = proxy_env("no_proxy")
+    let no_proxy = proxy_env_with_npm_fallback("no_proxy")
         .unwrap_or_default()
         .to_ascii_lowercase();
     if no_proxy.is_empty() {

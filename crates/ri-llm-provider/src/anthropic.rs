@@ -3,6 +3,7 @@ use crate::{
     CacheRetention, Context, Message, Model, SimpleStreamOptions, StopReason, TextContent,
     ThinkingContent, ThinkingLevel, Tool, ToolCall, ToolResultContent, Usage, UserContent,
     UserContentValue,
+    anthropic_compat::{from_claude_code_tool_name, to_claude_code_tool_name},
     json_repair::{parse_json_with_repair, parse_streaming_json, sanitize_surrogates},
     message_transform::transform_messages,
 };
@@ -204,11 +205,29 @@ pub struct AnthropicStreamProcessor {
     content_indexes: BTreeMap<u64, usize>,
     partial_tool_json: BTreeMap<u64, String>,
     stopped: bool,
+    tools: Vec<Tool>,
+    use_claude_code_tool_names: bool,
 }
 
 impl AnthropicStreamProcessor {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_tool_name_options(tools: Vec<Tool>, use_claude_code_tool_names: bool) -> Self {
+        Self {
+            tools,
+            use_claude_code_tool_names,
+            ..Default::default()
+        }
+    }
+
+    pub fn with_claude_code_tool_names(tools: Vec<Tool>) -> Self {
+        Self::with_tool_name_options(tools, true)
+    }
+
+    fn inbound_tool_name(&self, name: &str) -> String {
+        anthropic_inbound_tool_name(name, &self.tools, self.use_claude_code_tool_names)
     }
 
     pub fn process_event(
@@ -299,6 +318,10 @@ impl AnthropicStreamProcessor {
                         });
                     }
                     Some("tool_use") => {
+                        let name = block
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
                         let input = block
                             .get("input")
                             .and_then(Value::as_object)
@@ -310,11 +333,7 @@ impl AnthropicStreamProcessor {
                                 .and_then(Value::as_str)
                                 .unwrap_or_default()
                                 .to_owned(),
-                            name: block
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_owned(),
+                            name: self.inbound_tool_name(name),
                             arguments: input,
                             thought_signature: None,
                         }));
@@ -522,6 +541,7 @@ pub struct AnthropicPayloadOptions {
     pub thinking_budget_tokens: Option<u64>,
     pub effort: Option<String>,
     pub thinking_display: Option<String>,
+    pub use_claude_code_tool_names: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -561,6 +581,15 @@ pub fn build_anthropic_simple_payload(
     context: &Context,
     options: SimpleStreamOptions,
 ) -> Value {
+    build_anthropic_simple_payload_for_client(model, context, options, false)
+}
+
+pub fn build_anthropic_simple_payload_for_client(
+    model: &Model,
+    context: &Context,
+    options: SimpleStreamOptions,
+    use_claude_code_tool_names: bool,
+) -> Value {
     let mut payload_options = AnthropicPayloadOptions::default();
     if let Some(reasoning) = options.reasoning {
         payload_options.thinking_enabled = Some(true);
@@ -576,6 +605,7 @@ pub fn build_anthropic_simple_payload(
     } else {
         payload_options.thinking_enabled = Some(false);
     }
+    payload_options.use_claude_code_tool_names = use_claude_code_tool_names;
     build_anthropic_payload(model, context, payload_options)
 }
 
@@ -586,9 +616,15 @@ pub fn build_anthropic_payload(
 ) -> Value {
     let cache_retention = resolve_anthropic_cache_retention(options.cache_retention);
     let cache_control = anthropic_cache_control(model, cache_retention);
+    let use_claude_code_tool_names = options.use_claude_code_tool_names;
     let mut payload = json!({
         "model": model.id,
-        "messages": convert_anthropic_messages(context, model, cache_control.as_ref()),
+        "messages": convert_anthropic_messages(
+            context,
+            model,
+            cache_control.as_ref(),
+            use_claude_code_tool_names,
+        ),
         "max_tokens": model.max_tokens / 3,
         "stream": true,
     });
@@ -619,6 +655,7 @@ pub fn build_anthropic_payload(
                             && supports_anthropic_cache_control_on_tools(model))
                         .then_some(cache_control.as_ref())
                         .flatten(),
+                        use_claude_code_tool_names,
                     )
                 })
                 .collect(),
@@ -673,6 +710,32 @@ pub fn build_anthropic_client_config(
         return AnthropicClientConfig {
             api_key: None,
             auth_token: Some(options.api_key),
+            base_url: model.base_url.clone(),
+            default_headers: headers,
+            is_oauth_token: false,
+        };
+    }
+
+    if model.provider == "cloudflare-ai-gateway" {
+        let cache_retention = resolve_anthropic_cache_retention(options.cache_retention);
+        let mut headers = anthropic_browser_headers(&beta_features);
+        if !options.api_key.is_empty() {
+            headers.insert(
+                "cf-aig-authorization".to_owned(),
+                format!("Bearer {}", options.api_key),
+            );
+        }
+        if let Some(session_id) = options.session_id
+            && cache_retention != CacheRetention::None
+            && supports_anthropic_session_affinity(model)
+        {
+            headers.insert("x-session-affinity".to_owned(), session_id);
+        }
+        merge_headers(&mut headers, &model.headers);
+        merge_headers(&mut headers, &options.headers);
+        return AnthropicClientConfig {
+            api_key: None,
+            auth_token: None,
             base_url: model.base_url.clone(),
             default_headers: headers,
             is_oauth_token: false,
@@ -823,6 +886,7 @@ fn convert_anthropic_messages(
     context: &Context,
     model: &Model,
     cache_control: Option<&Value>,
+    use_claude_code_tool_names: bool,
 ) -> Vec<Value> {
     let transformed_messages = transform_messages(
         &context.messages,
@@ -911,12 +975,18 @@ fn convert_anthropic_messages(
                                 }))
                             }
                         }
-                        AssistantContent::ToolCall(tool_call) => Some(json!({
-                            "type": "tool_use",
-                            "id": tool_call.id,
-                            "name": tool_call.name,
-                            "input": tool_call.arguments,
-                        })),
+                        AssistantContent::ToolCall(tool_call) => {
+                            let name = anthropic_outbound_tool_name(
+                                &tool_call.name,
+                                use_claude_code_tool_names,
+                            );
+                            Some(json!({
+                                "type": "tool_use",
+                                "id": tool_call.id,
+                                "name": name,
+                                "input": tool_call.arguments,
+                            }))
+                        }
                     })
                     .collect::<Vec<_>>();
                 if !content.is_empty() {
@@ -1049,6 +1119,7 @@ fn format_anthropic_tool(
     tool: &Tool,
     supports_eager_input_streaming: bool,
     cache_control: Option<&Value>,
+    use_claude_code_tool_names: bool,
 ) -> Value {
     let properties = tool
         .parameters
@@ -1060,8 +1131,9 @@ fn format_anthropic_tool(
         .get("required")
         .cloned()
         .unwrap_or_else(|| json!([]));
+    let name = anthropic_outbound_tool_name(&tool.name, use_claude_code_tool_names);
     let mut formatted = json!({
-        "name": tool.name,
+        "name": name,
         "description": tool.description,
         "input_schema": {
             "type": "object",
@@ -1076,6 +1148,26 @@ fn format_anthropic_tool(
         formatted["cache_control"] = cache_control.clone();
     }
     formatted
+}
+
+fn anthropic_outbound_tool_name(name: &str, use_claude_code_tool_names: bool) -> String {
+    if use_claude_code_tool_names {
+        to_claude_code_tool_name(name)
+    } else {
+        name.to_owned()
+    }
+}
+
+fn anthropic_inbound_tool_name(
+    name: &str,
+    tools: &[Tool],
+    use_claude_code_tool_names: bool,
+) -> String {
+    if use_claude_code_tool_names {
+        from_claude_code_tool_name(name, tools)
+    } else {
+        name.to_owned()
+    }
 }
 
 pub fn resolve_anthropic_cache_retention(

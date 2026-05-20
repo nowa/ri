@@ -36,6 +36,37 @@ Live provider E2E tests are not run by default. Provider behavior is covered
 locally through mock HTTP servers, payload assertions, parser tests, and stream
 event tests.
 
+## Migration Test Accounting
+
+The migration target is pi's LLM provider and agent-core behavior, not every
+test in the pi monorepo. The active source baseline is the direct simple
+`it/test` cases under:
+
+- `packages/ai/test`: 721 cases.
+- `packages/agent/test`: 150 cases.
+
+That 871-case baseline intentionally excludes `packages/coding-agent`, skipped
+source cases, and statically unexpanded `it.each` / `test.each` declarations.
+
+Rust test totals must not be used as a one-to-one completion signal. The Rust
+suite currently includes both:
+
+- **Pi exact case parity**: behavior that corresponds to a specific pi-ai or
+  pi-agent-core source test case.
+- **Rust-specific coverage**: behavior needed because ri owns Rust-native
+  implementations for HTTP transport, proxy construction, OAuth auth storage,
+  streaming parsers, session storage, and harness integration.
+
+New tests should be added only when they cover a missing Pi exact case or a
+clearly necessary Rust-specific contract. Tests that inspect Rust source,
+TypeScript source, Markdown files, `Cargo.toml`, or test names to prove
+coverage should not be added. Coverage claims should come from behavior tests,
+gated live tests, and explicit notes in [MIGRATION_STATUS.md](MIGRATION_STATUS.md).
+
+This migration is still not certified complete by count alone. Strict external
+parity still requires running the gated provider live/E2E matrix with real
+credentials, local model services where applicable, and manual OAuth flows.
+
 ## Features
 
 `ri-llm-provider` includes:
@@ -214,6 +245,10 @@ cargo test -p ri-llm-provider
 cargo test -p ri-agent-core
 cargo fmt
 ```
+
+When changing migration coverage, update
+[MIGRATION_STATUS.md](MIGRATION_STATUS.md) with the exact parity or
+Rust-specific reason instead of relying on the raw test count.
 
 The workspace currently targets Rust 2024 edition.
 

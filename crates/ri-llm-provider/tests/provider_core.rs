@@ -13,6 +13,26 @@ use std::{
 };
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
+const PROXY_ENV_KEYS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+    "npm_config_http_proxy",
+    "npm_config_https_proxy",
+    "npm_config_proxy",
+    "npm_config_no_proxy",
+    "npm_config_all_proxy",
+    "NPM_CONFIG_HTTP_PROXY",
+    "NPM_CONFIG_HTTPS_PROXY",
+    "NPM_CONFIG_PROXY",
+    "NPM_CONFIG_NO_PROXY",
+    "NPM_CONFIG_ALL_PROXY",
+];
 
 struct EnvGuard {
     values: Vec<(&'static str, Option<String>)>,
@@ -54,6 +74,70 @@ fn remove_env(key: &str) {
     unsafe {
         std::env::remove_var(key);
     }
+}
+
+#[test]
+fn builtin_api_provider_registry_exposes_main_provider_surfaces() {
+    ensure_builtin_api_providers();
+    let mut apis = get_api_providers()
+        .into_iter()
+        .map(|provider| provider.api().to_owned())
+        .collect::<Vec<_>>();
+    apis.sort();
+
+    for expected in [
+        "anthropic-messages",
+        "azure-openai-responses",
+        "bedrock-converse-stream",
+        "google-generative-ai",
+        "google-vertex",
+        "mistral-conversations",
+        "openai-codex-responses",
+        "openai-completions",
+        "openai-responses",
+    ] {
+        assert!(
+            apis.contains(&expected.to_owned()),
+            "missing builtin API provider surface {expected}; registered: {apis:?}"
+        );
+    }
+}
+
+#[test]
+fn registered_model_apis_have_builtin_provider_implementations() {
+    ensure_builtin_api_providers();
+
+    let mut checked = 0usize;
+    for provider in get_providers() {
+        for model in get_models(&provider) {
+            checked += 1;
+            assert!(
+                get_api_provider(&model.api).is_some(),
+                "model {}/{} points at unregistered API provider {}",
+                model.provider,
+                model.id,
+                model.api
+            );
+        }
+    }
+
+    for (provider, model_id) in [
+        ("minimax-cn", "MiniMax-M2.7"),
+        ("moonshotai", "kimi-k2"),
+        ("moonshotai-cn", "kimi-k2"),
+    ] {
+        let model = get_model(provider, model_id).expect("synthesized known provider model");
+        checked += 1;
+        assert!(
+            get_api_provider(&model.api).is_some(),
+            "synthesized model {}/{} points at unregistered API provider {}",
+            model.provider,
+            model.id,
+            model.api
+        );
+    }
+
+    assert!(checked > 0, "model registry should expose provider models");
 }
 
 fn user_context(text: &str) -> Context {
@@ -475,6 +559,89 @@ fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
 }
 
 #[test]
+fn openai_compatible_provider_base_urls_match_provider_catalog() {
+    let expected = [
+        (
+            "xai",
+            "grok-3-fast",
+            "openai-completions",
+            "https://api.x.ai/v1",
+        ),
+        (
+            "cerebras",
+            "gpt-oss-120b",
+            "openai-completions",
+            "https://api.cerebras.ai/v1",
+        ),
+        (
+            "huggingface",
+            "moonshotai/Kimi-K2.5",
+            "openai-completions",
+            "https://router.huggingface.co/v1",
+        ),
+        (
+            "minimax",
+            "MiniMax-M2.7",
+            "anthropic-messages",
+            "https://api.minimax.io/anthropic",
+        ),
+        (
+            "kimi-coding",
+            "kimi-k2-thinking",
+            "anthropic-messages",
+            "https://api.kimi.com/coding",
+        ),
+        (
+            "vercel-ai-gateway",
+            "google/gemini-2.5-flash",
+            "anthropic-messages",
+            "https://ai-gateway.vercel.sh",
+        ),
+        (
+            "xiaomi",
+            "mimo-v2.5-pro",
+            "openai-completions",
+            "https://api.xiaomimimo.com/v1",
+        ),
+        (
+            "xiaomi-token-plan-cn",
+            "mimo-v2.5-pro",
+            "openai-completions",
+            "https://token-plan-cn.xiaomimimo.com/v1",
+        ),
+        (
+            "xiaomi-token-plan-ams",
+            "mimo-v2.5-pro",
+            "openai-completions",
+            "https://token-plan-ams.xiaomimimo.com/v1",
+        ),
+        (
+            "xiaomi-token-plan-sgp",
+            "mimo-v2.5-pro",
+            "openai-completions",
+            "https://token-plan-sgp.xiaomimimo.com/v1",
+        ),
+    ];
+
+    for (provider, model_id, api, base_url) in expected {
+        let model = get_model(provider, model_id)
+            .unwrap_or_else(|| panic!("missing model registry entry: {provider}/{model_id}"));
+        assert_eq!(model.api, api, "{provider}/{model_id} api");
+        assert_eq!(model.base_url, base_url, "{provider}/{model_id} base URL");
+        assert_ne!(
+            model.base_url, "https://example.invalid",
+            "{provider}/{model_id} should have a live provider endpoint"
+        );
+    }
+
+    let kimi = get_model("kimi-coding", "kimi-k2-thinking").expect("kimi model");
+    assert_eq!(
+        kimi.headers.get("User-Agent").map(String::as_str),
+        Some("KimiCLI/1.5")
+    );
+}
+
+#[test]
 fn opencode_model_metadata_and_env_key_match_provider_catalog() {
     let _lock = ENV_LOCK.lock().expect("env lock");
     let _guard = EnvGuard::clearing(&["OPENCODE_API_KEY"]);
@@ -591,12 +758,93 @@ fn openrouter_image_model_registry_matches_generated_catalog() {
             cache_write: 0.08333333333333334,
         }
     );
-    assert!(get_image_providers().contains(&"openrouter".to_owned()));
+    assert_eq!(get_image_providers(), vec!["openrouter".to_owned()]);
+
+    let models = get_image_models("openrouter");
+    assert_eq!(models.len(), 28);
+    assert_eq!(
+        models
+            .iter()
+            .map(|candidate| candidate.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "black-forest-labs/flux.2-flex",
+            "black-forest-labs/flux.2-klein-4b",
+            "black-forest-labs/flux.2-max",
+            "black-forest-labs/flux.2-pro",
+            "bytedance-seed/seedream-4.5",
+            "google/gemini-2.5-flash-image",
+            "google/gemini-3-pro-image-preview",
+            "google/gemini-3.1-flash-image-preview",
+            "openai/gpt-5-image",
+            "openai/gpt-5-image-mini",
+            "openai/gpt-5.4-image-2",
+            "openrouter/auto",
+            "recraft/recraft-v3",
+            "recraft/recraft-v4",
+            "recraft/recraft-v4-pro",
+            "recraft/recraft-v4-pro-vector",
+            "recraft/recraft-v4-vector",
+            "recraft/recraft-v4.1",
+            "recraft/recraft-v4.1-pro",
+            "recraft/recraft-v4.1-pro-vector",
+            "recraft/recraft-v4.1-utility",
+            "recraft/recraft-v4.1-utility-pro",
+            "recraft/recraft-v4.1-vector",
+            "sourceful/riverflow-v2-fast",
+            "sourceful/riverflow-v2-fast-preview",
+            "sourceful/riverflow-v2-max-preview",
+            "sourceful/riverflow-v2-pro",
+            "sourceful/riverflow-v2-standard-preview",
+        ]
+    );
     assert!(
-        get_image_models("openrouter")
+        models
+            .iter()
+            .all(|candidate| candidate.api == "openrouter-images"
+                && candidate.provider == "openrouter"
+                && candidate.base_url == "https://openrouter.ai/api/v1")
+    );
+    assert!(
+        models
             .iter()
             .any(|candidate| candidate.id == "black-forest-labs/flux.2-pro")
     );
+    let sourceful = get_image_model("openrouter", "sourceful/riverflow-v2-standard-preview")
+        .expect("sourceful model");
+    assert_eq!(sourceful.name, "Sourceful: Riverflow V2 Standard Preview");
+    assert_eq!(sourceful.input, vec![InputKind::Text, InputKind::Image]);
+    assert_eq!(sourceful.output, vec![OutputKind::Image]);
+}
+
+#[test]
+fn registered_image_model_apis_have_builtin_provider_implementations() {
+    ensure_builtin_images_api_providers();
+    let mut image_apis = get_images_api_providers()
+        .into_iter()
+        .map(|provider| provider.api().to_owned())
+        .collect::<Vec<_>>();
+    image_apis.sort();
+    assert!(
+        image_apis.contains(&"openrouter-images".to_owned()),
+        "missing builtin OpenRouter Images provider; registered: {image_apis:?}"
+    );
+
+    let mut checked = 0usize;
+    for provider in get_image_providers() {
+        for model in get_image_models(&provider) {
+            checked += 1;
+            assert!(
+                get_images_api_provider(&model.api).is_some(),
+                "image model {}/{} points at unregistered Images API provider {}",
+                model.provider,
+                model.id,
+                model.api
+            );
+        }
+    }
+
+    assert!(checked > 0, "image model registry should expose models");
 }
 
 #[test]
@@ -739,6 +987,43 @@ fn openrouter_images_usage_and_error_mapping_match_provider() {
     assert_eq!(aborted.error_message.as_deref(), Some("Request aborted"));
 }
 
+#[test]
+fn openrouter_images_retry_delay_respects_headers_and_backoff() {
+    assert_eq!(
+        openrouter_images_retry_delay_ms(429, "rate limit", Some("1500"), None, 0, 3, None, 0),
+        Some(1500)
+    );
+    assert_eq!(
+        openrouter_images_retry_delay_ms(503, "overloaded", None, Some("2.5"), 0, 3, None, 0),
+        Some(2500)
+    );
+    assert_eq!(
+        openrouter_images_retry_delay_ms(500, "server error", None, None, 1, 3, Some(100), 0),
+        Some(100)
+    );
+    assert_eq!(
+        openrouter_images_retry_delay_ms(
+            400,
+            "upstream connect refused",
+            None,
+            None,
+            0,
+            3,
+            None,
+            0,
+        ),
+        Some(1000)
+    );
+    assert_eq!(
+        openrouter_images_retry_delay_ms(429, "rate limit", None, None, 3, 3, None, 0),
+        None
+    );
+    assert_eq!(
+        openrouter_images_retry_delay_ms(400, "bad request", None, None, 0, 3, None, 0),
+        None
+    );
+}
+
 #[tokio::test]
 async fn builtin_openrouter_images_provider_posts_json_and_parses_response() {
     let body = concat!(
@@ -750,6 +1035,13 @@ async fn builtin_openrouter_images_provider_posts_json_and_parses_response() {
     let mut model =
         get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
     model.base_url = base_url;
+    model.headers.insert(
+        "HTTP-Referer".to_owned(),
+        "https://model-header.example".to_owned(),
+    );
+    model
+        .headers
+        .insert("X-Model-Header".to_owned(), "model".to_owned());
     let output = generate_images(
         &model,
         ImagesContext {
@@ -788,8 +1080,542 @@ async fn builtin_openrouter_images_provider_posts_json_and_parses_response() {
             .to_ascii_lowercase()
             .contains("http-referer: https://ri.test")
     );
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("x-model-header: model")
+    );
+    assert!(
+        !request
+            .to_ascii_lowercase()
+            .contains("http-referer: https://model-header.example")
+    );
     assert!(request.contains("\"stream\":false"));
     assert!(request.contains("\"modalities\":[\"image\",\"text\"]"));
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_preserves_custom_authorization_header() {
+    let body = concat!(
+        "{\"id\":\"img-auth\",\"choices\":[{\"message\":{\"content\":\"Auth OK\",",
+        "\"images\":[{\"image_url\":\"data:image/png;base64,YXV0aA==\"}]}}]}"
+    );
+    let (base_url, request_task) = mock_json_server(body).await;
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = base_url;
+
+    let output = generate_images(
+        &model,
+        ImagesContext {
+            input: vec![ImagesContent::text("Generate an authenticated image")],
+        },
+        ImagesOptions {
+            api_key: Some("openrouter-key".to_owned()),
+            headers: BTreeMap::from([(
+                "Authorization".to_owned(),
+                "Bearer upstream-image-token".to_owned(),
+            )]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("generate images");
+    let request = request_task.await.expect("request task");
+    let lower_request = request.to_ascii_lowercase();
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Stop);
+    assert_eq!(output.response_id.as_deref(), Some("img-auth"));
+    assert!(matches!(
+        output.output.get(1),
+        Some(ImagesContent::Image(image)) if image.data == "YXV0aA=="
+    ));
+    assert!(lower_request.contains("authorization: bearer upstream-image-token"));
+    assert!(!lower_request.contains("authorization: bearer openrouter-key"));
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_retries_retryable_errors() {
+    let success = concat!(
+        r#"{"id":"img-retry","choices":[{"message":{"content":"Done","#,
+        "\"images\":[{\"image_url\":\"data:image/png;base64,cmV0cnk=\"}]}}]}"
+    );
+    let (base_url, requests_task) = mock_json_status_sequence_server(vec![
+        (
+            429,
+            "Too Many Requests",
+            r#"{"error":{"message":"Rate limit exceeded"}}"#,
+        ),
+        (200, "OK", success),
+    ])
+    .await;
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = base_url;
+    let seen_responses = Arc::new(Mutex::new(Vec::new()));
+
+    let output = generate_images(
+        &model,
+        ImagesContext {
+            input: vec![ImagesContent::text("Generate retry image")],
+        },
+        ImagesOptions {
+            api_key: Some("openrouter-key".to_owned()),
+            max_retries: Some(1),
+            max_retry_delay_ms: Some(0),
+            response_hooks: vec![Arc::new(RecordingImagesResponseHook {
+                seen: seen_responses.clone(),
+            })],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("generate images");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Stop);
+    assert!(matches!(
+        output.output.get(1),
+        Some(ImagesContent::Image(image)) if image.data == "cmV0cnk="
+    ));
+    let requests = requests_task.await.expect("request task");
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with("POST /chat/completions HTTP/1.1"));
+    assert!(requests[1].starts_with("POST /chat/completions HTTP/1.1"));
+    assert_eq!(
+        seen_responses
+            .lock()
+            .expect("responses")
+            .iter()
+            .map(|response| response.status)
+            .collect::<Vec<_>>(),
+        vec![429, 200]
+    );
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_respects_abort_flag_during_retry_backoff() {
+    let (base_url, requests_task) = mock_http_sequence_server(vec![MockHttpSequenceResponse {
+        status: 429,
+        reason: "Too Many Requests",
+        content_type: "application/json",
+        headers: vec![("retry-after-ms", "5000")],
+        body: r#"{"error":{"message":"Rate limit exceeded"}}"#,
+    }])
+    .await;
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = base_url;
+    let abort_flag = Arc::new(AtomicBool::new(false));
+    let abort_flag_for_request = abort_flag.clone();
+
+    let request_handle = tokio::spawn(async move {
+        generate_images(
+            &model,
+            ImagesContext {
+                input: vec![ImagesContent::text("Generate retry abort image")],
+            },
+            ImagesOptions {
+                api_key: Some("openrouter-key".to_owned()),
+                max_retries: Some(1),
+                abort_flag: Some(abort_flag_for_request),
+                ..Default::default()
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    abort_flag.store(true, Ordering::SeqCst);
+    let output = tokio::time::timeout(Duration::from_secs(1), request_handle)
+        .await
+        .expect("image retry should observe abort")
+        .expect("join image request")
+        .expect("generate images");
+    let requests = requests_task.await.expect("request task");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Aborted);
+    assert_eq!(output.error_message.as_deref(), Some("Request was aborted"));
+    assert!(output.output.is_empty());
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("POST /chat/completions HTTP/1.1"));
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_respects_abort_flag_while_waiting_for_response_headers()
+{
+    let (base_url, request_rx, server_task) = mock_hanging_response_server().await;
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = base_url;
+    let abort_flag = Arc::new(AtomicBool::new(false));
+    let abort_flag_for_request = abort_flag.clone();
+
+    let request_handle = tokio::spawn(async move {
+        generate_images(
+            &model,
+            ImagesContext {
+                input: vec![ImagesContent::text("Generate abortable request image")],
+            },
+            ImagesOptions {
+                api_key: Some("openrouter-key".to_owned()),
+                abort_flag: Some(abort_flag_for_request),
+                ..Default::default()
+            },
+        )
+        .await
+    });
+    let request = tokio::time::timeout(Duration::from_secs(1), request_rx)
+        .await
+        .expect("hanging server should receive request")
+        .expect("request from hanging server");
+    abort_flag.store(true, Ordering::SeqCst);
+    let output = tokio::time::timeout(Duration::from_secs(1), request_handle)
+        .await
+        .expect("image request should observe abort while waiting for headers")
+        .expect("join image request")
+        .expect("generate images");
+    server_task.abort();
+    let _ = server_task.await;
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Aborted);
+    assert_eq!(output.error_message.as_deref(), Some("Request was aborted"));
+    assert!(output.output.is_empty());
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_respects_request_timeout() {
+    let delayed_body = concat!(
+        "{\"id\":\"img-timeout\",\"choices\":[{\"message\":{\"content\":\"Too slow\",",
+        "\"images\":[{\"image_url\":\"data:image/png;base64,c2xvdw==\"}]}}]}"
+    );
+    let (base_url, request_task) = mock_delayed_binary_server(
+        vec![b"{".to_vec(), delayed_body.as_bytes().to_vec()],
+        "application/json",
+        Duration::from_millis(100),
+    )
+    .await;
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = base_url;
+
+    let output = generate_images(
+        &model,
+        ImagesContext {
+            input: vec![ImagesContent::text("Generate timeout image")],
+        },
+        ImagesOptions {
+            api_key: Some("openrouter-key".to_owned()),
+            timeout_ms: Some(20),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("generate images");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Error);
+    assert!(output.output.is_empty());
+    assert!(
+        output.error_message.as_deref().is_some_and(|message| {
+            let message = message.to_ascii_lowercase();
+            message.contains("timed out") || message.contains("error decoding response body")
+        }),
+        "{output:?}"
+    );
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_respects_abort_flag_while_reading_response_body() {
+    let delayed_body = concat!(
+        "\"id\":\"img-abort\",\"choices\":[{\"message\":{\"content\":\"Too slow\",",
+        "\"images\":[{\"image_url\":\"data:image/png;base64,YWJvcnQ=\"}]}}]}"
+    );
+    let (base_url, request_task) = mock_delayed_binary_server(
+        vec![b"{".to_vec(), delayed_body.as_bytes().to_vec()],
+        "application/json",
+        Duration::from_millis(200),
+    )
+    .await;
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = base_url;
+    let abort_flag = Arc::new(AtomicBool::new(false));
+    let abort_flag_for_request = abort_flag.clone();
+
+    let request_handle = tokio::spawn(async move {
+        generate_images(
+            &model,
+            ImagesContext {
+                input: vec![ImagesContent::text("Generate abortable image")],
+            },
+            ImagesOptions {
+                api_key: Some("openrouter-key".to_owned()),
+                abort_flag: Some(abort_flag_for_request),
+                ..Default::default()
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    abort_flag.store(true, Ordering::SeqCst);
+    let output = tokio::time::timeout(Duration::from_secs(1), request_handle)
+        .await
+        .expect("image request should observe abort")
+        .expect("join image request")
+        .expect("generate images");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Aborted);
+    assert_eq!(output.error_message.as_deref(), Some("Request was aborted"));
+    assert!(output.output.is_empty());
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+}
+
+struct ReplaceImagesPayloadHook {
+    replacement: Value,
+    seen: Arc<Mutex<Vec<Value>>>,
+}
+
+impl ImagesPayloadHook for ReplaceImagesPayloadHook {
+    fn on_payload(&self, _model: &ImagesModel, payload: Value) -> Result<Value, String> {
+        self.seen.lock().expect("seen payloads").push(payload);
+        Ok(self.replacement.clone())
+    }
+}
+
+struct ErrorImagesPayloadHook {
+    message: &'static str,
+}
+
+impl ImagesPayloadHook for ErrorImagesPayloadHook {
+    fn on_payload(&self, _model: &ImagesModel, _payload: Value) -> Result<Value, String> {
+        Err(self.message.to_owned())
+    }
+}
+
+struct RecordingImagesResponseHook {
+    seen: Arc<Mutex<Vec<ProviderResponse>>>,
+}
+
+impl ImagesResponseHook for RecordingImagesResponseHook {
+    fn on_response(&self, _model: &ImagesModel, response: ProviderResponse) -> Result<(), String> {
+        self.seen.lock().expect("seen responses").push(response);
+        Ok(())
+    }
+}
+
+struct ErrorImagesResponseHook {
+    message: &'static str,
+}
+
+impl ImagesResponseHook for ErrorImagesResponseHook {
+    fn on_response(&self, _model: &ImagesModel, _response: ProviderResponse) -> Result<(), String> {
+        Err(self.message.to_owned())
+    }
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_applies_payload_and_response_hooks() {
+    let body = concat!(
+        "{\"id\":\"img-hooks\",\"choices\":[{\"message\":{\"content\":\"Hooked\",",
+        "\"images\":[{\"image_url\":\"data:image/png;base64,aG9vaw==\"}]}}]}"
+    );
+    let (base_url, request_task) = mock_json_server(body).await;
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = base_url;
+    let seen_payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let seen_responses = Arc::new(Mutex::new(Vec::<ProviderResponse>::new()));
+    let replacement = json!({
+        "model": model.id,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{ "type": "text", "text": "Hooked prompt" }]
+            }
+        ],
+        "stream": false,
+        "modalities": ["image", "text"]
+    });
+
+    let output = generate_images(
+        &model,
+        ImagesContext {
+            input: vec![ImagesContent::text("Original prompt")],
+        },
+        ImagesOptions {
+            api_key: Some("openrouter-key".to_owned()),
+            timeout_ms: Some(5_000),
+            payload_hooks: vec![Arc::new(ReplaceImagesPayloadHook {
+                replacement,
+                seen: seen_payloads.clone(),
+            })],
+            response_hooks: vec![Arc::new(RecordingImagesResponseHook {
+                seen: seen_responses.clone(),
+            })],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("generate images");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Stop);
+    assert_eq!(output.response_id.as_deref(), Some("img-hooks"));
+    assert!(request.contains("Hooked prompt"));
+    assert!(!request.contains("Original prompt"));
+    let seen_payloads = seen_payloads.lock().expect("seen payloads");
+    assert_eq!(seen_payloads.len(), 1);
+    assert_eq!(
+        seen_payloads[0]["messages"][0]["content"][0]["text"],
+        "Original prompt"
+    );
+    let seen_responses = seen_responses.lock().expect("seen responses");
+    assert_eq!(seen_responses.len(), 1);
+    assert_eq!(seen_responses[0].status, 200);
+    assert!(
+        seen_responses[0]
+            .headers
+            .get("content-type")
+            .is_some_and(|value| value.contains("application/json"))
+    );
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_maps_payload_hook_errors_before_request() {
+    let model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+
+    let output = generate_images(
+        &model,
+        ImagesContext {
+            input: vec![ImagesContent::text("Generate hook error image")],
+        },
+        ImagesOptions {
+            api_key: Some("openrouter-key".to_owned()),
+            payload_hooks: vec![Arc::new(ErrorImagesPayloadHook {
+                message: "payload hook exploded",
+            })],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("generate images");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Error);
+    assert!(output.output.is_empty());
+    assert_eq!(
+        output.error_message.as_deref(),
+        Some("payload hook exploded")
+    );
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_maps_response_hook_errors_after_response() {
+    let body = concat!(
+        "{\"id\":\"img-response-hook\",\"choices\":[{\"message\":{\"content\":\"Hooked\",",
+        "\"images\":[{\"image_url\":\"data:image/png;base64,aG9vaw==\"}]}}]}"
+    );
+    let (base_url, request_task) = mock_json_server(body).await;
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = base_url;
+
+    let output = generate_images(
+        &model,
+        ImagesContext {
+            input: vec![ImagesContent::text("Generate response hook error image")],
+        },
+        ImagesOptions {
+            api_key: Some("openrouter-key".to_owned()),
+            response_hooks: vec![Arc::new(ErrorImagesResponseHook {
+                message: "response hook exploded",
+            })],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("generate images");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Error);
+    assert!(output.output.is_empty());
+    assert_eq!(
+        output.error_message.as_deref(),
+        Some("response hook exploded")
+    );
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_maps_nonretryable_http_errors() {
+    let (base_url, request_task) = mock_json_status_server(
+        401,
+        "Unauthorized",
+        r#"{"error":{"message":"Invalid OpenRouter key"}}"#,
+    )
+    .await;
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = base_url;
+
+    let output = generate_images(
+        &model,
+        ImagesContext {
+            input: vec![ImagesContent::text("Generate unauthorized image")],
+        },
+        ImagesOptions {
+            api_key: Some("bad-key".to_owned()),
+            max_retries: Some(2),
+            max_retry_delay_ms: Some(0),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("generate images");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Error);
+    assert!(output.output.is_empty());
+    assert_eq!(
+        output.error_message.as_deref(),
+        Some("Invalid OpenRouter key")
+    );
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_maps_invalid_json_response() {
+    let (base_url, request_task) = mock_json_server("{not json").await;
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = base_url;
+
+    let output = generate_images(
+        &model,
+        ImagesContext {
+            input: vec![ImagesContent::text("Generate invalid json image")],
+        },
+        ImagesOptions {
+            api_key: Some("openrouter-key".to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("generate images");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Error);
+    assert!(output.output.is_empty());
+    assert!(
+        output
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.starts_with("Could not parse OpenRouter image response")),
+        "{output:?}"
+    );
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
 }
 
 #[tokio::test]
@@ -982,6 +1808,216 @@ fn anthropic_oauth_authorization_code_request_keeps_localhost_redirect_uri() {
     assert_eq!(body["code_verifier"], "verifier-value");
 }
 
+#[tokio::test]
+async fn anthropic_oauth_callback_server_accepts_matching_state() {
+    let server = start_oauth_callback_server(anthropic_oauth_callback_server_options_with_port(
+        "state-value",
+        0,
+    ))
+    .await
+    .expect("callback server");
+    let port = server.local_addr.port();
+
+    let not_found = oauth_callback_get(port, "/wrong").await;
+    assert!(not_found.starts_with("HTTP/1.1 404 Not Found"));
+    assert!(
+        server
+            .redirect_uri
+            .ends_with(&format!(":{port}{ANTHROPIC_OAUTH_CALLBACK_PATH}"))
+    );
+
+    let response = oauth_callback_get(port, "/callback?code=manual-code&state=state-value").await;
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("Anthropic authentication completed"));
+    let callback = server
+        .wait_for_code()
+        .await
+        .expect("wait for code")
+        .expect("callback");
+    assert_eq!(callback.code, "manual-code");
+    assert_eq!(callback.state, "state-value");
+}
+
+#[tokio::test]
+async fn anthropic_oauth_callback_server_rejects_state_mismatch_then_accepts_code() {
+    let server = start_oauth_callback_server(anthropic_oauth_callback_server_options_with_port(
+        "state-value",
+        0,
+    ))
+    .await
+    .expect("callback server");
+    let port = server.local_addr.port();
+
+    let mismatch = oauth_callback_get(port, "/callback?code=manual-code&state=wrong-state").await;
+    assert!(mismatch.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(mismatch.contains("State mismatch"));
+
+    let response = oauth_callback_get(port, "/callback?code=manual-code&state=state-value").await;
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("Anthropic authentication completed"));
+    let callback = server
+        .wait_for_code()
+        .await
+        .expect("wait for code")
+        .expect("callback");
+    assert_eq!(callback.code, "manual-code");
+    assert_eq!(callback.state, "state-value");
+}
+
+#[tokio::test]
+async fn anthropic_oauth_login_flow_manual_input_exchanges_code() {
+    let (token_url, request_task) = mock_json_server(
+        r#"{"access_token":"manual-access","refresh_token":"manual-refresh","expires_in":3600}"#,
+    )
+    .await;
+    let flow = start_anthropic_oauth_login_flow_with_pkce("verifier-value", "challenge-value", 0)
+        .await
+        .expect("login flow");
+    let port = flow.local_addr.port();
+
+    assert!(
+        flow.auth_url
+            .starts_with("https://claude.ai/oauth/authorize?")
+    );
+    assert!(flow.auth_url.contains("code_challenge=challenge-value"));
+    assert!(flow.auth_url.contains("state=verifier-value"));
+    assert!(flow.auth_url.contains(&format!(
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2Fcallback"
+    )));
+    assert!(
+        flow.instructions
+            .as_deref()
+            .unwrap_or_default()
+            .contains("browser")
+    );
+
+    let credentials = finish_anthropic_oauth_login_from_manual_input_at(
+        flow,
+        "http://localhost/callback?code=manual-code&state=verifier-value",
+        &token_url,
+        1_000_000,
+    )
+    .await
+    .expect("credentials");
+    let request = request_task.await.expect("token request");
+
+    assert_eq!(credentials.access, "manual-access");
+    assert_eq!(credentials.refresh, "manual-refresh");
+    assert_eq!(credentials.expires, 1_000_000 + 3600 * 1000 - 5 * 60 * 1000);
+    assert!(request.contains("\"grant_type\":\"authorization_code\""));
+    assert!(request.contains("\"code\":\"manual-code\""));
+    assert!(request.contains("\"state\":\"verifier-value\""));
+    assert!(request.contains("\"code_verifier\":\"verifier-value\""));
+    assert!(request.contains(&format!(
+        "\"redirect_uri\":\"http://localhost:{port}/callback\""
+    )));
+}
+
+#[tokio::test]
+async fn anthropic_oauth_login_flow_manual_input_rejects_state_mismatch() {
+    let flow = start_anthropic_oauth_login_flow_with_pkce("verifier-value", "challenge-value", 0)
+        .await
+        .expect("login flow");
+
+    let error = finish_anthropic_oauth_login_from_manual_input_at(
+        flow,
+        "http://localhost/callback?code=manual-code&state=wrong-state",
+        "http://127.0.0.1:9/token",
+        1_000_000,
+    )
+    .await
+    .expect_err("state mismatch should fail before token exchange");
+
+    assert_eq!(error, "OAuth state mismatch");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn anthropic_oauth_login_flow_manual_input_routes_token_exchange_through_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let (proxy_url, proxy_request_task) = mock_json_server(
+        r#"{"access_token":"proxy-manual-access","refresh_token":"proxy-manual-refresh","expires_in":3600}"#,
+    )
+    .await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+
+    let flow = start_anthropic_oauth_login_flow_with_pkce("verifier-value", "challenge-value", 0)
+        .await
+        .expect("login flow");
+    let port = flow.local_addr.port();
+    let credentials = finish_anthropic_oauth_login_from_manual_input_at(
+        flow,
+        "http://localhost/callback?code=manual-code&state=verifier-value",
+        "http://oauth.example/token",
+        1_000_000,
+    )
+    .await
+    .expect("credentials through proxy");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert_eq!(credentials.access, "proxy-manual-access");
+    assert_eq!(credentials.refresh, "proxy-manual-refresh");
+    assert_eq!(credentials.expires, 1_000_000 + 3600 * 1000 - 5 * 60 * 1000);
+    assert!(
+        proxy_request.starts_with("POST http://oauth.example/token HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(proxy_request.contains("\"grant_type\":\"authorization_code\""));
+    assert!(proxy_request.contains("\"code\":\"manual-code\""));
+    assert!(proxy_request.contains("\"state\":\"verifier-value\""));
+    assert!(proxy_request.contains("\"code_verifier\":\"verifier-value\""));
+    assert!(proxy_request.contains(&format!(
+        "\"redirect_uri\":\"http://localhost:{port}/callback\""
+    )));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn anthropic_oauth_login_flow_callback_routes_token_exchange_through_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let (proxy_url, proxy_request_task) = mock_json_server(
+        r#"{"access_token":"proxy-callback-access","refresh_token":"proxy-callback-refresh","expires_in":3600}"#,
+    )
+    .await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+
+    let flow = start_anthropic_oauth_login_flow_with_pkce("verifier-value", "challenge-value", 0)
+        .await
+        .expect("login flow");
+    let port = flow.local_addr.port();
+    let target = "/callback?code=callback-code&state=verifier-value".to_owned();
+    let callback_task = tokio::spawn(async move { oauth_callback_get(port, &target).await });
+    let credentials = finish_anthropic_oauth_login_from_callback_at(
+        flow,
+        "http://oauth.example/token",
+        1_000_000,
+    )
+    .await
+    .expect("credentials through proxy");
+    let callback_response = callback_task.await.expect("callback task");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert!(callback_response.starts_with("HTTP/1.1 200 OK"));
+    assert_eq!(credentials.access, "proxy-callback-access");
+    assert_eq!(credentials.refresh, "proxy-callback-refresh");
+    assert_eq!(credentials.expires, 1_000_000 + 3600 * 1000 - 5 * 60 * 1000);
+    assert!(
+        proxy_request.starts_with("POST http://oauth.example/token HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(proxy_request.contains("\"grant_type\":\"authorization_code\""));
+    assert!(proxy_request.contains("\"code\":\"callback-code\""));
+    assert!(proxy_request.contains("\"state\":\"verifier-value\""));
+    assert!(proxy_request.contains("\"code_verifier\":\"verifier-value\""));
+    assert!(proxy_request.contains(&format!(
+        "\"redirect_uri\":\"http://localhost:{port}/callback\""
+    )));
+}
+
 #[test]
 fn anthropic_oauth_refresh_request_omits_scope() {
     let request = build_anthropic_refresh_token_request("refresh-token");
@@ -1016,6 +2052,69 @@ fn anthropic_oauth_token_response_maps_credentials_and_expiry() {
     assert!(err.contains("invalid JSON"));
 }
 
+#[tokio::test]
+async fn anthropic_oauth_refresh_token_posts_json_and_parses_credentials() {
+    let (token_url, request_task) = mock_json_server(
+        r#"{"access_token":"live-access","refresh_token":"live-refresh","expires_in":3600}"#,
+    )
+    .await;
+
+    let credentials = refresh_anthropic_token_with_url_at("refresh-token", &token_url, 1_000_000)
+        .await
+        .expect("refresh token");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(credentials.access, "live-access");
+    assert_eq!(credentials.refresh, "live-refresh");
+    assert_eq!(credentials.expires, 1_000_000 + 3600 * 1000 - 5 * 60 * 1000);
+    assert!(request.starts_with("POST / HTTP/1.1"));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("content-type: application/json")
+    );
+    assert!(request.contains("\"grant_type\":\"refresh_token\""));
+    assert!(request.contains("\"refresh_token\":\"refresh-token\""));
+    assert!(!request.contains("scope"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn anthropic_oauth_refresh_routes_token_request_through_resolved_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let (proxy_url, proxy_request_task) = mock_json_server(
+        r#"{"access_token":"proxy-access","refresh_token":"proxy-refresh","expires_in":3600}"#,
+    )
+    .await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+
+    let credentials = refresh_anthropic_token_with_url_at(
+        "refresh-token",
+        "http://oauth.example/token",
+        1_000_000,
+    )
+    .await
+    .expect("refresh token through proxy");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert_eq!(credentials.access, "proxy-access");
+    assert_eq!(credentials.refresh, "proxy-refresh");
+    assert_eq!(credentials.expires, 1_000_000 + 3600 * 1000 - 5 * 60 * 1000);
+    assert!(
+        proxy_request.starts_with("POST http://oauth.example/token HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(
+        proxy_request
+            .to_ascii_lowercase()
+            .contains("content-type: application/json")
+    );
+    assert!(proxy_request.contains("\"grant_type\":\"refresh_token\""));
+    assert!(proxy_request.contains("\"refresh_token\":\"refresh-token\""));
+}
+
 #[test]
 fn openai_codex_oauth_authorize_url_matches_cli_flow_parameters() {
     let url = build_openai_codex_authorize_url("challenge-value", "state-value", None);
@@ -1029,6 +2128,208 @@ fn openai_codex_oauth_authorize_url_matches_cli_flow_parameters() {
     assert!(url.contains("id_token_add_organizations=true"));
     assert!(url.contains("codex_cli_simplified_flow=true"));
     assert!(url.contains("originator=pi"));
+}
+
+#[tokio::test]
+async fn openai_codex_oauth_callback_server_rejects_state_mismatch_then_accepts_code() {
+    let server = start_oauth_callback_server(openai_codex_oauth_callback_server_options_with_port(
+        "state-value",
+        0,
+    ))
+    .await
+    .expect("callback server");
+    let port = server.local_addr.port();
+
+    let mismatch =
+        oauth_callback_get(port, "/auth/callback?code=manual-code&state=wrong-state").await;
+    assert!(mismatch.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(mismatch.contains("State mismatch"));
+    assert!(
+        server
+            .redirect_uri
+            .ends_with(&format!(":{port}{OPENAI_CODEX_OAUTH_CALLBACK_PATH}"))
+    );
+
+    let response =
+        oauth_callback_get(port, "/auth/callback?code=manual-code&state=state-value").await;
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("OpenAI authentication completed"));
+    let callback = server
+        .wait_for_code()
+        .await
+        .expect("wait for code")
+        .expect("callback");
+    assert_eq!(callback.code, "manual-code");
+    assert_eq!(callback.state, "state-value");
+}
+
+#[tokio::test]
+async fn openai_codex_oauth_login_flow_callback_exchanges_code() {
+    let (token_url, request_task) = mock_json_server(
+        r#"{"access_token":"codex-access","refresh_token":"codex-refresh","expires_in":7200}"#,
+    )
+    .await;
+    let flow = start_openai_codex_oauth_login_flow_with_pkce(
+        "verifier-value",
+        "challenge-value",
+        "state-value",
+        Some("codex-test"),
+        0,
+    )
+    .await
+    .expect("login flow");
+    let port = flow.local_addr.port();
+
+    assert!(
+        flow.auth_url
+            .starts_with("https://auth.openai.com/oauth/authorize?")
+    );
+    assert!(flow.auth_url.contains("code_challenge=challenge-value"));
+    assert!(flow.auth_url.contains("state=state-value"));
+    assert!(flow.auth_url.contains("originator=codex-test"));
+    assert!(flow.auth_url.contains(&format!(
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2Fauth%2Fcallback"
+    )));
+
+    let target = "/auth/callback?code=callback-code&state=state-value".to_owned();
+    let callback_task = tokio::spawn(async move { oauth_callback_get(port, &target).await });
+    let credentials = finish_openai_codex_oauth_login_from_callback_at(flow, &token_url, 2_000_000)
+        .await
+        .expect("credentials");
+    let callback_response = callback_task.await.expect("callback task");
+    let request = request_task.await.expect("token request");
+
+    assert!(callback_response.starts_with("HTTP/1.1 200 OK"));
+    assert_eq!(credentials.access, "codex-access");
+    assert_eq!(credentials.refresh, "codex-refresh");
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert!(request.contains("grant_type=authorization_code"));
+    assert!(request.contains("code=callback-code"));
+    assert!(request.contains("code_verifier=verifier-value"));
+    assert!(request.contains(&format!(
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2Fauth%2Fcallback"
+    )));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn openai_codex_oauth_login_flow_callback_routes_token_exchange_through_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let (proxy_url, proxy_request_task) = mock_json_server(
+        r#"{"access_token":"proxy-codex-access","refresh_token":"proxy-codex-refresh","expires_in":7200}"#,
+    )
+    .await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+
+    let flow = start_openai_codex_oauth_login_flow_with_pkce(
+        "verifier-value",
+        "challenge-value",
+        "state-value",
+        Some("codex-test"),
+        0,
+    )
+    .await
+    .expect("login flow");
+    let port = flow.local_addr.port();
+    let target = "/auth/callback?code=callback-code&state=state-value".to_owned();
+    let callback_task = tokio::spawn(async move { oauth_callback_get(port, &target).await });
+    let credentials = finish_openai_codex_oauth_login_from_callback_at(
+        flow,
+        "http://auth.example/oauth/token",
+        2_000_000,
+    )
+    .await
+    .expect("credentials through proxy");
+    let callback_response = callback_task.await.expect("callback task");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert!(callback_response.starts_with("HTTP/1.1 200 OK"));
+    assert_eq!(credentials.access, "proxy-codex-access");
+    assert_eq!(credentials.refresh, "proxy-codex-refresh");
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert!(
+        proxy_request.starts_with("POST http://auth.example/oauth/token HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(proxy_request.contains("grant_type=authorization_code"));
+    assert!(proxy_request.contains("code=callback-code"));
+    assert!(proxy_request.contains("code_verifier=verifier-value"));
+    assert!(proxy_request.contains(&format!(
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2Fauth%2Fcallback"
+    )));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn openai_codex_oauth_login_flow_manual_input_routes_token_exchange_through_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let (proxy_url, proxy_request_task) = mock_json_server(
+        r#"{"access_token":"proxy-codex-manual-access","refresh_token":"proxy-codex-manual-refresh","expires_in":7200}"#,
+    )
+    .await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+
+    let flow = start_openai_codex_oauth_login_flow_with_pkce(
+        "verifier-value",
+        "challenge-value",
+        "state-value",
+        Some("codex-test"),
+        0,
+    )
+    .await
+    .expect("login flow");
+    let port = flow.local_addr.port();
+    let credentials = finish_openai_codex_oauth_login_from_manual_input_at(
+        flow,
+        "http://localhost/auth/callback?code=manual-code&state=state-value",
+        "http://auth.example/oauth/token",
+        2_000_000,
+    )
+    .await
+    .expect("credentials through proxy");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert_eq!(credentials.access, "proxy-codex-manual-access");
+    assert_eq!(credentials.refresh, "proxy-codex-manual-refresh");
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert!(
+        proxy_request.starts_with("POST http://auth.example/oauth/token HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(proxy_request.contains("grant_type=authorization_code"));
+    assert!(proxy_request.contains("code=manual-code"));
+    assert!(proxy_request.contains("code_verifier=verifier-value"));
+    assert!(proxy_request.contains(&format!(
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2Fauth%2Fcallback"
+    )));
+}
+
+#[tokio::test]
+async fn openai_codex_oauth_login_flow_manual_input_rejects_state_mismatch() {
+    let flow = start_openai_codex_oauth_login_flow_with_pkce(
+        "verifier-value",
+        "challenge-value",
+        "state-value",
+        Some("codex-test"),
+        0,
+    )
+    .await
+    .expect("login flow");
+
+    let error = finish_openai_codex_oauth_login_from_manual_input_at(
+        flow,
+        "http://localhost/auth/callback?code=manual-code&state=wrong-state",
+        "http://127.0.0.1:9/oauth/token",
+        2_000_000,
+    )
+    .await
+    .expect_err("state mismatch should fail before token exchange");
+
+    assert_eq!(error, "State mismatch");
 }
 
 #[test]
@@ -1068,6 +2369,827 @@ fn openai_codex_oauth_refresh_failure_message_includes_status_and_body() {
     assert!(message.starts_with("OpenAI Codex token refresh failed (401): "));
     assert!(message.contains("Could not validate your token"));
     assert!(!message.contains("stderr"));
+}
+
+struct FakeOAuthRefresher {
+    result: StoredOAuthCredentials,
+    calls: Mutex<Vec<(String, StoredOAuthCredentials, i64)>>,
+}
+
+#[async_trait]
+impl OAuthTokenRefresher for FakeOAuthRefresher {
+    async fn refresh_token(
+        &self,
+        provider_id: &str,
+        credentials: &StoredOAuthCredentials,
+        now_millis: i64,
+    ) -> Result<StoredOAuthCredentials, String> {
+        self.calls.lock().expect("calls lock").push((
+            provider_id.to_owned(),
+            credentials.clone(),
+            now_millis,
+        ));
+        Ok(self.result.clone())
+    }
+}
+
+struct FailingOAuthRefresher {
+    message: &'static str,
+    calls: Mutex<Vec<(String, StoredOAuthCredentials, i64)>>,
+}
+
+#[async_trait]
+impl OAuthTokenRefresher for FailingOAuthRefresher {
+    async fn refresh_token(
+        &self,
+        provider_id: &str,
+        credentials: &StoredOAuthCredentials,
+        now_millis: i64,
+    ) -> Result<StoredOAuthCredentials, String> {
+        self.calls.lock().expect("calls lock").push((
+            provider_id.to_owned(),
+            credentials.clone(),
+            now_millis,
+        ));
+        Err(self.message.to_owned())
+    }
+}
+
+fn auth_storage_test_path(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir()
+        .join(format!(
+            "ri-auth-storage-{label}-{}-{}",
+            std::process::id(),
+            now_millis()
+        ))
+        .join("auth.json")
+}
+
+#[test]
+fn oauth_provider_registry_matches_built_in_source_metadata() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    reset_oauth_providers();
+
+    let providers = get_oauth_providers();
+    let provider_ids = providers
+        .iter()
+        .map(|provider| provider.id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        provider_ids,
+        vec!["anthropic", "github-copilot", "openai-codex"]
+    );
+    assert_eq!(
+        get_oauth_provider("anthropic"),
+        Some(OAuthProviderInfo {
+            id: "anthropic".to_owned(),
+            name: "Anthropic".to_owned(),
+            uses_callback_server: true,
+        })
+    );
+    assert_eq!(
+        get_oauth_provider("github-copilot"),
+        Some(OAuthProviderInfo {
+            id: "github-copilot".to_owned(),
+            name: "GitHub Copilot".to_owned(),
+            uses_callback_server: false,
+        })
+    );
+    assert_eq!(
+        get_oauth_provider("openai-codex"),
+        Some(OAuthProviderInfo {
+            id: "openai-codex".to_owned(),
+            name: "OpenAI Codex".to_owned(),
+            uses_callback_server: true,
+        })
+    );
+    assert_eq!(get_oauth_provider("missing-provider"), None);
+    assert_eq!(get_oauth_provider_info_list(), providers);
+}
+
+#[test]
+fn oauth_provider_registry_registers_custom_and_restores_built_ins() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    reset_oauth_providers();
+    register_oauth_provider(OAuthProviderInfo {
+        id: "anthropic".to_owned(),
+        name: "Custom Anthropic".to_owned(),
+        uses_callback_server: false,
+    });
+    register_oauth_provider(OAuthProviderInfo {
+        id: "custom-oauth".to_owned(),
+        name: "Custom OAuth".to_owned(),
+        uses_callback_server: false,
+    });
+
+    assert_eq!(
+        get_oauth_provider("anthropic")
+            .expect("custom anthropic")
+            .name,
+        "Custom Anthropic"
+    );
+    assert_eq!(
+        get_oauth_provider("custom-oauth")
+            .expect("custom provider")
+            .name,
+        "Custom OAuth"
+    );
+
+    unregister_oauth_provider("anthropic");
+    unregister_oauth_provider("custom-oauth");
+
+    assert_eq!(
+        get_oauth_provider("anthropic")
+            .expect("restored anthropic")
+            .name,
+        "Anthropic"
+    );
+    assert_eq!(get_oauth_provider("custom-oauth"), None);
+    reset_oauth_providers();
+}
+
+#[tokio::test]
+async fn oauth_auth_storage_resolves_api_key_and_current_oauth_without_refresh() {
+    let path = auth_storage_test_path("current");
+    let parent = path.parent().expect("auth storage parent");
+    std::fs::create_dir_all(parent).expect("create auth storage dir");
+    std::fs::write(
+        &path,
+        json!({
+            "openai": { "type": "api_key", "key": "openai-key" },
+            "anthropic": {
+                "type": "oauth",
+                "refresh": "anthropic-refresh",
+                "access": "anthropic-access",
+                "expires": 2_000_000
+            }
+        })
+        .to_string(),
+    )
+    .expect("write auth storage");
+    let refresher = FakeOAuthRefresher {
+        result: StoredOAuthCredentials {
+            refresh: "unused-refresh".to_owned(),
+            access: "unused-access".to_owned(),
+            expires: 3_000_000,
+            extra: BTreeMap::new(),
+        },
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let api_key = resolve_auth_storage_api_key_from_path_with_refresher_at(
+        "openai", &path, 1_000_000, &refresher,
+    )
+    .await
+    .expect("api key resolution")
+    .expect("api key result");
+    let oauth = resolve_auth_storage_api_key_from_path_with_refresher_at(
+        "anthropic",
+        &path,
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect("oauth resolution")
+    .expect("oauth result");
+
+    assert_eq!(api_key.api_key, "openai-key");
+    assert_eq!(api_key.credentials, None);
+    assert!(!api_key.refreshed);
+    assert_eq!(oauth.api_key, "anthropic-access");
+    assert_eq!(
+        oauth
+            .credentials
+            .as_ref()
+            .map(|credentials| credentials.refresh.as_str()),
+        Some("anthropic-refresh")
+    );
+    assert!(!oauth.refreshed);
+    assert!(refresher.calls.lock().expect("calls lock").is_empty());
+    let _ = std::fs::remove_dir_all(parent);
+}
+
+#[tokio::test]
+async fn anthropic_oauth_callback_login_persists_auth_storage_and_resolves_access_key() {
+    let (token_url, request_task) = mock_json_server(
+        r#"{"access_token":"callback-access","refresh_token":"callback-refresh","expires_in":3600}"#,
+    )
+    .await;
+    let path = auth_storage_test_path("anthropic-login-roundtrip");
+    let parent = path.parent().expect("auth storage parent");
+    let flow = start_anthropic_oauth_login_flow_with_pkce("verifier-value", "challenge-value", 0)
+        .await
+        .expect("login flow");
+    let port = flow.local_addr.port();
+    let target = "/callback?code=callback-code&state=verifier-value".to_owned();
+    let callback_task = tokio::spawn(async move { oauth_callback_get(port, &target).await });
+
+    let credentials = finish_anthropic_oauth_login_from_callback_at(flow, &token_url, 1_000_000)
+        .await
+        .expect("callback credentials");
+    let callback_response = callback_task.await.expect("callback task");
+    let request = request_task.await.expect("token request");
+    let stored_credentials = StoredOAuthCredentials::from(credentials);
+    let mut storage = AuthStorage::new();
+    storage.insert(
+        "anthropic".to_owned(),
+        AuthCredential::OAuth {
+            credentials: stored_credentials.clone(),
+        },
+    );
+    save_auth_storage_to_path(&path, &storage).expect("save auth storage");
+    let saved_raw: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read auth storage"))
+            .expect("saved auth json");
+    let refresher = FailingOAuthRefresher {
+        message: "should not refresh",
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let resolution = resolve_auth_storage_api_key_from_path_with_refresher_at(
+        "anthropic",
+        &path,
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect("oauth resolution")
+    .expect("oauth result");
+
+    assert!(callback_response.starts_with("HTTP/1.1 200 OK"));
+    assert_eq!(stored_credentials.access, "callback-access");
+    assert_eq!(stored_credentials.refresh, "callback-refresh");
+    assert_eq!(
+        stored_credentials.expires,
+        1_000_000 + 3600 * 1000 - 5 * 60 * 1000
+    );
+    assert!(request.contains("\"grant_type\":\"authorization_code\""));
+    assert!(request.contains("\"code\":\"callback-code\""));
+    assert!(request.contains("\"state\":\"verifier-value\""));
+    assert!(request.contains("\"code_verifier\":\"verifier-value\""));
+    assert!(request.contains(&format!(
+        "\"redirect_uri\":\"http://localhost:{port}/callback\""
+    )));
+    assert_eq!(saved_raw["anthropic"]["type"], json!("oauth"));
+    assert_eq!(saved_raw["anthropic"]["access"], json!("callback-access"));
+    assert_eq!(saved_raw["anthropic"]["refresh"], json!("callback-refresh"));
+    assert_eq!(resolution.api_key, "callback-access");
+    assert_eq!(resolution.credentials, Some(stored_credentials));
+    assert!(!resolution.refreshed);
+    assert!(refresher.calls.lock().expect("calls lock").is_empty());
+    let _ = std::fs::remove_dir_all(parent);
+}
+
+#[tokio::test]
+async fn anthropic_oauth_manual_input_login_persists_auth_storage_and_resolves_access_key() {
+    let (token_url, request_task) = mock_json_server(
+        r#"{"access_token":"manual-storage-access","refresh_token":"manual-storage-refresh","expires_in":3600}"#,
+    )
+    .await;
+    let path = auth_storage_test_path("anthropic-manual-login-roundtrip");
+    let parent = path.parent().expect("auth storage parent");
+    let flow = start_anthropic_oauth_login_flow_with_pkce("verifier-value", "challenge-value", 0)
+        .await
+        .expect("login flow");
+    let port = flow.local_addr.port();
+
+    let credentials = finish_anthropic_oauth_login_from_manual_input_at(
+        flow,
+        "http://localhost/callback?code=manual-code&state=verifier-value",
+        &token_url,
+        1_000_000,
+    )
+    .await
+    .expect("manual credentials");
+    let request = request_task.await.expect("token request");
+    let stored_credentials = StoredOAuthCredentials::from(credentials);
+    let mut storage = AuthStorage::new();
+    storage.insert(
+        "anthropic".to_owned(),
+        AuthCredential::OAuth {
+            credentials: stored_credentials.clone(),
+        },
+    );
+    save_auth_storage_to_path(&path, &storage).expect("save auth storage");
+    let saved_raw: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read auth storage"))
+            .expect("saved auth json");
+    let refresher = FailingOAuthRefresher {
+        message: "should not refresh",
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let resolution = resolve_auth_storage_api_key_from_path_with_refresher_at(
+        "anthropic",
+        &path,
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect("oauth resolution")
+    .expect("oauth result");
+
+    assert_eq!(stored_credentials.access, "manual-storage-access");
+    assert_eq!(stored_credentials.refresh, "manual-storage-refresh");
+    assert_eq!(
+        stored_credentials.expires,
+        1_000_000 + 3600 * 1000 - 5 * 60 * 1000
+    );
+    assert!(request.contains("\"grant_type\":\"authorization_code\""));
+    assert!(request.contains("\"code\":\"manual-code\""));
+    assert!(request.contains("\"state\":\"verifier-value\""));
+    assert!(request.contains("\"code_verifier\":\"verifier-value\""));
+    assert!(request.contains(&format!(
+        "\"redirect_uri\":\"http://localhost:{port}/callback\""
+    )));
+    assert_eq!(saved_raw["anthropic"]["type"], json!("oauth"));
+    assert_eq!(
+        saved_raw["anthropic"]["access"],
+        json!("manual-storage-access")
+    );
+    assert_eq!(
+        saved_raw["anthropic"]["refresh"],
+        json!("manual-storage-refresh")
+    );
+    assert_eq!(resolution.api_key, "manual-storage-access");
+    assert_eq!(resolution.credentials, Some(stored_credentials));
+    assert!(!resolution.refreshed);
+    assert!(refresher.calls.lock().expect("calls lock").is_empty());
+    let _ = std::fs::remove_dir_all(parent);
+}
+
+#[tokio::test]
+async fn openai_codex_oauth_callback_login_persists_auth_storage_and_resolves_access_key() {
+    let (token_url, request_task) = mock_json_server(
+        r#"{"access_token":"codex-callback-access","refresh_token":"codex-callback-refresh","expires_in":7200}"#,
+    )
+    .await;
+    let path = auth_storage_test_path("openai-codex-login-roundtrip");
+    let parent = path.parent().expect("auth storage parent");
+    let flow = start_openai_codex_oauth_login_flow_with_pkce(
+        "verifier-value",
+        "challenge-value",
+        "state-value",
+        Some("codex-test"),
+        0,
+    )
+    .await
+    .expect("login flow");
+    let port = flow.local_addr.port();
+    let target = "/auth/callback?code=callback-code&state=state-value".to_owned();
+    let callback_task = tokio::spawn(async move { oauth_callback_get(port, &target).await });
+
+    let credentials = finish_openai_codex_oauth_login_from_callback_at(flow, &token_url, 2_000_000)
+        .await
+        .expect("callback credentials");
+    let callback_response = callback_task.await.expect("callback task");
+    let request = request_task.await.expect("token request");
+    let stored_credentials = StoredOAuthCredentials::from(credentials);
+    let mut storage = AuthStorage::new();
+    storage.insert(
+        "openai-codex".to_owned(),
+        AuthCredential::OAuth {
+            credentials: stored_credentials.clone(),
+        },
+    );
+    save_auth_storage_to_path(&path, &storage).expect("save auth storage");
+    let saved_raw: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read auth storage"))
+            .expect("saved auth json");
+    let refresher = FailingOAuthRefresher {
+        message: "should not refresh",
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let resolution = resolve_auth_storage_api_key_from_path_with_refresher_at(
+        "openai-codex",
+        &path,
+        2_000_000,
+        &refresher,
+    )
+    .await
+    .expect("oauth resolution")
+    .expect("oauth result");
+
+    assert!(callback_response.starts_with("HTTP/1.1 200 OK"));
+    assert_eq!(stored_credentials.access, "codex-callback-access");
+    assert_eq!(stored_credentials.refresh, "codex-callback-refresh");
+    assert_eq!(
+        stored_credentials.expires,
+        2_000_000 + 7200 * 1000 - 5 * 60 * 1000
+    );
+    assert!(request.contains("grant_type=authorization_code"));
+    assert!(request.contains("code=callback-code"));
+    assert!(request.contains("code_verifier=verifier-value"));
+    assert!(request.contains(&format!(
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2Fauth%2Fcallback"
+    )));
+    assert_eq!(saved_raw["openai-codex"]["type"], json!("oauth"));
+    assert_eq!(
+        saved_raw["openai-codex"]["access"],
+        json!("codex-callback-access")
+    );
+    assert_eq!(
+        saved_raw["openai-codex"]["refresh"],
+        json!("codex-callback-refresh")
+    );
+    assert_eq!(resolution.api_key, "codex-callback-access");
+    assert_eq!(resolution.credentials, Some(stored_credentials));
+    assert!(!resolution.refreshed);
+    assert!(refresher.calls.lock().expect("calls lock").is_empty());
+    let _ = std::fs::remove_dir_all(parent);
+}
+
+#[tokio::test]
+async fn openai_codex_oauth_manual_input_login_persists_auth_storage_and_resolves_access_key() {
+    let (token_url, request_task) = mock_json_server(
+        r#"{"access_token":"codex-manual-storage-access","refresh_token":"codex-manual-storage-refresh","expires_in":7200}"#,
+    )
+    .await;
+    let path = auth_storage_test_path("openai-codex-manual-login-roundtrip");
+    let parent = path.parent().expect("auth storage parent");
+    let flow = start_openai_codex_oauth_login_flow_with_pkce(
+        "verifier-value",
+        "challenge-value",
+        "state-value",
+        Some("codex-test"),
+        0,
+    )
+    .await
+    .expect("login flow");
+    let port = flow.local_addr.port();
+
+    let credentials = finish_openai_codex_oauth_login_from_manual_input_at(
+        flow,
+        "http://localhost/auth/callback?code=manual-code&state=state-value",
+        &token_url,
+        2_000_000,
+    )
+    .await
+    .expect("manual credentials");
+    let request = request_task.await.expect("token request");
+    let stored_credentials = StoredOAuthCredentials::from(credentials);
+    let mut storage = AuthStorage::new();
+    storage.insert(
+        "openai-codex".to_owned(),
+        AuthCredential::OAuth {
+            credentials: stored_credentials.clone(),
+        },
+    );
+    save_auth_storage_to_path(&path, &storage).expect("save auth storage");
+    let saved_raw: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read auth storage"))
+            .expect("saved auth json");
+    let refresher = FailingOAuthRefresher {
+        message: "should not refresh",
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let resolution = resolve_auth_storage_api_key_from_path_with_refresher_at(
+        "openai-codex",
+        &path,
+        2_000_000,
+        &refresher,
+    )
+    .await
+    .expect("oauth resolution")
+    .expect("oauth result");
+
+    assert_eq!(stored_credentials.access, "codex-manual-storage-access");
+    assert_eq!(stored_credentials.refresh, "codex-manual-storage-refresh");
+    assert_eq!(
+        stored_credentials.expires,
+        2_000_000 + 7200 * 1000 - 5 * 60 * 1000
+    );
+    assert!(request.contains("grant_type=authorization_code"));
+    assert!(request.contains("code=manual-code"));
+    assert!(request.contains("code_verifier=verifier-value"));
+    assert!(request.contains(&format!(
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2Fauth%2Fcallback"
+    )));
+    assert_eq!(saved_raw["openai-codex"]["type"], json!("oauth"));
+    assert_eq!(
+        saved_raw["openai-codex"]["access"],
+        json!("codex-manual-storage-access")
+    );
+    assert_eq!(
+        saved_raw["openai-codex"]["refresh"],
+        json!("codex-manual-storage-refresh")
+    );
+    assert_eq!(resolution.api_key, "codex-manual-storage-access");
+    assert_eq!(resolution.credentials, Some(stored_credentials));
+    assert!(!resolution.refreshed);
+    assert!(refresher.calls.lock().expect("calls lock").is_empty());
+    let _ = std::fs::remove_dir_all(parent);
+}
+
+#[tokio::test]
+async fn oauth_auth_storage_refreshes_expired_oauth_and_persists_source_format() {
+    let path = auth_storage_test_path("expired");
+    let parent = path.parent().expect("auth storage parent");
+    std::fs::create_dir_all(parent).expect("create auth storage dir");
+    std::fs::write(
+        &path,
+        json!({
+            "github-copilot": {
+                "type": "oauth",
+                "refresh": "ghu-refresh",
+                "access": "expired-access",
+                "expires": 999,
+                "enterpriseUrl": "ghe.example.com"
+            }
+        })
+        .to_string(),
+    )
+    .expect("write auth storage");
+    let refresher = FakeOAuthRefresher {
+        result: StoredOAuthCredentials {
+            refresh: "ghu-refresh".to_owned(),
+            access: "refreshed-access".to_owned(),
+            expires: 2_000_000,
+            extra: BTreeMap::from([("enterpriseUrl".to_owned(), json!("ghe.example.com"))]),
+        },
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let result = resolve_auth_storage_api_key_from_path_with_refresher_at(
+        "github-copilot",
+        &path,
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect("oauth resolution")
+    .expect("oauth result");
+    let calls = refresher.calls.lock().expect("calls lock");
+    let saved = load_auth_storage_from_path(&path).expect("load saved storage");
+    let saved_raw: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read auth storage"))
+            .expect("saved auth json");
+
+    assert_eq!(result.api_key, "refreshed-access");
+    assert!(result.refreshed);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "github-copilot");
+    assert_eq!(calls[0].1.refresh, "ghu-refresh");
+    assert_eq!(calls[0].1.enterprise_domain(), Some("ghe.example.com"));
+    assert_eq!(calls[0].2, 1_000_000);
+    assert_eq!(
+        saved.get("github-copilot"),
+        Some(&AuthCredential::OAuth {
+            credentials: StoredOAuthCredentials {
+                refresh: "ghu-refresh".to_owned(),
+                access: "refreshed-access".to_owned(),
+                expires: 2_000_000,
+                extra: BTreeMap::from([("enterpriseUrl".to_owned(), json!("ghe.example.com"))]),
+            }
+        })
+    );
+    assert_eq!(
+        saved_raw["github-copilot"]["enterpriseUrl"],
+        json!("ghe.example.com")
+    );
+    assert!(saved_raw["github-copilot"].get("enterprise_url").is_none());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    let _ = std::fs::remove_dir_all(parent);
+}
+
+#[tokio::test]
+async fn oauth_auth_storage_refresh_failure_preserves_existing_file() {
+    let path = auth_storage_test_path("refresh-failure");
+    let parent = path.parent().expect("auth storage parent");
+    std::fs::create_dir_all(parent).expect("create auth storage dir");
+    let original = json!({
+        "anthropic": {
+            "type": "oauth",
+            "refresh": "anthropic-refresh",
+            "access": "expired-access",
+            "expires": 999
+        }
+    })
+    .to_string();
+    std::fs::write(&path, &original).expect("write auth storage");
+    let refresher = FailingOAuthRefresher {
+        message: "network unavailable",
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let error = resolve_auth_storage_api_key_from_path_with_refresher_at(
+        "anthropic",
+        &path,
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect_err("refresh failure");
+    let calls = refresher.calls.lock().expect("calls lock");
+    let saved_raw = std::fs::read_to_string(&path).expect("read auth storage");
+
+    assert_eq!(
+        error,
+        "Failed to refresh OAuth token for anthropic: network unavailable"
+    );
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "anthropic");
+    assert_eq!(calls[0].1.refresh, "anthropic-refresh");
+    assert_eq!(calls[0].1.access, "expired-access");
+    assert_eq!(calls[0].2, 1_000_000);
+    assert_eq!(saved_raw, original);
+    let _ = std::fs::remove_dir_all(parent);
+}
+
+#[tokio::test]
+async fn oauth_auth_storage_missing_and_invalid_files_resolve_to_none() {
+    let missing_path = auth_storage_test_path("missing");
+    let invalid_path = auth_storage_test_path("invalid");
+    let invalid_parent = invalid_path.parent().expect("invalid parent");
+    std::fs::create_dir_all(invalid_parent).expect("create invalid parent");
+    std::fs::write(&invalid_path, "not json").expect("write invalid auth storage");
+    let refresher = FakeOAuthRefresher {
+        result: StoredOAuthCredentials {
+            refresh: "unused-refresh".to_owned(),
+            access: "unused-access".to_owned(),
+            expires: 3_000_000,
+            extra: BTreeMap::new(),
+        },
+        calls: Mutex::new(Vec::new()),
+    };
+
+    assert!(
+        resolve_auth_storage_api_key_from_path_with_refresher_at(
+            "anthropic",
+            &missing_path,
+            1_000_000,
+            &refresher,
+        )
+        .await
+        .expect("missing storage")
+        .is_none()
+    );
+    assert!(
+        resolve_auth_storage_api_key_from_path_with_refresher_at(
+            "anthropic",
+            &invalid_path,
+            1_000_000,
+            &refresher,
+        )
+        .await
+        .expect("invalid storage")
+        .is_none()
+    );
+    assert!(refresher.calls.lock().expect("calls lock").is_empty());
+    let _ = std::fs::remove_dir_all(invalid_parent);
+}
+
+#[tokio::test]
+async fn oauth_auth_storage_rejects_unknown_oauth_provider_before_refresh() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    reset_oauth_providers();
+    let path = auth_storage_test_path("unknown-oauth-provider");
+    let parent = path.parent().expect("auth storage parent");
+    std::fs::create_dir_all(parent).expect("create auth storage dir");
+    std::fs::write(
+        &path,
+        json!({
+            "unknown-provider": {
+                "type": "oauth",
+                "refresh": "unknown-refresh",
+                "access": "unknown-access",
+                "expires": 2_000_000
+            },
+            "plain-provider": {
+                "type": "api_key",
+                "key": "plain-key"
+            }
+        })
+        .to_string(),
+    )
+    .expect("write auth storage");
+    let refresher = FakeOAuthRefresher {
+        result: StoredOAuthCredentials {
+            refresh: "unused-refresh".to_owned(),
+            access: "unused-access".to_owned(),
+            expires: 3_000_000,
+            extra: BTreeMap::new(),
+        },
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let error = resolve_auth_storage_api_key_from_path_with_refresher_at(
+        "unknown-provider",
+        &path,
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect_err("unknown provider");
+    let plain = resolve_auth_storage_api_key_from_path_with_refresher_at(
+        "plain-provider",
+        &path,
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect("plain api key")
+    .expect("plain result");
+
+    assert_eq!(error, "Unknown OAuth provider: unknown-provider");
+    assert_eq!(plain.api_key, "plain-key");
+    assert!(plain.credentials.is_none());
+    assert!(refresher.calls.lock().expect("calls lock").is_empty());
+    let _ = std::fs::remove_dir_all(parent);
+}
+
+#[tokio::test]
+async fn openai_codex_oauth_refresh_posts_form_and_maps_responses() {
+    let (token_url, request_task) = mock_json_server(
+        r#"{"access_token":"codex-access","refresh_token":"codex-refresh","expires_in":7200}"#,
+    )
+    .await;
+
+    let credentials =
+        refresh_openai_codex_token_with_url_at("old refresh/token", &token_url, 2_000_000)
+            .await
+            .expect("refresh token");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(credentials.access, "codex-access");
+    assert_eq!(credentials.refresh, "codex-refresh");
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert!(request.starts_with("POST / HTTP/1.1"));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("content-type: application/x-www-form-urlencoded")
+    );
+    assert!(request.contains("grant_type=refresh_token"));
+    assert!(request.contains("refresh_token=old+refresh%2Ftoken"));
+
+    let (error_url, error_request_task) = mock_json_status_server(
+        401,
+        "Unauthorized",
+        r#"{"error":{"message":"Could not validate your token.","type":"invalid_request_error"}}"#,
+    )
+    .await;
+    let err = refresh_openai_codex_token_with_url_at("bad-token", &error_url, 0)
+        .await
+        .expect_err("refresh failure");
+    let _ = error_request_task.await.expect("error request task");
+
+    assert!(err.starts_with("OpenAI Codex token refresh failed (401): "));
+    assert!(err.contains("Could not validate your token"));
+    assert!(!err.contains("stderr"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn openai_codex_oauth_refresh_routes_token_request_through_resolved_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let (proxy_url, proxy_request_task) = mock_json_server(
+        r#"{"access_token":"proxy-codex-access","refresh_token":"proxy-codex-refresh","expires_in":7200}"#,
+    )
+    .await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+
+    let credentials = refresh_openai_codex_token_with_url_at(
+        "old refresh/token",
+        "http://auth.example/oauth/token",
+        2_000_000,
+    )
+    .await
+    .expect("refresh token through proxy");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert_eq!(credentials.access, "proxy-codex-access");
+    assert_eq!(credentials.refresh, "proxy-codex-refresh");
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert!(
+        proxy_request.starts_with("POST http://auth.example/oauth/token HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(
+        proxy_request
+            .to_ascii_lowercase()
+            .contains("content-type: application/x-www-form-urlencoded")
+    );
+    assert!(proxy_request.contains("grant_type=refresh_token"));
+    assert!(proxy_request.contains("refresh_token=old+refresh%2Ftoken"));
+    assert!(proxy_request.contains("client_id=app_EMoamEEZ73f0CkXaXp7hrann"));
 }
 
 #[test]
@@ -1203,6 +3325,496 @@ fn github_copilot_oauth_refresh_and_base_url_helpers_match_provider() {
     assert_eq!(credentials.refresh, "ghu_refresh_token");
     assert_eq!(credentials.access, token);
     assert_eq!(credentials.expires, 9_999_999_999_000 - 5 * 60 * 1000);
+}
+
+#[tokio::test]
+async fn github_copilot_oauth_network_device_poll_and_refresh_flows() {
+    let (device_url, device_request_task) = mock_json_server(
+        r#"{"device_code":"device-code","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","verification_uri_complete":"https://github.com/login/device?user_code=ABCD-EFGH","interval":5,"expires_in":900}"#,
+    )
+    .await;
+    let (poll_url, poll_request_task) =
+        mock_json_server(r#"{"error":"slow_down","error_description":"wait","interval":10}"#).await;
+    let token = "tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;";
+    let (refresh_url, refresh_request_task) = mock_json_server(
+        r#"{"token":"tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;","expires_at":9999999999}"#,
+    )
+    .await;
+    let urls = GitHubCopilotUrls {
+        device_code_url: device_url,
+        access_token_url: poll_url,
+        copilot_token_url: refresh_url,
+    };
+
+    let device = request_github_copilot_device_code_for_urls(&urls)
+        .await
+        .expect("device code");
+    let device_request = device_request_task.await.expect("device request task");
+    assert_eq!(device.device_code, "device-code");
+    assert_eq!(device.user_code, "ABCD-EFGH");
+    assert_eq!(device.interval_seconds, 5);
+    assert_eq!(device.expires_in_seconds, 900);
+    assert!(device_request.starts_with("POST / HTTP/1.1"));
+    assert!(device_request.contains("scope=read%3Auser"));
+
+    let poll = poll_github_copilot_access_token_for_urls(&urls, "device-code")
+        .await
+        .expect("poll");
+    let poll_request = poll_request_task.await.expect("poll request task");
+    assert_eq!(
+        poll,
+        GitHubDeviceTokenResponse::SlowDown {
+            interval_seconds: Some(10)
+        }
+    );
+    assert!(poll_request.contains("device_code=device-code"));
+
+    let credentials = refresh_github_copilot_token_for_urls_at(
+        "ghu_refresh_token",
+        &urls,
+        Some("ghe.example.com"),
+        0,
+    )
+    .await
+    .expect("refresh");
+    let refresh_request = refresh_request_task.await.expect("refresh request task");
+    assert_eq!(credentials.refresh, "ghu_refresh_token");
+    assert_eq!(credentials.access, token);
+    assert_eq!(
+        credentials.enterprise_url.as_deref(),
+        Some("ghe.example.com")
+    );
+    assert_eq!(credentials.expires, 9_999_999_999_000 - 5 * 60 * 1000);
+    assert!(refresh_request.starts_with("GET / HTTP/1.1"));
+    assert!(
+        refresh_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer ghu_refresh_token")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn github_copilot_oauth_refresh_routes_token_request_through_resolved_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let token = "tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;";
+    let (proxy_url, proxy_request_task) = mock_json_server(
+        r#"{"token":"tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;","expires_at":9999999999}"#,
+    )
+    .await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+    let urls = GitHubCopilotUrls {
+        device_code_url: "http://github.example/login/device/code".to_owned(),
+        access_token_url: "http://github.example/login/oauth/access_token".to_owned(),
+        copilot_token_url: "http://api.github.example/copilot_internal/v2/token".to_owned(),
+    };
+
+    let credentials = refresh_github_copilot_token_for_urls_at(
+        "ghu_refresh_token",
+        &urls,
+        Some("ghe.example.com"),
+        0,
+    )
+    .await
+    .expect("refresh token through proxy");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert_eq!(credentials.refresh, "ghu_refresh_token");
+    assert_eq!(credentials.access, token);
+    assert_eq!(
+        credentials.enterprise_url.as_deref(),
+        Some("ghe.example.com")
+    );
+    assert_eq!(credentials.expires, 9_999_999_999_000 - 5 * 60 * 1000);
+    assert!(
+        proxy_request
+            .starts_with("GET http://api.github.example/copilot_internal/v2/token HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(
+        proxy_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer ghu_refresh_token")
+    );
+}
+
+#[tokio::test]
+async fn github_copilot_oauth_complete_device_flow_waits_and_refreshes() {
+    let start = chrono::DateTime::parse_from_rfc3339("2026-03-09T00:00:00Z")
+        .expect("date")
+        .timestamp_millis();
+    let (device_url, device_request_task) = mock_json_server(
+        r#"{"device_code":"device-code","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","interval":5,"expires_in":900}"#,
+    )
+    .await;
+    let (poll_url, poll_requests_task) = mock_json_sequence_server(vec![
+        r#"{"error":"authorization_pending","error_description":"pending"}"#,
+        r#"{"error":"slow_down","error_description":"wait","interval":10}"#,
+        r#"{"access_token":"ghu_refresh_token"}"#,
+    ])
+    .await;
+    let token = "tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;";
+    let (refresh_url, refresh_request_task) = mock_json_server(
+        r#"{"token":"tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;","expires_at":9999999999}"#,
+    )
+    .await;
+    let urls = GitHubCopilotUrls {
+        device_code_url: device_url,
+        access_token_url: poll_url,
+        copilot_token_url: refresh_url,
+    };
+    let seen_device = Arc::new(Mutex::new(None::<GitHubDeviceCode>));
+    let seen_device_ref = seen_device.clone();
+    let sleeps = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let sleeps_ref = sleeps.clone();
+
+    let login = login_github_copilot_device_flow_for_urls_with_sleeper_and_policy_options(
+        &urls,
+        None,
+        move |device| {
+            *seen_device_ref.lock().expect("seen device") = Some(device.clone());
+        },
+        start,
+        move |delay_ms| {
+            sleeps_ref.lock().expect("sleeps").push(delay_ms);
+            std::future::ready(())
+        },
+        &GitHubCopilotModelPolicyOptions::disabled(),
+    )
+    .await
+    .expect("login");
+
+    let device_request = device_request_task.await.expect("device request task");
+    let poll_requests = poll_requests_task.await.expect("poll requests task");
+    let refresh_request = refresh_request_task.await.expect("refresh request task");
+
+    assert_eq!(
+        sleeps.lock().expect("sleeps").as_slice(),
+        &[6_000, 6_000, 14_000]
+    );
+    assert_eq!(
+        seen_device
+            .lock()
+            .expect("seen device")
+            .as_ref()
+            .map(|device| device.user_code.as_str()),
+        Some("ABCD-EFGH")
+    );
+    assert_eq!(login.device.device_code, "device-code");
+    assert_eq!(login.credentials.refresh, "ghu_refresh_token");
+    assert_eq!(login.credentials.access, token);
+    assert!(device_request.contains("scope=read%3Auser"));
+    assert_eq!(poll_requests.len(), 3);
+    assert!(poll_requests[0].contains("device_code=device-code"));
+    assert!(
+        refresh_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer ghu_refresh_token")
+    );
+}
+
+#[tokio::test]
+async fn github_copilot_oauth_device_flow_persists_auth_storage_and_resolves_access_key() {
+    let start = chrono::DateTime::parse_from_rfc3339("2026-03-09T00:00:00Z")
+        .expect("date")
+        .timestamp_millis();
+    let path = auth_storage_test_path("github-copilot-login-roundtrip");
+    let parent = path.parent().expect("auth storage parent");
+    let (device_url, device_request_task) = mock_json_server(
+        r#"{"device_code":"device-code","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","verification_uri_complete":"https://github.com/login/device?user_code=ABCD-EFGH","interval":1,"expires_in":60}"#,
+    )
+    .await;
+    let (poll_url, poll_request_task) =
+        mock_json_server(r#"{"access_token":"ghu_refresh_token"}"#).await;
+    let token = "tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;";
+    let (refresh_url, refresh_request_task) = mock_json_server(
+        r#"{"token":"tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;","expires_at":9999999999}"#,
+    )
+    .await;
+    let urls = GitHubCopilotUrls {
+        device_code_url: device_url,
+        access_token_url: poll_url,
+        copilot_token_url: refresh_url,
+    };
+    let seen_device = Arc::new(Mutex::new(None::<GitHubDeviceCode>));
+    let seen_device_ref = seen_device.clone();
+
+    let login = login_github_copilot_device_flow_for_urls_with_sleeper_and_policy_options(
+        &urls,
+        Some("ghe.example.com"),
+        move |device| {
+            *seen_device_ref.lock().expect("seen device") = Some(device.clone());
+        },
+        start,
+        |_| std::future::ready(()),
+        &GitHubCopilotModelPolicyOptions::disabled(),
+    )
+    .await
+    .expect("login");
+    let device_request = device_request_task.await.expect("device request task");
+    let poll_request = poll_request_task.await.expect("poll request task");
+    let refresh_request = refresh_request_task.await.expect("refresh request task");
+    let stored_credentials = StoredOAuthCredentials::from(login.credentials);
+    let mut storage = AuthStorage::new();
+    storage.insert(
+        "github-copilot".to_owned(),
+        AuthCredential::OAuth {
+            credentials: stored_credentials.clone(),
+        },
+    );
+    save_auth_storage_to_path(&path, &storage).expect("save auth storage");
+    let saved_raw: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read auth storage"))
+            .expect("saved auth json");
+    let refresher = FailingOAuthRefresher {
+        message: "should not refresh",
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let resolution = resolve_auth_storage_api_key_from_path_with_refresher_at(
+        "github-copilot",
+        &path,
+        start,
+        &refresher,
+    )
+    .await
+    .expect("oauth resolution")
+    .expect("oauth result");
+
+    assert_eq!(
+        seen_device
+            .lock()
+            .expect("seen device")
+            .as_ref()
+            .map(|device| device.verification_uri_complete.as_deref()),
+        Some(Some("https://github.com/login/device?user_code=ABCD-EFGH"))
+    );
+    assert!(device_request.contains("scope=read%3Auser"));
+    assert!(poll_request.contains("device_code=device-code"));
+    assert!(
+        refresh_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer ghu_refresh_token")
+    );
+    assert_eq!(stored_credentials.access, token);
+    assert_eq!(stored_credentials.refresh, "ghu_refresh_token");
+    assert_eq!(
+        stored_credentials.enterprise_domain(),
+        Some("ghe.example.com")
+    );
+    assert_eq!(
+        stored_credentials.expires,
+        9_999_999_999_000 - 5 * 60 * 1000
+    );
+    assert_eq!(saved_raw["github-copilot"]["type"], json!("oauth"));
+    assert_eq!(saved_raw["github-copilot"]["access"], json!(token));
+    assert_eq!(
+        saved_raw["github-copilot"]["refresh"],
+        json!("ghu_refresh_token")
+    );
+    assert_eq!(
+        saved_raw["github-copilot"]["enterpriseUrl"],
+        json!("ghe.example.com")
+    );
+    assert!(saved_raw["github-copilot"].get("enterprise_url").is_none());
+    assert_eq!(resolution.api_key, token);
+    assert_eq!(resolution.credentials, Some(stored_credentials));
+    assert!(!resolution.refreshed);
+    assert!(refresher.calls.lock().expect("calls lock").is_empty());
+    let _ = std::fs::remove_dir_all(parent);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn github_copilot_oauth_complete_device_flow_routes_requests_through_resolved_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+    let start = chrono::DateTime::parse_from_rfc3339("2026-03-09T00:00:00Z")
+        .expect("date")
+        .timestamp_millis();
+    let token = "tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;";
+    let (proxy_url, proxy_requests_task) = mock_json_sequence_server(vec![
+        r#"{"device_code":"device-code","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","interval":1,"expires_in":60}"#,
+        r#"{"access_token":"ghu_refresh_token"}"#,
+        r#"{"token":"tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;","expires_at":9999999999}"#,
+    ])
+    .await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+    let urls = GitHubCopilotUrls {
+        device_code_url: "http://github.example/login/device/code".to_owned(),
+        access_token_url: "http://github.example/login/oauth/access_token".to_owned(),
+        copilot_token_url: "http://api.github.example/copilot_internal/v2/token".to_owned(),
+    };
+    let sleeps = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let sleeps_ref = sleeps.clone();
+
+    let login = login_github_copilot_device_flow_for_urls_with_sleeper_and_policy_options(
+        &urls,
+        None,
+        |_| {},
+        start,
+        move |delay_ms| {
+            sleeps_ref.lock().expect("sleeps").push(delay_ms);
+            std::future::ready(())
+        },
+        &GitHubCopilotModelPolicyOptions::disabled(),
+    )
+    .await
+    .expect("login through proxy");
+    let proxy_requests = proxy_requests_task.await.expect("proxy requests task");
+
+    assert_eq!(login.device.device_code, "device-code");
+    assert_eq!(login.credentials.refresh, "ghu_refresh_token");
+    assert_eq!(login.credentials.access, token);
+    assert_eq!(sleeps.lock().expect("sleeps").len(), 1);
+    assert_eq!(proxy_requests.len(), 3);
+    assert!(
+        proxy_requests[0].starts_with("POST http://github.example/login/device/code HTTP/1.1"),
+        "{}",
+        proxy_requests[0]
+    );
+    assert!(proxy_requests[0].contains("scope=read%3Auser"));
+    assert!(
+        proxy_requests[1]
+            .starts_with("POST http://github.example/login/oauth/access_token HTTP/1.1"),
+        "{}",
+        proxy_requests[1]
+    );
+    assert!(proxy_requests[1].contains("device_code=device-code"));
+    assert!(
+        proxy_requests[2]
+            .starts_with("GET http://api.github.example/copilot_internal/v2/token HTTP/1.1"),
+        "{}",
+        proxy_requests[2]
+    );
+    assert!(
+        proxy_requests[2]
+            .to_ascii_lowercase()
+            .contains("authorization: bearer ghu_refresh_token")
+    );
+}
+
+#[tokio::test]
+async fn github_copilot_oauth_login_enables_model_policies_after_refresh() {
+    let start = chrono::DateTime::parse_from_rfc3339("2026-03-09T00:00:00Z")
+        .expect("date")
+        .timestamp_millis();
+    let (device_url, device_request_task) = mock_json_server(
+        r#"{"device_code":"device-code","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","interval":1,"expires_in":60}"#,
+    )
+    .await;
+    let (poll_url, poll_request_task) =
+        mock_json_server(r#"{"access_token":"ghu_refresh_token"}"#).await;
+    let token = "tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;";
+    let (refresh_url, refresh_request_task) = mock_json_server(
+        r#"{"token":"tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;","expires_at":9999999999}"#,
+    )
+    .await;
+    let (policy_url, policy_requests_task) = mock_json_sequence_server(vec!["{}", "{}"]).await;
+    let urls = GitHubCopilotUrls {
+        device_code_url: device_url,
+        access_token_url: poll_url,
+        copilot_token_url: refresh_url,
+    };
+    let policy_options = GitHubCopilotModelPolicyOptions {
+        enabled: true,
+        base_url: Some(policy_url),
+        model_ids: Some(vec!["gpt-4o".to_owned(), "claude-sonnet-4.6".to_owned()]),
+    };
+
+    let login = login_github_copilot_device_flow_for_urls_with_sleeper_and_policy_options(
+        &urls,
+        None,
+        |_| {},
+        start,
+        |_| std::future::ready(()),
+        &policy_options,
+    )
+    .await
+    .expect("login with model policy enable");
+    let device_request = device_request_task.await.expect("device request task");
+    let poll_request = poll_request_task.await.expect("poll request task");
+    let refresh_request = refresh_request_task.await.expect("refresh request task");
+    let policy_requests = policy_requests_task.await.expect("policy requests task");
+
+    assert_eq!(login.credentials.access, token);
+    assert!(device_request.contains("scope=read%3Auser"));
+    assert!(poll_request.contains("device_code=device-code"));
+    assert!(
+        refresh_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer ghu_refresh_token")
+    );
+    assert_eq!(policy_requests.len(), 2);
+    assert!(
+        policy_requests[0].starts_with("POST /models/gpt-4o/policy HTTP/1.1"),
+        "{}",
+        policy_requests[0]
+    );
+    assert!(
+        policy_requests[1].starts_with("POST /models/claude-sonnet-4.6/policy HTTP/1.1"),
+        "{}",
+        policy_requests[1]
+    );
+    for request in &policy_requests {
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.contains("authorization: bearer tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;"));
+        assert!(lower.contains("copilot-integration-id: vscode-chat"));
+        assert!(lower.contains("openai-intent: chat-policy"));
+        assert!(lower.contains("x-interaction-type: chat-policy"));
+        assert!(request.contains(r#"{"state":"enabled"}"#));
+    }
+}
+
+#[tokio::test]
+async fn github_copilot_oauth_complete_device_flow_times_out_after_slow_down() {
+    let start = chrono::DateTime::parse_from_rfc3339("2026-03-09T00:00:00Z")
+        .expect("date")
+        .timestamp_millis();
+    let (poll_url, poll_requests_task) = mock_json_sequence_server(vec![
+        r#"{"error":"slow_down","error_description":"wait","interval":10}"#,
+        r#"{"error":"slow_down","error_description":"still waiting","interval":15}"#,
+        r#"{"error":"authorization_pending","error_description":"pending"}"#,
+    ])
+    .await;
+    let urls = GitHubCopilotUrls {
+        device_code_url: "http://unused.invalid/device".to_owned(),
+        access_token_url: poll_url,
+        copilot_token_url: "http://unused.invalid/token".to_owned(),
+    };
+    let device = GitHubDeviceCode {
+        device_code: "device-code".to_owned(),
+        user_code: "ABCD-EFGH".to_owned(),
+        verification_uri: "https://github.com/login/device".to_owned(),
+        verification_uri_complete: None,
+        interval_seconds: 5,
+        expires_in_seconds: 25,
+    };
+    let sleeps = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let sleeps_ref = sleeps.clone();
+
+    let err = complete_github_copilot_device_flow_for_urls_with_sleeper(
+        &urls,
+        &device,
+        start,
+        move |delay_ms| {
+            sleeps_ref.lock().expect("sleeps").push(delay_ms);
+            std::future::ready(())
+        },
+    )
+    .await
+    .expect_err("timeout");
+    let poll_requests = poll_requests_task.await.expect("poll requests task");
+
+    assert_eq!(
+        sleeps.lock().expect("sleeps").as_slice(),
+        &[6_000, 14_000, 5_000]
+    );
+    assert_eq!(poll_requests.len(), 3);
+    assert!(err.contains("Device flow timed out after one or more slow_down responses"));
+    assert!(err.contains("clock drift"));
 }
 
 #[test]
@@ -1658,6 +4270,77 @@ fn bedrock_aws_profile_credentials_and_region_resolve_from_shared_files() {
         Some("eu-west-1")
     );
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn bedrock_env_api_key_marker_matches_supported_http_auth_sources() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(&[
+        "AWS_PROFILE",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_ROLE_ARN",
+        "AWS_ROLE_SESSION_NAME",
+    ]);
+
+    set_env("AWS_WEB_IDENTITY_TOKEN_FILE", "/var/run/secrets/token");
+    assert_eq!(get_env_api_key("amazon-bedrock"), None);
+    set_env("AWS_ROLE_ARN", "arn:aws:iam::123456789012:role/test");
+    assert_eq!(
+        get_env_api_key("amazon-bedrock"),
+        Some("<authenticated>".to_owned())
+    );
+    remove_env("AWS_WEB_IDENTITY_TOKEN_FILE");
+    remove_env("AWS_ROLE_ARN");
+
+    set_env(
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "/v2/credentials/task",
+    );
+    assert_eq!(
+        get_env_api_key("amazon-bedrock"),
+        Some("<authenticated>".to_owned())
+    );
+    remove_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI");
+
+    set_env(
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "http://169.254.170.2/v2/credentials/task",
+    );
+    assert_eq!(
+        get_env_api_key("amazon-bedrock"),
+        Some("<authenticated>".to_owned())
+    );
+
+    remove_env("AWS_CONTAINER_CREDENTIALS_FULL_URI");
+    set_env("AWS_PROFILE", "profile-test");
+    assert_eq!(
+        get_env_api_key("amazon-bedrock"),
+        Some("<authenticated>".to_owned())
+    );
+
+    remove_env("AWS_PROFILE");
+    set_env("AWS_ACCESS_KEY_ID", "AKID");
+    assert_eq!(get_env_api_key("amazon-bedrock"), None);
+    set_env("AWS_SECRET_ACCESS_KEY", "secret");
+    assert_eq!(
+        get_env_api_key("amazon-bedrock"),
+        Some("<authenticated>".to_owned())
+    );
+
+    remove_env("AWS_ACCESS_KEY_ID");
+    remove_env("AWS_SECRET_ACCESS_KEY");
+    set_env("AWS_BEARER_TOKEN_BEDROCK", "bearer");
+    assert_eq!(
+        get_env_api_key("amazon-bedrock"),
+        Some("<authenticated>".to_owned())
+    );
 }
 
 #[test]
@@ -3449,6 +6132,66 @@ fn message_transform_copilot_openai_to_anthropic_downgrades_thinking_and_signatu
 }
 
 #[test]
+fn message_transform_copilot_openai_to_anthropic_synthesizes_single_orphan_result() {
+    let target_model =
+        get_model("github-copilot", "claude-sonnet-4.6").expect("copilot claude target");
+    let anthropic_normalize = |id: &str, _model: &Model, _source: &AssistantMessage| {
+        id.chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .take(64)
+            .collect::<String>()
+    };
+    let assistant = AssistantMessage {
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: "call_123|fc_123".to_owned(),
+            name: "read".to_owned(),
+            arguments: object(json!({ "path": "README.md" })),
+            thought_signature: None,
+        })],
+        api: "openai-responses".to_owned(),
+        provider: "github-copilot".to_owned(),
+        model: "gpt-5".to_owned(),
+        response_model: None,
+        response_id: None,
+        diagnostics: Vec::new(),
+        usage: Usage::zero(),
+        stop_reason: StopReason::ToolUse,
+        error_message: None,
+        timestamp: 1,
+    };
+    let messages = vec![
+        Message::User(UserMessage::text("read the file")),
+        Message::Assistant(assistant),
+    ];
+
+    let transformed = transform_messages(&messages, &target_model, Some(&anthropic_normalize));
+    let Message::Assistant(assistant) = &transformed[1] else {
+        panic!("assistant");
+    };
+    assert!(matches!(
+        assistant.content.first(),
+        Some(AssistantContent::ToolCall(tool_call))
+            if tool_call.id == "call_123_fc_123" && tool_call.name == "read"
+    ));
+    let Message::ToolResult(tool_result) = transformed.last().expect("synthetic result") else {
+        panic!("synthetic result");
+    };
+    assert_eq!(tool_result.tool_call_id, "call_123_fc_123");
+    assert_eq!(tool_result.tool_name, "read");
+    assert!(tool_result.is_error);
+    assert!(matches!(
+        tool_result.content.first(),
+        Some(ToolResultContent::Text(text)) if text.text == "No result provided"
+    ));
+}
+
+#[test]
 fn message_transform_synthesizes_only_missing_trailing_tool_results_after_normalization() {
     let target_model =
         get_model("github-copilot", "claude-sonnet-4.6").expect("copilot claude target");
@@ -4180,6 +6923,59 @@ fn github_copilot_anthropic_client_config_matches_provider_headers() {
 }
 
 #[test]
+fn cloudflare_ai_gateway_anthropic_client_config_uses_cf_aig_auth_and_preserves_byok_headers() {
+    let model = get_model("cloudflare-ai-gateway", "claude-sonnet-4-5")
+        .expect("cloudflare gateway anthropic model");
+    assert_eq!(model.api, "anthropic-messages");
+    assert!(model.base_url.contains("gateway.ai.cloudflare.com"));
+    assert!(model.base_url.contains("/anthropic"));
+
+    let context = Context {
+        messages: vec![Message::User(UserMessage::text("Hello"))],
+        ..Default::default()
+    };
+    let config = build_anthropic_client_config(
+        &model,
+        &context,
+        AnthropicClientOptions {
+            api_key: "cf-token".to_owned(),
+            headers: BTreeMap::from([(
+                "Authorization".to_owned(),
+                "Bearer upstream-token".to_owned(),
+            )]),
+            session_id: Some("cf-session".to_owned()),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(config.api_key, None);
+    assert_eq!(config.auth_token, None);
+    assert!(!config.is_oauth_token);
+    assert_eq!(
+        config
+            .default_headers
+            .get("cf-aig-authorization")
+            .map(String::as_str),
+        Some("Bearer cf-token")
+    );
+    assert_eq!(
+        config
+            .default_headers
+            .get("Authorization")
+            .map(String::as_str),
+        Some("Bearer upstream-token")
+    );
+    assert!(!config.default_headers.contains_key("x-api-key"));
+    assert_eq!(
+        config
+            .default_headers
+            .get("x-session-affinity")
+            .map(String::as_str),
+        Some("cf-session")
+    );
+}
+
+#[test]
 fn fireworks_anthropic_client_config_applies_session_affinity_rules() {
     let fireworks =
         get_model("fireworks", "accounts/fireworks/models/kimi-k2p6").expect("fireworks model");
@@ -4574,6 +7370,21 @@ fn anthropic_claude_code_tool_name_normalization_round_trips_known_tools() {
             parameters: json!({ "type": "object" }),
         },
         Tool {
+            name: "write".to_owned(),
+            description: "Write a file".to_owned(),
+            parameters: json!({ "type": "object" }),
+        },
+        Tool {
+            name: "edit".to_owned(),
+            description: "Edit a file".to_owned(),
+            parameters: json!({ "type": "object" }),
+        },
+        Tool {
+            name: "bash".to_owned(),
+            description: "Run a shell command".to_owned(),
+            parameters: json!({ "type": "object" }),
+        },
+        Tool {
             name: "find".to_owned(),
             description: "Find files".to_owned(),
             parameters: json!({ "type": "object" }),
@@ -4584,6 +7395,12 @@ fn anthropic_claude_code_tool_name_normalization_round_trips_known_tools() {
     assert_eq!(from_claude_code_tool_name("TodoWrite", &tools), "todowrite");
     assert_eq!(to_claude_code_tool_name("read"), "Read");
     assert_eq!(from_claude_code_tool_name("Read", &tools), "read");
+    assert_eq!(to_claude_code_tool_name("write"), "Write");
+    assert_eq!(from_claude_code_tool_name("Write", &tools), "write");
+    assert_eq!(to_claude_code_tool_name("edit"), "Edit");
+    assert_eq!(from_claude_code_tool_name("Edit", &tools), "edit");
+    assert_eq!(to_claude_code_tool_name("bash"), "Bash");
+    assert_eq!(from_claude_code_tool_name("Bash", &tools), "bash");
     assert_eq!(to_claude_code_tool_name("find"), "find");
     assert_eq!(from_claude_code_tool_name("Glob", &tools), "Glob");
     assert_eq!(to_claude_code_tool_name("my_custom_tool"), "my_custom_tool");
@@ -4591,6 +7408,158 @@ fn anthropic_claude_code_tool_name_normalization_round_trips_known_tools() {
         from_claude_code_tool_name("my_custom_tool", &tools),
         "my_custom_tool"
     );
+}
+
+#[test]
+fn anthropic_oauth_payload_uses_claude_code_tool_names_for_tools_and_history() {
+    let model = anthropic_test_model(None);
+    let tools = vec![
+        Tool {
+            name: "todowrite".to_owned(),
+            description: "Write todos".to_owned(),
+            parameters: json!({ "type": "object" }),
+        },
+        Tool {
+            name: "find".to_owned(),
+            description: "Find files".to_owned(),
+            parameters: json!({ "type": "object" }),
+        },
+        Tool {
+            name: "my_custom_tool".to_owned(),
+            description: "Custom tool".to_owned(),
+            parameters: json!({ "type": "object" }),
+        },
+    ];
+    let assistant = AssistantMessage {
+        content: vec![
+            AssistantContent::ToolCall(ToolCall {
+                id: "call_todo".to_owned(),
+                name: "todowrite".to_owned(),
+                arguments: object(json!({ "todos": [] })),
+                thought_signature: None,
+            }),
+            AssistantContent::ToolCall(ToolCall {
+                id: "call_find".to_owned(),
+                name: "find".to_owned(),
+                arguments: object(json!({ "pattern": "*.rs" })),
+                thought_signature: None,
+            }),
+            AssistantContent::ToolCall(ToolCall {
+                id: "call_custom".to_owned(),
+                name: "my_custom_tool".to_owned(),
+                arguments: object(json!({ "value": true })),
+                thought_signature: None,
+            }),
+        ],
+        ..empty_assistant_for_model(&model)
+    };
+    let context = Context {
+        messages: vec![
+            Message::User(UserMessage::text("Use tools")),
+            Message::Assistant(assistant),
+        ],
+        tools,
+        ..Default::default()
+    };
+
+    let default_payload =
+        build_anthropic_payload(&model, &context, AnthropicPayloadOptions::default());
+    assert_eq!(default_payload["tools"][0]["name"], "todowrite");
+    assert_eq!(
+        default_payload["messages"][1]["content"][0]["name"],
+        "todowrite"
+    );
+
+    let oauth_payload = build_anthropic_payload(
+        &model,
+        &context,
+        AnthropicPayloadOptions {
+            use_claude_code_tool_names: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(oauth_payload["tools"][0]["name"], "TodoWrite");
+    assert_eq!(oauth_payload["tools"][1]["name"], "find");
+    assert_eq!(oauth_payload["tools"][2]["name"], "my_custom_tool");
+    assert_eq!(
+        oauth_payload["messages"][1]["content"][0]["name"],
+        "TodoWrite"
+    );
+    assert_eq!(oauth_payload["messages"][1]["content"][1]["name"], "find");
+    assert_eq!(
+        oauth_payload["messages"][1]["content"][2]["name"],
+        "my_custom_tool"
+    );
+}
+
+#[tokio::test]
+async fn anthropic_oauth_stream_processor_restores_source_tool_name() {
+    let model = anthropic_test_model(None);
+    let tools = vec![Tool {
+        name: "todowrite".to_owned(),
+        description: "Write todos".to_owned(),
+        parameters: json!({ "type": "object" }),
+    }];
+    let mut processor = AnthropicStreamProcessor::with_claude_code_tool_names(tools);
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, stream) = assistant_message_event_stream();
+
+    processor
+        .process_event(
+            json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_todo",
+                    "name": "TodoWrite",
+                    "input": {},
+                },
+            }),
+            &mut output,
+            &sender,
+        )
+        .expect("content block start");
+    processor
+        .process_event(
+            json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": "{\"todos\":[]}",
+                },
+            }),
+            &mut output,
+            &sender,
+        )
+        .expect("content block delta");
+    processor
+        .process_event(
+            json!({ "type": "content_block_stop", "index": 0 }),
+            &mut output,
+            &sender,
+        )
+        .expect("content block stop");
+    processor.finish(&mut output, &sender);
+    drop(sender);
+
+    let AssistantContent::ToolCall(tool_call) = &output.content[0] else {
+        panic!("tool call");
+    };
+    assert_eq!(tool_call.name, "todowrite");
+    assert_eq!(tool_call.arguments, object(json!({ "todos": [] })));
+
+    let events = collect_events(stream).await;
+    let tool_call_end = events
+        .iter()
+        .find_map(|event| match event {
+            AssistantMessageEvent::ToolcallEnd { tool_call, .. } => Some(tool_call),
+            _ => None,
+        })
+        .expect("toolcall_end");
+    assert_eq!(tool_call_end.name, "todowrite");
+    assert_eq!(tool_call_end.arguments, object(json!({ "todos": [] })));
 }
 
 #[tokio::test]
@@ -5248,6 +8217,23 @@ fn openai_responses_default_headers_apply_session_affinity_and_overrides() {
         Some("override")
     );
 
+    let mut proxy_model = model.clone();
+    proxy_model.base_url = "https://proxy.example.com/v1".to_owned();
+    let headers = build_openai_responses_default_headers(
+        &proxy_model,
+        Some("session-proxy"),
+        CacheRetention::Long,
+        &BTreeMap::new(),
+    );
+    assert_eq!(
+        headers.get("session_id").map(String::as_str),
+        Some("session-proxy")
+    );
+    assert_eq!(
+        headers.get("x-client-request-id").map(String::as_str),
+        Some("session-proxy")
+    );
+
     model.compat = Some(json!({ "sendSessionIdHeader": false }));
     let headers = build_openai_responses_default_headers(
         &model,
@@ -5259,6 +8245,36 @@ fn openai_responses_default_headers_apply_session_affinity_and_overrides() {
     assert_eq!(
         headers.get("x-client-request-id").map(String::as_str),
         Some("session-responses")
+    );
+
+    let headers = build_openai_responses_default_headers(
+        &model,
+        Some("session-responses"),
+        CacheRetention::None,
+        &BTreeMap::new(),
+    );
+    assert!(headers.get("session_id").is_none());
+    assert!(headers.get("x-client-request-id").is_none());
+
+    let headers = build_openai_responses_default_headers(
+        &model,
+        Some("session-responses"),
+        CacheRetention::Long,
+        &BTreeMap::from([
+            ("session_id".to_owned(), "override-session".to_owned()),
+            (
+                "x-client-request-id".to_owned(),
+                "override-request".to_owned(),
+            ),
+        ]),
+    );
+    assert_eq!(
+        headers.get("session_id").map(String::as_str),
+        Some("override-session")
+    );
+    assert_eq!(
+        headers.get("x-client-request-id").map(String::as_str),
+        Some("override-request")
     );
 }
 
@@ -6307,6 +9323,14 @@ fn openai_codex_responses_retry_delay_respects_headers_and_backoff() {
         openai_codex_retry_delay_ms(400, "upstream connect refused", None, None, 0, 0),
         Some(1000)
     );
+    assert_eq!(
+        openai_codex_retry_delay_ms_with_limits(429, "rate limited", None, None, 0, 0, 1, Some(0)),
+        Some(0)
+    );
+    assert_eq!(
+        openai_codex_retry_delay_ms_with_limits(429, "rate limited", None, None, 1, 0, 1, None),
+        None
+    );
 }
 
 #[test]
@@ -6554,6 +9578,32 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
         OpenAICompletionsPayloadOptions::default(),
     );
     assert!(payload.get("tool_stream").is_none());
+}
+
+#[test]
+fn openrouter_qwen_payload_omits_reasoning_fields_when_reasoning_is_disabled_by_default() {
+    let model = get_model("openrouter", "qwen/qwen3.5-plus-02-15").expect("openrouter qwen");
+    let context = user_context("Reply with pong.");
+
+    let payload = build_openai_completions_payload(
+        &model,
+        &context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert_eq!(payload["model"], "qwen/qwen3.5-plus-02-15");
+    assert!(payload.get("reasoning").is_none());
+    assert!(payload.get("reasoning_effort").is_none());
+
+    let payload = build_openai_completions_payload(
+        &model,
+        &context,
+        OpenAICompletionsPayloadOptions {
+            reasoning: Some(ThinkingLevel::High),
+            ..Default::default()
+        },
+    );
+    assert_eq!(payload["reasoning_effort"], "high");
+    assert!(payload.get("reasoning").is_none());
 }
 
 #[test]
@@ -7688,13 +10738,26 @@ fn openai_completions_messages_batch_tool_result_images_after_tool_results() {
     assert_eq!(roles, vec!["user", "assistant", "tool", "tool", "user"]);
     let image_message = messages.last().expect("image message");
     assert_eq!(image_message["role"], "user");
-    let image_parts = image_message["content"]
-        .as_array()
-        .expect("content parts")
+    let content_parts = image_message["content"].as_array().expect("content parts");
+    assert_eq!(
+        content_parts.first().and_then(|part| part["text"].as_str()),
+        Some("Attached image(s) from tool result:")
+    );
+    let image_parts = content_parts
         .iter()
         .filter(|part| part.get("type").and_then(Value::as_str) == Some("image_url"))
         .collect::<Vec<_>>();
     assert_eq!(image_parts.len(), 2);
+    assert_eq!(
+        image_parts
+            .iter()
+            .map(|part| part["image_url"]["url"].as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            Some("data:image/png;base64,ZmFrZQ=="),
+            Some("data:image/png;base64,ZmFrZQ=="),
+        ]
+    );
 }
 
 fn openai_completions_thinking_text_model() -> Model {
@@ -8104,6 +11167,69 @@ async fn faux_provider_supports_multiple_models_factories_and_message_rewrites()
     assert_eq!(thinker_response.provider, "faux-provider");
     assert_eq!(thinker_response.model, "faux-thinker");
 
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn faux_provider_supports_async_response_factories() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![faux_async_response_factory(
+        |context, options, state, model| async move {
+            tokio::task::yield_now().await;
+            faux_assistant_message(
+                format!(
+                    "{}:{}:{}:{}",
+                    context.messages.len(),
+                    options.stream.session_id.as_deref().unwrap_or("none"),
+                    state.call_count(),
+                    model.id
+                ),
+                Default::default(),
+            )
+        },
+    )]);
+
+    let response = complete(
+        &registration.get_model(),
+        user_context("hi"),
+        StreamOptions {
+            session_id: Some("session-async".to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("async factory response");
+
+    assert_eq!(text_of(&response), Some("1:session-async:1:faux-1"));
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn faux_provider_emits_error_when_response_factory_panics() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![faux_response_factory(|_, _, _, _| {
+        panic!("boom");
+    })]);
+
+    let events = collect_events(
+        stream(
+            &registration.get_model(),
+            user_context("hi"),
+            Default::default(),
+        )
+        .expect("stream"),
+    )
+    .await;
+
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        AssistantMessageEvent::Error { reason, error } => {
+            assert_eq!(*reason, StopReason::Error);
+            assert_eq!(error.stop_reason, StopReason::Error);
+            assert_eq!(error.error_message.as_deref(), Some("boom"));
+        }
+        event => panic!("expected error event, got {event:?}"),
+    }
     registration.unregister();
 }
 
@@ -8651,20 +11777,7 @@ fn env_api_keys_ignore_generic_github_tokens_for_copilot() {
 #[test]
 fn node_http_proxy_respects_no_proxy_and_rejects_unsupported_protocols() {
     let _lock = ENV_LOCK.lock().expect("env lock");
-    let _guard = EnvGuard::clearing(&[
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "NO_PROXY",
-        "ALL_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "no_proxy",
-        "all_proxy",
-        "npm_config_http_proxy",
-        "npm_config_https_proxy",
-        "npm_config_proxy",
-        "npm_config_no_proxy",
-    ]);
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
 
     let target = "https://bedrock-runtime.us-east-1.amazonaws.com";
     set_env("HTTPS_PROXY", "http://proxy.example:8080");
@@ -8680,6 +11793,237 @@ fn node_http_proxy_respects_no_proxy_and_rejects_unsupported_protocols() {
     set_env("HTTPS_PROXY", "socks5://proxy.example:1080");
     let error = resolve_http_proxy_url_for_target(target).expect_err("unsupported proxy protocol");
     assert!(error.contains(UNSUPPORTED_PROXY_PROTOCOL_MESSAGE));
+}
+
+#[test]
+fn node_http_proxy_respects_npm_config_proxy_envs() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let target = "https://api.example.com/v1/messages";
+    set_env("npm_config_https_proxy", "npm-proxy.example:8080");
+    let proxy = resolve_http_proxy_url_for_target(target)
+        .expect("npm proxy resolution")
+        .expect("npm proxy url");
+    assert_eq!(proxy.to_string(), "https://npm-proxy.example:8080/");
+
+    set_env("npm_config_no_proxy", ".example.com");
+    assert_eq!(resolve_http_proxy_url_for_target(target), Ok(None));
+
+    remove_env("npm_config_https_proxy");
+    remove_env("npm_config_no_proxy");
+    set_env("npm_config_proxy", "http://generic-npm-proxy.example:3128");
+    let proxy = resolve_http_proxy_url_for_target(target)
+        .expect("generic npm proxy resolution")
+        .expect("generic npm proxy url");
+    assert_eq!(proxy.to_string(), "http://generic-npm-proxy.example:3128/");
+}
+
+#[test]
+fn node_http_proxy_resolves_websocket_targets_from_http_proxy_envs() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    set_env("HTTP_PROXY", "http://proxy.example:8080");
+    let proxy = resolve_http_proxy_url_for_websocket_target("ws://codex.example/codex/responses")
+        .expect("websocket proxy resolution")
+        .expect("proxy url");
+    assert_eq!(proxy.to_string(), "http://proxy.example:8080/");
+
+    remove_env("HTTP_PROXY");
+    set_env("HTTPS_PROXY", "http://secure-proxy.example:8443");
+    let proxy = resolve_http_proxy_url_for_websocket_target(
+        "wss://chatgpt.com/backend-api/codex/responses",
+    )
+    .expect("secure websocket proxy resolution")
+    .expect("proxy url");
+    assert_eq!(proxy.to_string(), "http://secure-proxy.example:8443/");
+
+    set_env("NO_PROXY", "chatgpt.com");
+    assert_eq!(
+        resolve_http_proxy_url_for_websocket_target(
+            "wss://chatgpt.com/backend-api/codex/responses"
+        ),
+        Ok(None)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn builtin_http_provider_routes_reqwest_requests_through_resolved_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_proxy\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_proxy\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Proxy\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_proxy\",\"content\":[{\"type\":\"output_text\",\"text\":\"Proxy\"}]}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_proxy\",\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"total_tokens\":3}}}\n\n",
+    );
+    let (proxy_url, proxy_request_task) = mock_sse_server(sse).await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+
+    let mut model = Model::faux("openai-responses", "openai", "mock-gpt-5");
+    model.base_url = "http://provider.example/v1".to_owned();
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("test-key".to_owned());
+
+    let message = tokio::time::timeout(
+        Duration::from_secs(1),
+        complete_simple(&model, user_context("hello"), options),
+    )
+    .await
+    .expect("proxied provider request should complete")
+    .expect("complete");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert_eq!(text_of(&message), Some("Proxy"));
+    assert_eq!(message.response_id.as_deref(), Some("resp_proxy"));
+    assert!(
+        proxy_request.starts_with("POST http://provider.example/v1/responses HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(
+        proxy_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer test-key")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn builtin_http_provider_routes_reqwest_requests_through_npm_config_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_npm_proxy\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_npm_proxy\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"NPM Proxy\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_npm_proxy\",\"content\":[{\"type\":\"output_text\",\"text\":\"NPM Proxy\"}]}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_npm_proxy\",\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":2,\"total_tokens\":4}}}\n\n",
+    );
+    let (proxy_url, proxy_request_task) = mock_sse_server(sse).await;
+    set_env("npm_config_http_proxy", &proxy_url);
+    set_env("npm_config_no_proxy", "127.0.0.1,localhost");
+
+    let mut model = Model::faux("openai-responses", "openai", "mock-gpt-5");
+    model.base_url = "http://provider.example/v1".to_owned();
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("test-key".to_owned());
+
+    let message = tokio::time::timeout(
+        Duration::from_secs(1),
+        complete_simple(&model, user_context("hello"), options),
+    )
+    .await
+    .expect("npm proxied provider request should complete")
+    .expect("complete");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert_eq!(text_of(&message), Some("NPM Proxy"));
+    assert_eq!(message.response_id.as_deref(), Some("resp_npm_proxy"));
+    assert!(
+        proxy_request.starts_with("POST http://provider.example/v1/responses HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(
+        proxy_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer test-key")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn builtin_openrouter_images_provider_routes_reqwest_requests_through_resolved_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let body = concat!(
+        "{\"id\":\"img-proxy\",\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1},",
+        "\"choices\":[{\"message\":{\"content\":\"Done\",",
+        "\"images\":[{\"image_url\":\"data:image/png;base64,ZmFrZQ==\"}]}}]}"
+    );
+    let (proxy_url, proxy_request_task) = mock_json_server(body).await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = "http://images.example/v1".to_owned();
+    let output = generate_images(
+        &model,
+        ImagesContext {
+            input: vec![ImagesContent::text("Generate an icon")],
+        },
+        ImagesOptions {
+            api_key: Some("openrouter-key".to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("generate images");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Stop);
+    assert_eq!(output.response_id.as_deref(), Some("img-proxy"));
+    assert!(
+        proxy_request.starts_with("POST http://images.example/v1/chat/completions HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(
+        proxy_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer openrouter-key")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn builtin_openrouter_images_provider_routes_reqwest_requests_through_npm_config_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let body = concat!(
+        "{\"id\":\"img-npm-proxy\",\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1},",
+        "\"choices\":[{\"message\":{\"content\":\"NPM Done\",",
+        "\"images\":[{\"image_url\":\"data:image/png;base64,bnBt\"}]}}]}"
+    );
+    let (proxy_url, proxy_request_task) = mock_json_server(body).await;
+    set_env("npm_config_proxy", &proxy_url);
+    set_env("npm_config_no_proxy", "127.0.0.1,localhost");
+
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = "http://images.example/v1".to_owned();
+    let output = generate_images(
+        &model,
+        ImagesContext {
+            input: vec![ImagesContent::text("Generate an npm proxy icon")],
+        },
+        ImagesOptions {
+            api_key: Some("openrouter-key".to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("generate images");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Stop);
+    assert_eq!(output.response_id.as_deref(), Some("img-npm-proxy"));
+    assert!(matches!(
+        output.output.get(1),
+        Some(ImagesContent::Image(image)) if image.data == "bnBt"
+    ));
+    assert!(
+        proxy_request.starts_with("POST http://images.example/v1/chat/completions HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(
+        proxy_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer openrouter-key")
+    );
 }
 
 #[test]
@@ -8883,6 +12227,39 @@ async fn builtin_openai_completions_provider_posts_json_and_parses_sse() {
 }
 
 #[tokio::test]
+async fn builtin_cloudflare_ai_gateway_completions_uses_cf_aig_auth_without_upstream_authorization()
+{
+    let sse = concat!(
+        "data: {\"id\":\"chatcmpl_cf\",\"choices\":[{\"delta\":{\"content\":\"Cloudflare\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1,\"total_tokens\":4}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let mut model = get_model(
+        "cloudflare-ai-gateway",
+        "workers-ai/@cf/moonshotai/kimi-k2.6",
+    )
+    .expect("cloudflare gateway workers model");
+    assert_eq!(model.api, "openai-completions");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("cf-token".to_owned());
+    options.stream.session_id = Some("session-cf".to_owned());
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let request = request_task.await.expect("request task");
+    let lower_request = request.to_ascii_lowercase();
+
+    assert_eq!(text_of(&message), Some("Cloudflare"));
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+    assert!(lower_request.contains("cf-aig-authorization: bearer cf-token"));
+    assert!(!lower_request.contains("\r\nauthorization: bearer cf-token"));
+    assert!(lower_request.contains("x-session-affinity: session-cf"));
+}
+
+#[tokio::test]
 async fn builtin_openai_completions_provider_emits_sse_events_incrementally() {
     let (base_url, request_task) = mock_delayed_sse_server(
         vec![
@@ -9023,6 +12400,41 @@ async fn builtin_openai_responses_provider_posts_json_and_parses_sse() {
     assert!(request.contains("\"stream\":true"));
     assert!(request.contains("\"prompt_cache_key\":\"session-2\""));
     assert!(request.contains("\"reasoning\":{\"effort\":\"low\""));
+}
+
+#[tokio::test]
+async fn builtin_cloudflare_ai_gateway_openai_responses_preserves_byok_authorization_and_adds_cf_aig_auth()
+ {
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_cf\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_cf\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Gateway\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_cf\",\"content\":[{\"type\":\"output_text\",\"text\":\"Gateway\"}]}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cf\",\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"total_tokens\":3}}}\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let mut model =
+        get_model("cloudflare-ai-gateway", "gpt-5.1").expect("cloudflare gateway openai model");
+    assert_eq!(model.api, "openai-responses");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("cf-token".to_owned());
+    options.stream.headers.insert(
+        "Authorization".to_owned(),
+        "Bearer upstream-token".to_owned(),
+    );
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let request = request_task.await.expect("request task");
+    let lower_request = request.to_ascii_lowercase();
+
+    assert_eq!(text_of(&message), Some("Gateway"));
+    assert!(request.starts_with("POST /responses HTTP/1.1"));
+    assert!(lower_request.contains("authorization: bearer upstream-token"));
+    assert!(lower_request.contains("cf-aig-authorization: bearer cf-token"));
+    assert!(!lower_request.contains("\r\nauthorization: bearer cf-token"));
 }
 
 #[tokio::test]
@@ -9491,6 +12903,101 @@ async fn builtin_anthropic_provider_posts_json_and_parses_sse() {
 }
 
 #[tokio::test]
+async fn builtin_anthropic_oauth_provider_normalizes_claude_code_tool_names_end_to_end() {
+    let sse = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_oauth_tool\",\"usage\":{\"input_tokens\":4,\"output_tokens\":0}}}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_todo\",\"name\":\"TodoWrite\",\"input\":{}}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"todos\\\":[]}\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"input_tokens\":4,\"output_tokens\":2}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let mut model = Model::faux("anthropic-messages", "anthropic", "claude-test");
+    model.base_url = base_url;
+    let context = Context {
+        messages: vec![Message::User(UserMessage::text("update todos"))],
+        tools: vec![Tool {
+            name: "todowrite".to_owned(),
+            description: "Write todos".to_owned(),
+            parameters: json!({ "type": "object" }),
+        }],
+        ..Default::default()
+    };
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("sk-ant-oat-test-token".to_owned());
+
+    let message = complete_simple(&model, context, options)
+        .await
+        .expect("complete");
+    let request = request_task.await.expect("request task");
+    let lower_request = request.to_ascii_lowercase();
+
+    assert_eq!(message.response_id.as_deref(), Some("msg_oauth_tool"));
+    assert_eq!(message.stop_reason, StopReason::ToolUse);
+    let AssistantContent::ToolCall(tool_call) = &message.content[0] else {
+        panic!("tool call");
+    };
+    assert_eq!(tool_call.name, "todowrite");
+    assert_eq!(tool_call.arguments, object(json!({ "todos": [] })));
+    assert!(request.contains("\"name\":\"TodoWrite\""));
+    assert!(!request.contains("\"name\":\"todowrite\""));
+    assert!(lower_request.contains("authorization: bearer sk-ant-oat-test-token"));
+    assert!(lower_request.contains("anthropic-beta: claude-code-20250219"));
+    assert!(!lower_request.contains("x-api-key:"));
+}
+
+#[tokio::test]
+async fn builtin_cloudflare_ai_gateway_anthropic_preserves_byok_authorization_and_adds_cf_aig_auth()
+{
+    let sse = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_cf_anthropic\",\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Gateway Claude\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let mut model = get_model("cloudflare-ai-gateway", "claude-sonnet-4-5")
+        .expect("cloudflare gateway anthropic model");
+    assert_eq!(model.api, "anthropic-messages");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("cf-token".to_owned());
+    options.stream.headers.insert(
+        "Authorization".to_owned(),
+        "Bearer upstream-token".to_owned(),
+    );
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let request = request_task.await.expect("request task");
+    let lower_request = request.to_ascii_lowercase();
+
+    assert_eq!(text_of(&message), Some("Gateway Claude"));
+    assert_eq!(message.response_id.as_deref(), Some("msg_cf_anthropic"));
+    assert!(request.starts_with("POST /messages HTTP/1.1"));
+    assert!(lower_request.contains("cf-aig-authorization: bearer cf-token"));
+    assert!(lower_request.contains("authorization: bearer upstream-token"));
+    assert!(!lower_request.contains("\r\nx-api-key:"));
+    assert!(!lower_request.contains("\r\nauthorization: bearer cf-token"));
+}
+
+#[tokio::test]
 async fn builtin_github_copilot_anthropic_provider_exposes_response_id() {
     let sse = concat!(
         "event: message_start\n",
@@ -9952,6 +13459,90 @@ async fn builtin_google_vertex_provider_refreshes_authorized_user_adc_credential
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn builtin_google_vertex_adc_refresh_routes_token_request_through_resolved_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let mut env_keys = vec![
+        "GOOGLE_CLOUD_API_KEY",
+        "GOOGLE_OAUTH_ACCESS_TOKEN",
+        "GOOGLE_ACCESS_TOKEN",
+        "CLOUDSDK_AUTH_ACCESS_TOKEN",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+    ];
+    env_keys.extend_from_slice(PROXY_ENV_KEYS);
+    let _guard = EnvGuard::clearing(&env_keys);
+
+    let (proxy_url, token_request_task) =
+        mock_json_server("{\"access_token\":\"proxied-token\",\"expires_in\":3600}").await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let credentials_path = std::env::temp_dir().join(format!("ri-google-adc-proxy-{unique}.json"));
+    std::fs::write(
+        &credentials_path,
+        json!({
+            "type": "authorized_user",
+            "client_id": "client id",
+            "client_secret": "client secret",
+            "refresh_token": "refresh token",
+            "token_uri": "http://oauth.example/token",
+        })
+        .to_string(),
+    )
+    .expect("write adc credentials");
+    set_env(
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        credentials_path.to_str().expect("credentials path"),
+    );
+
+    let sse = concat!(
+        "data: {\"responseId\":\"vertex_proxy_adc\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Proxy ADC\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":2,\"totalTokenCount\":5}}\n\n",
+    );
+    let (base_url, vertex_request_task) = mock_sse_server(sse).await;
+    let mut model = Model::faux("google-vertex", "google-vertex", "gemini-test");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options
+        .stream
+        .extra
+        .insert("project".to_owned(), json!("test-project"));
+    options
+        .stream
+        .extra
+        .insert("location".to_owned(), json!("us-central1"));
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let token_request = token_request_task.await.expect("token request task");
+    let vertex_request = vertex_request_task.await.expect("vertex request task");
+    let _ = std::fs::remove_file(credentials_path);
+
+    assert_eq!(text_of(&message), Some("Proxy ADC"));
+    assert!(
+        token_request.starts_with("POST http://oauth.example/token HTTP/1.1"),
+        "{token_request}"
+    );
+    assert!(token_request.contains("grant_type=refresh_token"));
+    assert!(
+        vertex_request
+            .starts_with("POST /v1/models/gemini-test:streamGenerateContent?alt=sse HTTP/1.1"),
+        "{vertex_request}"
+    );
+    assert!(
+        vertex_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer proxied-token")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn builtin_google_vertex_provider_refreshes_service_account_adc_credentials() {
     let _lock = ENV_LOCK.lock().expect("env lock");
     let _guard = EnvGuard::clearing(&[
@@ -10131,6 +13722,56 @@ async fn builtin_openai_codex_provider_posts_json_and_parses_sse() {
     assert!(request.contains("\"stream\":true"));
     assert!(request.contains("\"prompt_cache_key\":\"codex-session\""));
     assert!(request.contains("\"verbosity\":\"medium\""));
+}
+
+#[tokio::test]
+async fn builtin_openai_codex_provider_retries_sse_rate_limits_before_streaming_success() {
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_codex_retry\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_codex_retry\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Retry OK\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_codex_retry\",\"content\":[{\"type\":\"output_text\",\"text\":\"Retry OK\"}]}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_codex_retry\",\"status\":\"completed\",\"usage\":{\"input_tokens\":6,\"output_tokens\":2,\"total_tokens\":8}}}\n\n",
+    );
+    let (base_url, request_task) = mock_http_sequence_server(vec![
+        MockHttpSequenceResponse {
+            status: 429,
+            reason: "Too Many Requests",
+            content_type: "application/json",
+            headers: vec![("retry-after-ms", "0")],
+            body: "{\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"rate limited\"}}",
+        },
+        MockHttpSequenceResponse {
+            status: 200,
+            reason: "OK",
+            content_type: "text/event-stream",
+            headers: Vec::new(),
+            body: sse,
+        },
+    ])
+    .await;
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.session_id = Some("codex-retry-session".to_owned());
+    options.stream.transport = Some(Transport::Sse);
+    options.stream.max_retries = Some(1);
+    options.stream.max_retry_delay_ms = Some(0);
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete after retry");
+    let requests = request_task.await.expect("request task");
+
+    assert_eq!(text_of(&message), Some("Retry OK"));
+    assert_eq!(message.response_id.as_deref(), Some("resp_codex_retry"));
+    assert_eq!(message.usage.total_tokens, 8);
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
+        assert!(request.contains("\"prompt_cache_key\":\"codex-retry-session\""));
+    }
 }
 
 #[tokio::test]
@@ -10314,6 +13955,99 @@ async fn builtin_openai_codex_provider_uses_websocket_transport_and_parses_frame
     assert_eq!(body["model"], "gpt-5.5");
     assert_eq!(body["stream"], true);
     assert_eq!(body["prompt_cache_key"], "ws-session");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn builtin_openai_codex_websocket_routes_through_resolved_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let events = vec![
+        json!({ "type": "response.created", "response": { "id": "resp_ws_proxy" } }),
+        json!({
+            "type": "response.output_item.added",
+            "item": { "type": "message", "id": "msg_ws_proxy", "role": "assistant", "content": [] }
+        }),
+        json!({ "type": "response.output_text.delta", "delta": "Proxy WS" }),
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "id": "msg_ws_proxy",
+                "content": [{ "type": "output_text", "text": "Proxy WS" }]
+            }
+        }),
+        json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_ws_proxy",
+                "status": "completed",
+                "usage": { "input_tokens": 7, "output_tokens": 2, "total_tokens": 9 }
+            }
+        }),
+    ];
+    let (proxy_url, request_task) = mock_websocket_connect_proxy_server(events).await;
+    let authenticated_proxy_url = proxy_url.replacen("http://", "http://user:pass@", 1);
+    set_env("HTTP_PROXY", &authenticated_proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = "http://codex.example/backend-api".to_owned();
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.session_id = Some("ws-proxy-session".to_owned());
+    options.stream.transport = Some(Transport::Websocket);
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(text_of(&message), Some("Proxy WS"));
+    assert_eq!(message.response_id.as_deref(), Some("resp_ws_proxy"));
+    assert_eq!(message.usage.input, 7);
+    assert_eq!(message.usage.output, 2);
+    assert!(
+        request
+            .connect
+            .starts_with("CONNECT codex.example:80 HTTP/1.1"),
+        "{}",
+        request.connect
+    );
+    assert!(
+        request
+            .connect
+            .to_ascii_lowercase()
+            .contains("host: codex.example:80")
+    );
+    assert!(
+        request
+            .connect
+            .to_ascii_lowercase()
+            .contains("proxy-authorization: basic dxnlcjpwyxnz")
+    );
+    assert!(
+        request
+            .handshake
+            .starts_with("GET /backend-api/codex/responses HTTP/1.1"),
+        "{}",
+        request.handshake
+    );
+    assert!(
+        request
+            .handshake
+            .to_ascii_lowercase()
+            .contains("host: codex.example")
+    );
+    assert!(
+        request
+            .handshake
+            .to_ascii_lowercase()
+            .contains("session_id: ws-proxy-session")
+    );
+    let body: Value = serde_json::from_str(&request.message).expect("websocket request JSON");
+    assert_eq!(body["type"], "response.create");
+    assert_eq!(body["prompt_cache_key"], "ws-proxy-session");
 }
 
 #[tokio::test]
@@ -10525,6 +14259,71 @@ async fn builtin_bedrock_provider_posts_json_and_parses_eventstream() {
     assert!(request.contains("\"requestMetadata\":{\"app\":\"pi-test\"}"));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn builtin_bedrock_provider_routes_runtime_request_through_resolved_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+
+    let body = aws_eventstream_body(vec![
+        json!({ "messageStart": { "role": "assistant" } }),
+        json!({
+            "contentBlockDelta": {
+                "contentBlockIndex": 0,
+                "delta": { "text": "Bedrock proxy" }
+            }
+        }),
+        json!({ "contentBlockStop": { "contentBlockIndex": 0 } }),
+        json!({ "messageStop": { "stopReason": "end_turn" } }),
+        json!({
+            "metadata": {
+                "usage": {
+                    "inputTokens": 5,
+                    "outputTokens": 2,
+                    "totalTokens": 7
+                }
+            }
+        }),
+    ]);
+    let (proxy_url, proxy_request_task) =
+        mock_binary_server(body, "application/vnd.amazon.eventstream").await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+
+    let mut model = Model::faux(
+        "bedrock-converse-stream",
+        "amazon-bedrock",
+        "anthropic.claude-test-v1:0",
+    );
+    model.base_url = "http://bedrock-runtime.us-east-1.amazonaws.com".to_owned();
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("bedrock-token".to_owned());
+    options.stream.cache_retention = Some(CacheRetention::None);
+
+    let message = tokio::time::timeout(
+        Duration::from_secs(1),
+        complete_simple(&model, user_context("hello"), options),
+    )
+    .await
+    .expect("proxied Bedrock runtime request should complete")
+    .expect("complete");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert_eq!(text_of(&message), Some("Bedrock proxy"));
+    assert_eq!(message.usage.input, 5);
+    assert_eq!(message.usage.output, 2);
+    assert!(
+        proxy_request.starts_with(
+            "POST http://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-test-v1%3A0/converse-stream HTTP/1.1"
+        ),
+        "{proxy_request}"
+    );
+    assert!(
+        proxy_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer bedrock-token")
+    );
+}
+
 #[tokio::test]
 async fn builtin_bedrock_provider_respects_abort_flag_while_streaming() {
     let chunks = vec![
@@ -10696,6 +14495,324 @@ async fn builtin_bedrock_provider_signs_with_sigv4_env_credentials() {
     ));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn builtin_bedrock_provider_signs_with_web_identity_credentials() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _proxy_guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+    let _guard = EnvGuard::clearing(&[
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_SECURITY_TOKEN",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_BEDROCK_SKIP_AUTH",
+        "AWS_PROFILE",
+        "AWS_SHARED_CREDENTIALS_FILE",
+        "AWS_CONFIG_FILE",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_ROLE_ARN",
+        "AWS_ROLE_SESSION_NAME",
+        "AWS_ENDPOINT_URL",
+        "AWS_ENDPOINT_URL_STS",
+    ]);
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("ri-aws-web-identity-{unique}"));
+    std::fs::create_dir_all(&dir).expect("create web identity temp dir");
+    let token_path = dir.join("token.jwt");
+    std::fs::write(&token_path, "web-identity-token").expect("write web identity token");
+    let (sts_url, sts_requests_task) = mock_http_sequence_server(vec![MockHttpSequenceResponse {
+        status: 200,
+        reason: "OK",
+        content_type: "text/xml",
+        headers: vec![],
+        body: concat!(
+            "<AssumeRoleWithWebIdentityResponse>",
+            "<AssumeRoleWithWebIdentityResult><Credentials>",
+            "<AccessKeyId>ASIAWEBIDENTITY</AccessKeyId>",
+            "<SecretAccessKey>web-identity-secret</SecretAccessKey>",
+            "<SessionToken>web-identity-session</SessionToken>",
+            "</Credentials></AssumeRoleWithWebIdentityResult>",
+            "</AssumeRoleWithWebIdentityResponse>"
+        ),
+    }])
+    .await;
+    set_env(
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        token_path.to_str().expect("token path"),
+    );
+    set_env("AWS_ROLE_ARN", "arn:aws:iam::123456789012:role/ri-test");
+    set_env("AWS_ROLE_SESSION_NAME", "ri-test-session");
+    set_env("AWS_ENDPOINT_URL_STS", &sts_url);
+    set_env("AWS_REGION", "us-east-1");
+
+    let body = aws_eventstream_body(vec![
+        json!({ "messageStart": { "role": "assistant" } }),
+        json!({
+            "contentBlockDelta": {
+                "contentBlockIndex": 0,
+                "delta": { "text": "Web identity signed" }
+            }
+        }),
+        json!({ "contentBlockStop": { "contentBlockIndex": 0 } }),
+        json!({ "messageStop": { "stopReason": "end_turn" } }),
+    ]);
+    let (base_url, bedrock_request_task) =
+        mock_binary_server(body, "application/vnd.amazon.eventstream").await;
+    let mut model = Model::faux(
+        "bedrock-converse-stream",
+        "amazon-bedrock",
+        "anthropic.claude-test-v1:0",
+    );
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.cache_retention = Some(CacheRetention::None);
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let sts_requests = sts_requests_task.await.expect("sts request task");
+    let bedrock_request = bedrock_request_task.await.expect("bedrock request task");
+    let sts_request = sts_requests.first().expect("sts request");
+    let lower = bedrock_request.to_ascii_lowercase();
+
+    assert_eq!(text_of(&message), Some("Web identity signed"));
+    assert_eq!(sts_requests.len(), 1);
+    assert!(sts_request.starts_with("POST / HTTP/1.1"), "{sts_request}");
+    assert!(sts_request.contains("Action=AssumeRoleWithWebIdentity"));
+    assert!(sts_request.contains("RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fri-test"));
+    assert!(sts_request.contains("RoleSessionName=ri-test-session"));
+    assert!(sts_request.contains("WebIdentityToken=web-identity-token"));
+    assert!(lower.contains("authorization: aws4-hmac-sha256 credential=asiawebidentity/"));
+    assert!(bedrock_request.contains("/us-east-1/bedrock/aws4_request"));
+    assert!(lower.contains("x-amz-security-token: web-identity-session"));
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn builtin_bedrock_provider_signs_with_ecs_container_credentials() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _proxy_guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+    let _guard = EnvGuard::clearing(&[
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_SECURITY_TOKEN",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_BEDROCK_SKIP_AUTH",
+        "AWS_PROFILE",
+        "AWS_SHARED_CREDENTIALS_FILE",
+        "AWS_CONFIG_FILE",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+    ]);
+    let (credentials_url, credentials_request_task) = mock_json_server(
+        r#"{"AccessKeyId":"AKIDCONTAINER","SecretAccessKey":"container-secret","Token":"container-session"}"#,
+    )
+    .await;
+    set_env("AWS_CONTAINER_CREDENTIALS_FULL_URI", &credentials_url);
+    set_env("AWS_CONTAINER_AUTHORIZATION_TOKEN", "container-auth");
+    set_env("AWS_REGION", "us-east-1");
+
+    let body = aws_eventstream_body(vec![
+        json!({ "messageStart": { "role": "assistant" } }),
+        json!({
+            "contentBlockDelta": {
+                "contentBlockIndex": 0,
+                "delta": { "text": "Container signed" }
+            }
+        }),
+        json!({ "contentBlockStop": { "contentBlockIndex": 0 } }),
+        json!({ "messageStop": { "stopReason": "end_turn" } }),
+    ]);
+    let (base_url, bedrock_request_task) =
+        mock_binary_server(body, "application/vnd.amazon.eventstream").await;
+    let mut model = Model::faux(
+        "bedrock-converse-stream",
+        "amazon-bedrock",
+        "anthropic.claude-test-v1:0",
+    );
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.cache_retention = Some(CacheRetention::None);
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let credentials_request = credentials_request_task
+        .await
+        .expect("credentials request task");
+    let bedrock_request = bedrock_request_task.await.expect("bedrock request task");
+    let lower = bedrock_request.to_ascii_lowercase();
+
+    assert_eq!(text_of(&message), Some("Container signed"));
+    assert!(
+        credentials_request
+            .to_ascii_lowercase()
+            .contains("authorization: container-auth")
+    );
+    assert!(lower.contains("authorization: aws4-hmac-sha256 credential=akidcontainer/"));
+    assert!(bedrock_request.contains("/us-east-1/bedrock/aws4_request"));
+    assert!(lower.contains("x-amz-security-token: container-session"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn bedrock_ecs_container_credentials_route_through_resolved_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _proxy_guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+    let _guard = EnvGuard::clearing(&[
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_SECURITY_TOKEN",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_BEDROCK_SKIP_AUTH",
+        "AWS_PROFILE",
+        "AWS_SHARED_CREDENTIALS_FILE",
+        "AWS_CONFIG_FILE",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+    ]);
+    let (proxy_url, proxy_request_task) = mock_json_server(
+        r#"{"AccessKeyId":"AKIDPROXY","SecretAccessKey":"proxy-secret","Token":"proxy-session"}"#,
+    )
+    .await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+    set_env(
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "http://ecs.example/credentials",
+    );
+    set_env("AWS_CONTAINER_AUTHORIZATION_TOKEN", "container-proxy-auth");
+
+    let credentials = resolve_aws_credentials_with_container(None)
+        .await
+        .expect("resolve container credentials")
+        .expect("container credentials");
+    let proxy_request = proxy_request_task.await.expect("proxy request task");
+
+    assert_eq!(credentials.access_key_id, "AKIDPROXY");
+    assert_eq!(credentials.secret_access_key, "proxy-secret");
+    assert_eq!(credentials.session_token.as_deref(), Some("proxy-session"));
+    assert!(
+        proxy_request.starts_with("GET http://ecs.example/credentials HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(
+        proxy_request
+            .to_ascii_lowercase()
+            .contains("authorization: container-proxy-auth")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn bedrock_web_identity_credentials_route_sts_through_resolved_proxy() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _proxy_guard = EnvGuard::clearing(PROXY_ENV_KEYS);
+    let _guard = EnvGuard::clearing(&[
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_SECURITY_TOKEN",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_BEDROCK_SKIP_AUTH",
+        "AWS_PROFILE",
+        "AWS_SHARED_CREDENTIALS_FILE",
+        "AWS_CONFIG_FILE",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_ROLE_ARN",
+        "AWS_ROLE_SESSION_NAME",
+        "AWS_ENDPOINT_URL",
+        "AWS_ENDPOINT_URL_STS",
+    ]);
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("ri-aws-web-identity-proxy-{unique}"));
+    std::fs::create_dir_all(&dir).expect("create web identity temp dir");
+    let token_path = dir.join("token.jwt");
+    std::fs::write(&token_path, "proxied-web-identity-token").expect("write token");
+    let (proxy_url, proxy_request_task) =
+        mock_http_sequence_server(vec![MockHttpSequenceResponse {
+            status: 200,
+            reason: "OK",
+            content_type: "text/xml",
+            headers: vec![],
+            body: concat!(
+                "<AssumeRoleWithWebIdentityResponse>",
+                "<AssumeRoleWithWebIdentityResult><Credentials>",
+                "<AccessKeyId>ASIAPROXYSTS</AccessKeyId>",
+                "<SecretAccessKey>proxy-sts-secret</SecretAccessKey>",
+                "<SessionToken>proxy-sts-session</SessionToken>",
+                "</Credentials></AssumeRoleWithWebIdentityResult>",
+                "</AssumeRoleWithWebIdentityResponse>"
+            ),
+        }])
+        .await;
+    set_env("HTTP_PROXY", &proxy_url);
+    set_env("NO_PROXY", "127.0.0.1,localhost");
+    set_env(
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        token_path.to_str().expect("token path"),
+    );
+    set_env("AWS_ROLE_ARN", "arn:aws:iam::123456789012:role/proxy-test");
+    set_env("AWS_ROLE_SESSION_NAME", "ri-proxy-session");
+    set_env("AWS_ENDPOINT_URL_STS", "http://sts.example/");
+
+    let credentials = resolve_aws_credentials_with_runtime(None)
+        .await
+        .expect("resolve web identity credentials")
+        .expect("web identity credentials");
+    let proxy_requests = proxy_request_task.await.expect("proxy request task");
+    let proxy_request = proxy_requests.first().expect("proxy request");
+
+    assert_eq!(credentials.access_key_id, "ASIAPROXYSTS");
+    assert_eq!(credentials.secret_access_key, "proxy-sts-secret");
+    assert_eq!(
+        credentials.session_token.as_deref(),
+        Some("proxy-sts-session")
+    );
+    assert_eq!(proxy_requests.len(), 1);
+    assert!(
+        proxy_request.starts_with("POST http://sts.example/ HTTP/1.1"),
+        "{proxy_request}"
+    );
+    assert!(proxy_request.contains("Action=AssumeRoleWithWebIdentity"));
+    assert!(
+        proxy_request.contains("RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fproxy-test")
+    );
+    assert!(proxy_request.contains("RoleSessionName=ri-proxy-session"));
+    assert!(proxy_request.contains("WebIdentityToken=proxied-web-identity-token"));
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[tokio::test]
 async fn builtin_http_providers_respect_pre_aborted_flag_before_request() {
     let mut openai_completions = Model::faux("openai-completions", "openai", "mock-model");
@@ -10861,6 +14978,12 @@ struct MockWebSocketRequest {
     messages: Vec<String>,
 }
 
+struct MockWebSocketProxyRequest {
+    connect: String,
+    handshake: String,
+    message: String,
+}
+
 struct MockCodexFallbackRequest {
     websocket_handshake: String,
     sse_request: String,
@@ -10913,6 +15036,77 @@ async fn mock_websocket_server(
             handshake: String::from_utf8_lossy(&handshake).into_owned(),
             message: message.clone(),
             messages: vec![message],
+        }
+    });
+    (format!("http://{addr}"), task)
+}
+
+async fn mock_websocket_connect_proxy_server(
+    events: Vec<Value>,
+) -> (String, tokio::task::JoinHandle<MockWebSocketProxyRequest>) {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind websocket proxy mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept proxy request");
+        let mut connect = Vec::new();
+        let mut buf = [0u8; 1024];
+        loop {
+            let n = socket.read(&mut buf).await.expect("read CONNECT");
+            if n == 0 {
+                break;
+            }
+            connect.extend_from_slice(&buf[..n]);
+            if request_is_complete(&connect) {
+                break;
+            }
+        }
+        socket
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await
+            .expect("write CONNECT response");
+
+        let mut handshake = Vec::new();
+        loop {
+            let n = socket
+                .read(&mut buf)
+                .await
+                .expect("read websocket handshake");
+            if n == 0 {
+                break;
+            }
+            handshake.extend_from_slice(&buf[..n]);
+            if request_is_complete(&handshake) {
+                break;
+            }
+        }
+        socket
+            .write_all(
+                b"HTTP/1.1 101 Switching Protocols\r\n\
+                  Upgrade: websocket\r\n\
+                  Connection: Upgrade\r\n\
+                  Sec-WebSocket-Accept: test\r\n\r\n",
+            )
+            .await
+            .expect("write websocket handshake response");
+        let message = read_client_websocket_text_frame(&mut socket).await;
+        for event in events {
+            socket
+                .write_all(&server_websocket_text_frame(&event.to_string()))
+                .await
+                .expect("write websocket frame");
+        }
+        let _ = socket.shutdown().await;
+        MockWebSocketProxyRequest {
+            connect: String::from_utf8_lossy(&connect).into_owned(),
+            handshake: String::from_utf8_lossy(&handshake).into_owned(),
+            message,
         }
     });
     (format!("http://{addr}"), task)
@@ -11087,6 +15281,14 @@ fn server_websocket_text_frame(text: &str) -> Vec<u8> {
 }
 
 async fn mock_json_server(body: &'static str) -> (String, tokio::task::JoinHandle<String>) {
+    mock_json_status_server(200, "OK", body).await
+}
+
+async fn mock_json_status_server(
+    status: u16,
+    reason: &'static str,
+    body: &'static str,
+) -> (String, tokio::task::JoinHandle<String>) {
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -11111,7 +15313,7 @@ async fn mock_json_server(body: &'static str) -> (String, tokio::task::JoinHandl
             }
         }
         let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
             body.len(),
             body,
         );
@@ -11122,6 +15324,213 @@ async fn mock_json_server(body: &'static str) -> (String, tokio::task::JoinHandl
         String::from_utf8_lossy(&request).into_owned()
     });
     (format!("http://{addr}"), task)
+}
+
+async fn mock_json_sequence_server(
+    bodies: Vec<&'static str>,
+) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let task = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for body in bodies {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                let n = socket.read(&mut buf).await.expect("read request");
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request_is_complete(&request) {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body,
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+            requests.push(String::from_utf8_lossy(&request).into_owned());
+        }
+        requests
+    });
+    (format!("http://{addr}"), task)
+}
+
+async fn mock_json_status_sequence_server(
+    responses: Vec<(u16, &'static str, &'static str)>,
+) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let task = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for (status, reason, body) in responses {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                let n = socket.read(&mut buf).await.expect("read request");
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request_is_complete(&request) {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body,
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+            requests.push(String::from_utf8_lossy(&request).into_owned());
+        }
+        requests
+    });
+    (format!("http://{addr}"), task)
+}
+
+struct MockHttpSequenceResponse {
+    status: u16,
+    reason: &'static str,
+    content_type: &'static str,
+    headers: Vec<(&'static str, &'static str)>,
+    body: &'static str,
+}
+
+async fn mock_http_sequence_server(
+    responses: Vec<MockHttpSequenceResponse>,
+) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let task = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for response in responses {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                let n = socket.read(&mut buf).await.expect("read request");
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request_is_complete(&request) {
+                    break;
+                }
+            }
+            let mut header_text = format!(
+                "HTTP/1.1 {} {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n",
+                response.status,
+                response.reason,
+                response.content_type,
+                response.body.len(),
+            );
+            for (name, value) in response.headers {
+                header_text.push_str(name);
+                header_text.push_str(": ");
+                header_text.push_str(value);
+                header_text.push_str("\r\n");
+            }
+            header_text.push_str("\r\n");
+            socket
+                .write_all(header_text.as_bytes())
+                .await
+                .expect("write headers");
+            socket
+                .write_all(response.body.as_bytes())
+                .await
+                .expect("write body");
+            requests.push(String::from_utf8_lossy(&request).into_owned());
+        }
+        requests
+    });
+    (format!("http://{addr}"), task)
+}
+
+async fn mock_hanging_response_server() -> (
+    String,
+    tokio::sync::oneshot::Receiver<String>,
+    tokio::task::JoinHandle<()>,
+) {
+    use tokio::{io::AsyncReadExt, net::TcpListener, sync::oneshot, time::sleep};
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind hanging mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let (request_tx, request_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept request");
+        let mut request = Vec::new();
+        let mut buf = [0u8; 1024];
+        loop {
+            let n = socket.read(&mut buf).await.expect("read request");
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..n]);
+            if request_is_complete(&request) {
+                break;
+            }
+        }
+        let _ = request_tx.send(String::from_utf8_lossy(&request).into_owned());
+        sleep(Duration::from_secs(60)).await;
+    });
+    (format!("http://{addr}"), request_rx, task)
+}
+
+async fn oauth_callback_get(port: u16, target: &str) -> String {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpStream,
+    };
+
+    let mut socket = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect callback server");
+    let request = format!("GET {target} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n");
+    socket
+        .write_all(request.as_bytes())
+        .await
+        .expect("write callback request");
+    let mut response = String::new();
+    socket
+        .read_to_string(&mut response)
+        .await
+        .expect("read callback response");
+    response
 }
 
 async fn mock_binary_server(

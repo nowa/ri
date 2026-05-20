@@ -4,11 +4,13 @@ use crate::{
     ThinkingBudgets, ThinkingContent, ThinkingLevel, ToolCall, ToolResultContent, Usage,
     UserContent, UserContentValue, json_repair::parse_streaming_json,
     message_transform::transform_messages, models::calculate_cost,
+    node_http_proxy::reqwest_client_for_target,
 };
 use chrono::{DateTime, Utc};
 use ring::{digest, hmac};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use std::{collections::BTreeMap, env, fs, path::PathBuf};
+use std::{collections::BTreeMap, env, fs, path::PathBuf, time::Duration};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BedrockClientOptions {
@@ -150,6 +152,231 @@ pub fn resolve_aws_credentials(profile: Option<&str>) -> Option<AwsCredentials> 
             .filter(|token| !token.is_empty())
             .cloned(),
     })
+}
+
+pub async fn resolve_aws_credentials_with_container(
+    profile: Option<&str>,
+) -> Result<Option<AwsCredentials>, String> {
+    resolve_aws_credentials_with_runtime(profile).await
+}
+
+pub async fn resolve_aws_credentials_with_runtime(
+    profile: Option<&str>,
+) -> Result<Option<AwsCredentials>, String> {
+    if let Some(credentials) = resolve_aws_credentials(profile) {
+        return Ok(Some(credentials));
+    }
+    if let Some(credentials) = resolve_aws_web_identity_credentials().await? {
+        return Ok(Some(credentials));
+    }
+    resolve_aws_container_credentials().await
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct AwsContainerCredentialsResponse {
+    access_key_id: String,
+    secret_access_key: String,
+    token: Option<String>,
+}
+
+async fn resolve_aws_web_identity_credentials() -> Result<Option<AwsCredentials>, String> {
+    let Some(token_path) = env_var_nonempty("AWS_WEB_IDENTITY_TOKEN_FILE") else {
+        return Ok(None);
+    };
+    let Some(role_arn) = env_var_nonempty("AWS_ROLE_ARN") else {
+        return Ok(None);
+    };
+    let token = fs::read_to_string(&token_path)
+        .map_err(|error| format!("Failed to read AWS web identity token: {error}"))?;
+    let token = token.trim();
+    if token.is_empty() {
+        return Ok(None);
+    }
+    let session_name = env_var_nonempty("AWS_ROLE_SESSION_NAME")
+        .unwrap_or_else(|| "ri-bedrock-web-identity".to_owned());
+    let url = aws_sts_endpoint_url();
+    let body = form_url_encode(&[
+        ("Action", "AssumeRoleWithWebIdentity"),
+        ("Version", "2011-06-15"),
+        ("RoleArn", &role_arn),
+        ("RoleSessionName", &session_name),
+        ("WebIdentityToken", token),
+    ]);
+    let client = reqwest_client_for_target(&url)?;
+    let response = client
+        .post(&url)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .timeout(Duration::from_secs(5))
+        .body(body)
+        .send()
+        .await
+        .map_err(|error| format!("Failed to assume AWS web identity role: {error}"))?;
+    let status = response.status();
+    let response_body = response
+        .text()
+        .await
+        .map_err(|error| format!("Failed to read AWS web identity response: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "AWS web identity role assumption returned HTTP {}: {response_body}",
+            status.as_u16()
+        ));
+    }
+    parse_aws_web_identity_credentials(&response_body)
+        .map(Some)
+        .map_err(|error| format!("Invalid AWS web identity response: {error}"))
+}
+
+fn aws_sts_endpoint_url() -> String {
+    env_var_nonempty("AWS_ENDPOINT_URL_STS")
+        .or_else(|| env_var_nonempty("AWS_ENDPOINT_URL"))
+        .unwrap_or_else(|| {
+            configured_bedrock_region(&BedrockClientOptions::default()).map_or_else(
+                || "https://sts.amazonaws.com/".to_owned(),
+                |region| {
+                    if region.starts_with("cn-") {
+                        format!("https://sts.{region}.amazonaws.com.cn/")
+                    } else {
+                        format!("https://sts.{region}.amazonaws.com/")
+                    }
+                },
+            )
+        })
+}
+
+fn parse_aws_web_identity_credentials(body: &str) -> Result<AwsCredentials, String> {
+    let access_key_id = xml_tag_text(body, "AccessKeyId")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "missing AccessKeyId".to_owned())?;
+    let secret_access_key = xml_tag_text(body, "SecretAccessKey")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "missing SecretAccessKey".to_owned())?;
+    let session_token = xml_tag_text(body, "SessionToken").filter(|value| !value.trim().is_empty());
+    Ok(AwsCredentials {
+        access_key_id,
+        secret_access_key,
+        session_token,
+    })
+}
+
+fn xml_tag_text(body: &str, tag: &str) -> Option<String> {
+    let start = format!("<{tag}>");
+    let end = format!("</{tag}>");
+    let (_, rest) = body.split_once(&start)?;
+    let (value, _) = rest.split_once(&end)?;
+    Some(xml_unescape(value.trim()))
+}
+
+fn xml_unescape(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+fn form_url_encode(pairs: &[(&str, &str)]) -> String {
+    pairs
+        .iter()
+        .map(|(name, value)| {
+            format!(
+                "{}={}",
+                form_url_encode_component(name),
+                form_url_encode_component(value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn form_url_encode_component(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            b' ' => encoded.push('+'),
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+fn env_var_nonempty(key: &str) -> Option<String> {
+    env::var(key).ok().filter(|value| !value.trim().is_empty())
+}
+
+async fn resolve_aws_container_credentials() -> Result<Option<AwsCredentials>, String> {
+    let Some(url) = aws_container_credentials_url() else {
+        return Ok(None);
+    };
+    let client = reqwest_client_for_target(&url)?;
+    let mut request = client.get(&url).timeout(Duration::from_secs(2));
+    if let Some(token) = aws_container_authorization_token()? {
+        request = request.header("authorization", token);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("Failed to fetch AWS container credentials: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Failed to read AWS container credentials: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "AWS container credentials endpoint returned HTTP {}: {body}",
+            status.as_u16()
+        ));
+    }
+    let credentials: AwsContainerCredentialsResponse = serde_json::from_str(&body)
+        .map_err(|error| format!("Invalid AWS container credentials response: {error}"))?;
+    if credentials.access_key_id.trim().is_empty()
+        || credentials.secret_access_key.trim().is_empty()
+    {
+        return Ok(None);
+    }
+    Ok(Some(AwsCredentials {
+        access_key_id: credentials.access_key_id,
+        secret_access_key: credentials.secret_access_key,
+        session_token: credentials.token.filter(|token| !token.trim().is_empty()),
+    }))
+}
+
+fn aws_container_credentials_url() -> Option<String> {
+    env::var("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(|path| {
+                    if path.starts_with('/') {
+                        format!("http://169.254.170.2{path}")
+                    } else {
+                        format!("http://169.254.170.2/{path}")
+                    }
+                })
+        })
+}
+
+fn aws_container_authorization_token() -> Result<Option<String>, String> {
+    if let Ok(path) = env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE")
+        && !path.trim().is_empty()
+    {
+        return fs::read_to_string(&path)
+            .map(|token| Some(token.trim().to_owned()))
+            .map_err(|error| format!("Failed to read AWS container authorization token: {error}"));
+    }
+    Ok(env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN")
+        .ok()
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty()))
 }
 
 pub fn resolve_aws_profile_region(profile: Option<&str>) -> Option<String> {

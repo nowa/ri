@@ -416,6 +416,30 @@ fn apply_known_model_overrides(model: &mut Model) {
         apply_opencode_go_model_overrides(model);
     }
 
+    if model.provider == "kimi-coding" {
+        model
+            .headers
+            .insert("User-Agent".to_owned(), "KimiCLI/1.5".to_owned());
+        model.reasoning = true;
+        model.context_window = 262_144;
+        model.max_tokens = 32_768;
+        model.cost = ModelCost::default();
+        if model.id == "kimi-for-coding" {
+            ensure_image_input(model);
+        }
+    }
+
+    if matches!(model.provider.as_str(), "minimax" | "minimax-cn") {
+        model.reasoning = true;
+        model.context_window = 204_800;
+        model.max_tokens = 131_072;
+    }
+
+    if model.provider == "vercel-ai-gateway" {
+        model.reasoning = true;
+        ensure_image_input(model);
+    }
+
     match (model.provider.as_str(), model.id.as_str()) {
         ("mistral", "mistral-small-2603") | ("mistral", "mistral-small-latest") => {
             model.reasoning = true;
@@ -820,6 +844,7 @@ fn api_for_provider(provider: &str, model_id: &str) -> &'static str {
         "openai-codex" => "openai-codex-responses",
         "openai" if model_id.starts_with("gpt-5") => "openai-responses",
         "mistral" => "mistral-conversations",
+        "kimi-coding" | "minimax" | "minimax-cn" | "vercel-ai-gateway" => "anthropic-messages",
         _ => "openai-completions",
     }
 }
@@ -837,8 +862,19 @@ fn base_url_for_provider(provider: &str) -> &'static str {
         "fireworks" => "https://api.fireworks.ai/inference",
         "together" => "https://api.together.ai/v1",
         "openrouter" => "https://openrouter.ai/api/v1",
+        "xai" => "https://api.x.ai/v1",
         "groq" => "https://api.groq.com/openai/v1",
+        "cerebras" => "https://api.cerebras.ai/v1",
+        "huggingface" => "https://router.huggingface.co/v1",
+        "minimax" => "https://api.minimax.io/anthropic",
+        "minimax-cn" => "https://api.minimaxi.com/anthropic",
+        "kimi-coding" => "https://api.kimi.com/coding",
+        "vercel-ai-gateway" => "https://ai-gateway.vercel.sh",
         "zai" => "https://open.bigmodel.cn/api/paas/v4",
+        "xiaomi" => "https://api.xiaomimimo.com/v1",
+        "xiaomi-token-plan-cn" => "https://token-plan-cn.xiaomimimo.com/v1",
+        "xiaomi-token-plan-ams" => "https://token-plan-ams.xiaomimimo.com/v1",
+        "xiaomi-token-plan-sgp" => "https://token-plan-sgp.xiaomimimo.com/v1",
         _ => "https://example.invalid",
     }
 }

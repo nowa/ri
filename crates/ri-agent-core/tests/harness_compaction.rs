@@ -648,6 +648,69 @@ async fn compaction_compact_returns_summary_details_and_clamps_max_tokens() {
 }
 
 #[tokio::test]
+async fn compaction_compact_maps_history_summary_errors_without_throwing() {
+    let registration = register_faux_model(false, 8_192);
+    registration.set_responses(vec![
+        faux_assistant_message(
+            "",
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::Error),
+                error_message: Some("history failed".to_owned()),
+                ..Default::default()
+            },
+        )
+        .into(),
+    ]);
+    let preparation = CompactionPreparation {
+        first_kept_entry_id: "entry-keep".to_owned(),
+        messages_to_summarize: vec![session_user("Summarize this.")],
+        turn_prefix_messages: Vec::new(),
+        is_split_turn: false,
+        tokens_before: 100,
+        previous_summary: None,
+        file_ops: FileOperations::default(),
+        settings: CompactionThresholdSettings {
+            enabled: true,
+            reserve_tokens: 2_000,
+            keep_recent_tokens: 20,
+        },
+    };
+
+    let error = compact(
+        &preparation,
+        &registration.get_model(),
+        "test-key",
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect_err("history summary error");
+
+    assert_eq!(error.code, CompactionErrorCode::SummarizationFailed);
+    assert_eq!(error.message, "Summarization failed: history failed");
+    registration.unregister();
+
+    let invalid_registration = register_faux_model(false, 8_192);
+    let invalid = compact(
+        &CompactionPreparation {
+            first_kept_entry_id: String::new(),
+            messages_to_summarize: Vec::new(),
+            ..preparation
+        },
+        &invalid_registration.get_model(),
+        "test-key",
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect_err("invalid compaction");
+    assert_eq!(invalid.code, CompactionErrorCode::InvalidSession);
+    invalid_registration.unregister();
+}
+
+#[tokio::test]
 async fn compaction_compact_summarizes_split_turn_and_maps_prefix_errors() {
     let registration = register_faux_model(true, 8_192);
     let seen_options = Arc::new(Mutex::new(Vec::<SimpleStreamOptions>::new()));
@@ -737,6 +800,51 @@ async fn compaction_compact_summarizes_split_turn_and_maps_prefix_errors() {
     .expect_err("invalid");
     assert_eq!(invalid.code, CompactionErrorCode::InvalidSession);
     invalid_registration.unregister();
+}
+
+#[tokio::test]
+async fn compaction_compact_maps_aborted_turn_prefix_summary() {
+    let registration = register_faux_model(false, 8_192);
+    registration.set_responses(vec![
+        faux_assistant_message(
+            "",
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::Aborted),
+                error_message: Some("prefix stopped".to_owned()),
+                ..Default::default()
+            },
+        )
+        .into(),
+    ]);
+    let preparation = CompactionPreparation {
+        first_kept_entry_id: "entry-keep".to_owned(),
+        messages_to_summarize: Vec::new(),
+        turn_prefix_messages: vec![session_user("large turn prefix")],
+        is_split_turn: true,
+        tokens_before: 100,
+        previous_summary: None,
+        file_ops: FileOperations::default(),
+        settings: CompactionThresholdSettings {
+            enabled: true,
+            reserve_tokens: 2_000,
+            keep_recent_tokens: 20,
+        },
+    };
+
+    let error = compact(
+        &preparation,
+        &registration.get_model(),
+        "test-key",
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect_err("prefix aborted");
+
+    assert_eq!(error.code, CompactionErrorCode::Aborted);
+    assert_eq!(error.message, "prefix stopped");
+    registration.unregister();
 }
 
 #[test]

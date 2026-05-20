@@ -1,8 +1,12 @@
 use crate::{
     agent_loop::{AgentLoopConfig, agent_loop_prompt_messages},
     harness::{
-        CustomMessageContent, LocalExecutionEnv, PromptTemplate, Session, SessionMessage, Skill,
-        format_prompt_template_invocation, format_skill_invocation,
+        BranchMoveSummary, BranchSummaryResult, CollectEntriesResult, CompactionDetails,
+        CompactionPreparation, CompactionResult, CompactionThresholdSettings, CustomMessageContent,
+        LocalExecutionEnv, PromptTemplate, Session, SessionMessage, SessionTreeEntry, Skill,
+        collect_entries_for_branch_summary, compact as compact_prepared_session,
+        format_prompt_template_invocation, format_skill_invocation, generate_branch_summary,
+        prepare_compaction,
     },
     types::{
         AgentContext, AgentEvent, AgentEventSink, AgentLoopTurnUpdate, AgentMessage,
@@ -19,7 +23,7 @@ use ri_llm_provider::{
     SimpleStreamOptions, ThinkingLevel, Transport, UserContent, UserContentValue, UserMessage,
     now_millis,
 };
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
     fmt::Display,
@@ -85,6 +89,24 @@ pub struct QueueUpdateEvent {
 pub struct AbortResult {
     pub cleared_steer: Vec<AgentMessage>,
     pub cleared_follow_up: Vec<AgentMessage>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentHarnessCompactionOptions {
+    pub settings: CompactionThresholdSettings,
+    pub custom_instructions: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentHarnessBranchSummaryOptions {
+    pub custom_instructions: Option<String>,
+    pub replace_instructions: bool,
+    pub reserve_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentHarnessMoveSessionOptions {
+    pub branch_summary: Option<AgentHarnessBranchSummaryOptions>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -204,6 +226,64 @@ pub type BeforeProviderPayloadHook = Arc<
 >;
 
 #[derive(Debug, Clone)]
+pub struct SessionBeforeCompactEvent {
+    pub preparation: CompactionPreparation,
+    pub branch_entries: Vec<SessionTreeEntry>,
+    pub custom_instructions: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionBeforeCompactResult {
+    pub cancel: bool,
+    pub compaction: Option<CompactionResult>,
+}
+
+pub type SessionBeforeCompactHook = Arc<
+    dyn Fn(
+            SessionBeforeCompactEvent,
+        ) -> Result<Option<SessionBeforeCompactResult>, AgentHarnessError>
+        + Send
+        + Sync,
+>;
+
+#[derive(Debug, Clone)]
+pub struct SessionBeforeBranchSummaryEvent {
+    pub entries: Vec<SessionTreeEntry>,
+    pub old_leaf_id: Option<String>,
+    pub target_id: Option<String>,
+    pub common_ancestor_id: Option<String>,
+    pub custom_instructions: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionBeforeBranchSummaryResult {
+    pub skip_summary: bool,
+    pub summary: Option<BranchSummaryResult>,
+}
+
+pub type SessionBeforeBranchSummaryHook = Arc<
+    dyn Fn(
+            SessionBeforeBranchSummaryEvent,
+        ) -> Result<Option<SessionBeforeBranchSummaryResult>, AgentHarnessError>
+        + Send
+        + Sync,
+>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionCompactEvent {
+    pub compaction_entry: SessionTreeEntry,
+    pub from_hook: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionBranchSummaryEvent {
+    pub branch_summary_entry: SessionTreeEntry,
+    pub old_leaf_id: Option<String>,
+    pub target_id: Option<String>,
+    pub from_hook: bool,
+}
+
+#[derive(Debug, Clone)]
 pub enum AgentHarnessEvent {
     Agent(AgentEvent),
     QueueUpdate(QueueUpdateEvent),
@@ -211,6 +291,10 @@ pub enum AgentHarnessEvent {
     ResourcesUpdate(ResourcesUpdateEvent),
     ModelSelect(ModelSelectEvent),
     ThinkingLevelSelect(ThinkingLevelSelectEvent),
+    SessionCompact(SessionCompactEvent),
+    SessionBranchSummary(SessionBranchSummaryEvent),
+    Compaction(CompactionResult),
+    BranchSummary(BranchSummaryResult),
     SavePoint { had_pending_mutations: bool },
     Settled { next_turn_count: usize },
 }
@@ -226,6 +310,11 @@ enum AgentHarnessListenerEntry {
 }
 pub type BeforeAgentStartHook = Arc<
     dyn Fn(BeforeAgentStartEvent) -> Result<Option<BeforeAgentStartResult>, AgentHarnessError>
+        + Send
+        + Sync,
+>;
+pub type AfterAgentFinishHook = Arc<
+    dyn Fn(AfterAgentFinishEvent) -> Result<Option<AfterAgentFinishResult>, AgentHarnessError>
         + Send
         + Sync,
 >;
@@ -249,6 +338,20 @@ pub struct BeforeAgentStartEvent {
 pub struct BeforeAgentStartResult {
     pub messages: Option<Vec<AgentMessage>>,
     pub system_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AfterAgentFinishEvent {
+    pub assistant: AssistantMessage,
+    pub messages: Vec<AgentMessage>,
+    pub session: Session,
+    pub model: Model,
+    pub resources: AgentHarnessResources,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AfterAgentFinishResult {
+    pub messages: Option<Vec<AgentMessage>>,
 }
 
 #[derive(Debug, Clone)]
@@ -524,11 +627,14 @@ pub struct AgentHarness {
     phase: Mutex<AgentHarnessPhase>,
     listeners: Arc<Mutex<BTreeMap<u64, AgentHarnessListenerEntry>>>,
     before_agent_start_hooks: Mutex<BTreeMap<u64, BeforeAgentStartHook>>,
+    after_agent_finish_hooks: Mutex<BTreeMap<u64, AfterAgentFinishHook>>,
     context_hooks: Arc<Mutex<BTreeMap<u64, ContextHook>>>,
     tool_call_hooks: Arc<Mutex<BTreeMap<u64, ToolCallHook>>>,
     tool_result_hooks: Arc<Mutex<BTreeMap<u64, ToolResultHook>>>,
     provider_request_hooks: Arc<Mutex<BTreeMap<u64, BeforeProviderRequestHook>>>,
     provider_payload_hooks: Arc<Mutex<BTreeMap<u64, BeforeProviderPayloadHook>>>,
+    session_before_compact_hooks: Mutex<BTreeMap<u64, SessionBeforeCompactHook>>,
+    session_before_branch_summary_hooks: Mutex<BTreeMap<u64, SessionBeforeBranchSummaryHook>>,
     pending_session_writes: Arc<Mutex<VecDeque<HarnessSessionWrite>>>,
     next_listener_id: AtomicU64,
     next_hook_id: AtomicU64,
@@ -565,11 +671,14 @@ impl AgentHarness {
             phase: Mutex::new(AgentHarnessPhase::Idle),
             listeners: Arc::new(Mutex::new(BTreeMap::new())),
             before_agent_start_hooks: Mutex::new(BTreeMap::new()),
+            after_agent_finish_hooks: Mutex::new(BTreeMap::new()),
             context_hooks: Arc::new(Mutex::new(BTreeMap::new())),
             tool_call_hooks: Arc::new(Mutex::new(BTreeMap::new())),
             tool_result_hooks: Arc::new(Mutex::new(BTreeMap::new())),
             provider_request_hooks: Arc::new(Mutex::new(BTreeMap::new())),
             provider_payload_hooks: Arc::new(Mutex::new(BTreeMap::new())),
+            session_before_compact_hooks: Mutex::new(BTreeMap::new()),
+            session_before_branch_summary_hooks: Mutex::new(BTreeMap::new()),
             pending_session_writes: Arc::new(Mutex::new(VecDeque::new())),
             next_listener_id: AtomicU64::new(1),
             next_hook_id: AtomicU64::new(1),
@@ -794,6 +903,26 @@ impl AgentHarness {
         self.before_agent_start_hooks.lock().remove(&id);
     }
 
+    pub fn on_after_agent_finish(
+        &self,
+        hook: impl Fn(
+            AfterAgentFinishEvent,
+        ) -> Result<Option<AfterAgentFinishResult>, AgentHarnessError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> u64 {
+        let id = self.next_hook_id.fetch_add(1, Ordering::SeqCst);
+        self.after_agent_finish_hooks
+            .lock()
+            .insert(id, Arc::new(hook));
+        id
+    }
+
+    pub fn remove_after_agent_finish_hook(&self, id: u64) {
+        self.after_agent_finish_hooks.lock().remove(&id);
+    }
+
     pub fn on_context(
         &self,
         hook: impl Fn(ContextEvent) -> Result<Option<ContextResult>, AgentHarnessError>
@@ -882,6 +1011,46 @@ impl AgentHarness {
         self.provider_payload_hooks.lock().remove(&id);
     }
 
+    pub fn on_session_before_compact(
+        &self,
+        hook: impl Fn(
+            SessionBeforeCompactEvent,
+        ) -> Result<Option<SessionBeforeCompactResult>, AgentHarnessError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> u64 {
+        let id = self.next_hook_id.fetch_add(1, Ordering::SeqCst);
+        self.session_before_compact_hooks
+            .lock()
+            .insert(id, Arc::new(hook));
+        id
+    }
+
+    pub fn remove_session_before_compact_hook(&self, id: u64) {
+        self.session_before_compact_hooks.lock().remove(&id);
+    }
+
+    pub fn on_session_before_branch_summary(
+        &self,
+        hook: impl Fn(
+            SessionBeforeBranchSummaryEvent,
+        ) -> Result<Option<SessionBeforeBranchSummaryResult>, AgentHarnessError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> u64 {
+        let id = self.next_hook_id.fetch_add(1, Ordering::SeqCst);
+        self.session_before_branch_summary_hooks
+            .lock()
+            .insert(id, Arc::new(hook));
+        id
+    }
+
+    pub fn remove_session_before_branch_summary_hook(&self, id: u64) {
+        self.session_before_branch_summary_hooks.lock().remove(&id);
+    }
+
     pub fn steer(&self, text: impl Into<String>) -> Result<(), AgentHarnessError> {
         self.steer_message(user_message(text))
     }
@@ -914,13 +1083,18 @@ impl AgentHarness {
     }
 
     pub fn abort(&self) -> AbortResult {
-        self.abort_flag.store(true, Ordering::SeqCst);
-        let result = AbortResult {
-            cleared_steer: self.steering_queue.drain_all(),
-            cleared_follow_up: self.follow_up_queue.drain_all(),
-        };
+        let result = self.abort_queues();
         self.emit_queue_update();
         self.emit(AgentHarnessEvent::Abort(result.clone()));
+        result
+    }
+
+    pub async fn abort_and_wait(&self) -> AbortResult {
+        let result = self.abort_queues();
+        self.emit_queue_update_async().await;
+        self.wait_for_idle().await;
+        self.emit_async(AgentHarnessEvent::Abort(result.clone()))
+            .await;
         result
     }
 
@@ -931,6 +1105,225 @@ impl AgentHarness {
             }
             self.idle_notify.notified().await;
         }
+    }
+
+    pub async fn compact_session(
+        &self,
+        options: AgentHarnessCompactionOptions,
+    ) -> Result<Option<CompactionResult>, AgentHarnessError> {
+        self.start_phase(AgentHarnessPhase::Compaction)?;
+        let result = async {
+            let had_pending_mutations = self.has_pending_session_writes();
+            self.flush_pending_session_writes()?;
+
+            let entries = self.session.entries();
+            let Some(preparation) = prepare_compaction(&entries, options.settings)
+                .map_err(|error| AgentHarnessError::unknown(error.to_string()))?
+            else {
+                if had_pending_mutations || self.has_pending_session_writes() {
+                    self.flush_pending_session_writes_and_emit_savepoint(had_pending_mutations)
+                        .await?;
+                }
+                return Ok(None);
+            };
+
+            let hook_result = match self.emit_session_before_compact(SessionBeforeCompactEvent {
+                preparation: preparation.clone(),
+                branch_entries: entries,
+                custom_instructions: options.custom_instructions.clone(),
+            }) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.flush_pending_session_writes_and_emit_savepoint(had_pending_mutations)
+                        .await?;
+                    return Err(error);
+                }
+            };
+            if hook_result
+                .as_ref()
+                .map(|result| result.cancel)
+                .unwrap_or(false)
+            {
+                if had_pending_mutations || self.has_pending_session_writes() {
+                    self.flush_pending_session_writes_and_emit_savepoint(had_pending_mutations)
+                        .await?;
+                }
+                return Ok(None);
+            }
+
+            let provided = hook_result.and_then(|result| result.compaction);
+            let from_hook = provided.is_some();
+            let result = match provided {
+                Some(result) => result,
+                None => {
+                    let model = self.get_model();
+                    let thinking_level = self.get_thinking_level();
+                    let auth = self.resolve_provider_auth(&model)?;
+                    let headers = (!auth.headers.is_empty()).then_some(auth.headers);
+                    match compact_prepared_session(
+                        &preparation,
+                        &model,
+                        auth.api_key.unwrap_or_default(),
+                        headers,
+                        options.custom_instructions.as_deref(),
+                        (thinking_level != ThinkingLevel::Off).then_some(thinking_level),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(error) => {
+                            self.flush_pending_session_writes_and_emit_savepoint(
+                                had_pending_mutations,
+                            )
+                            .await?;
+                            return Err(AgentHarnessError::unknown(error.to_string()));
+                        }
+                    }
+                }
+            };
+
+            let mut session = self.session.clone();
+            let entry_id = session
+                .append_compaction_with_details(
+                    result.summary.clone(),
+                    result.first_kept_entry_id.clone(),
+                    result.tokens_before,
+                    compaction_details_value(&result.details),
+                    from_hook.then_some(true),
+                )
+                .map_err(AgentHarnessError::session)?;
+            if let Some(compaction_entry) = session.get_entry(&entry_id) {
+                self.emit_async(AgentHarnessEvent::SessionCompact(SessionCompactEvent {
+                    compaction_entry,
+                    from_hook,
+                }))
+                .await;
+            }
+            self.emit_async(AgentHarnessEvent::Compaction(result.clone()))
+                .await;
+            self.flush_pending_session_writes_and_emit_savepoint(had_pending_mutations)
+                .await?;
+            Ok(Some(result))
+        }
+        .await;
+        self.finish_turn();
+        result
+    }
+
+    pub async fn move_session_to(
+        &self,
+        entry_id: Option<String>,
+        options: AgentHarnessMoveSessionOptions,
+    ) -> Result<Option<BranchSummaryResult>, AgentHarnessError> {
+        self.start_phase(AgentHarnessPhase::BranchSummary)?;
+        let result = async {
+            let had_pending_mutations = self.has_pending_session_writes();
+            self.flush_pending_session_writes()?;
+
+            let old_leaf_id = self.session.leaf_id().map_err(AgentHarnessError::session)?;
+            let mut summary_result = None;
+            let mut summary_for_move = None;
+            let mut from_hook = false;
+
+            if let Some(summary_options) = options.branch_summary {
+                let collected = collect_branch_summary_entries_for_target(
+                    &self.session,
+                    old_leaf_id.as_deref(),
+                    entry_id.as_deref(),
+                )?;
+                if !collected.entries.is_empty() {
+                    let hook_result = match self.emit_session_before_branch_summary(
+                        SessionBeforeBranchSummaryEvent {
+                            entries: collected.entries.clone(),
+                            old_leaf_id: old_leaf_id.clone(),
+                            target_id: entry_id.clone(),
+                            common_ancestor_id: collected.common_ancestor_id,
+                            custom_instructions: summary_options.custom_instructions.clone(),
+                        },
+                    ) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            self.flush_pending_session_writes_and_emit_savepoint(
+                                had_pending_mutations,
+                            )
+                            .await?;
+                            return Err(error);
+                        }
+                    };
+
+                    if !hook_result
+                        .as_ref()
+                        .map(|result| result.skip_summary)
+                        .unwrap_or(false)
+                    {
+                        let provided = hook_result.and_then(|result| result.summary);
+                        from_hook = provided.is_some();
+                        let result = match provided {
+                            Some(result) => result,
+                            None => {
+                                let model = self.get_model();
+                                let auth = self.resolve_provider_auth(&model)?;
+                                let headers = (!auth.headers.is_empty()).then_some(auth.headers);
+                                match generate_branch_summary(
+                                    &collected.entries,
+                                    &model,
+                                    auth.api_key.unwrap_or_default(),
+                                    headers,
+                                    summary_options.custom_instructions.as_deref(),
+                                    summary_options.replace_instructions,
+                                    summary_options.reserve_tokens,
+                                )
+                                .await
+                                {
+                                    Ok(result) => result,
+                                    Err(error) => {
+                                        self.flush_pending_session_writes_and_emit_savepoint(
+                                            had_pending_mutations,
+                                        )
+                                        .await?;
+                                        return Err(AgentHarnessError::unknown(error.to_string()));
+                                    }
+                                }
+                            }
+                        };
+                        summary_for_move = Some(BranchMoveSummary {
+                            summary: result.summary.clone(),
+                            details: branch_summary_details_value(&result),
+                            from_hook: from_hook.then_some(true),
+                        });
+                        summary_result = Some(result);
+                    }
+                }
+            }
+
+            let mut session = self.session.clone();
+            let branch_summary_id = session
+                .move_to(entry_id.clone(), summary_for_move)
+                .map_err(AgentHarnessError::session)?;
+            if let Some(branch_summary_id) = branch_summary_id
+                && let Some(branch_summary_entry) = session.get_entry(&branch_summary_id)
+            {
+                self.emit_async(AgentHarnessEvent::SessionBranchSummary(
+                    SessionBranchSummaryEvent {
+                        branch_summary_entry,
+                        old_leaf_id,
+                        target_id: entry_id,
+                        from_hook,
+                    },
+                ))
+                .await;
+            }
+            if let Some(result) = summary_result.clone() {
+                self.emit_async(AgentHarnessEvent::BranchSummary(result))
+                    .await;
+            }
+            self.flush_pending_session_writes_and_emit_savepoint(had_pending_mutations)
+                .await?;
+            Ok(summary_result)
+        }
+        .await;
+        self.finish_turn();
+        result
     }
 
     pub async fn prompt(
@@ -1037,12 +1430,23 @@ impl AgentHarness {
         }
         let resources = self.get_resources();
         let system_prompt = self.resolve_system_prompt()?;
-        let before_result = self.emit_before_agent_start(BeforeAgentStartEvent {
+        let before_result = match self.emit_before_agent_start(BeforeAgentStartEvent {
             prompt: text.clone(),
             images: images.clone(),
             system_prompt: system_prompt.clone(),
             resources,
-        })?;
+        }) {
+            Ok(result) => result,
+            Err(error) => {
+                let had_pending_mutations = !self.pending_session_writes.lock().is_empty();
+                self.flush_pending_session_writes()?;
+                self.emit_async(AgentHarnessEvent::SavePoint {
+                    had_pending_mutations,
+                })
+                .await;
+                return Err(error);
+            }
+        };
         prompt_messages.push(user_message_with_images(text, images).into());
         if let Some(messages) = before_result
             .as_ref()
@@ -1126,14 +1530,6 @@ impl AgentHarness {
                     .map_err(AgentHarnessError::session)?;
             }
         }
-        let had_pending_mutations = !self.pending_session_writes.lock().is_empty();
-        self.flush_pending_session_writes()?;
-        self.emit_async(AgentHarnessEvent::SavePoint {
-            had_pending_mutations,
-        })
-        .await;
-        drop(events);
-        self.flush_pending_session_writes()?;
         let assistant = messages
             .iter()
             .rev()
@@ -1147,6 +1543,41 @@ impl AgentHarness {
                     "AgentHarness prompt completed without an assistant message",
                 )
             })?;
+        let after_messages = match self.emit_after_agent_finish(AfterAgentFinishEvent {
+            assistant: assistant.clone(),
+            messages: messages.clone(),
+            session: self.session.clone(),
+            model,
+            resources: self.get_resources(),
+        }) {
+            Ok(messages) => messages,
+            Err(error) => {
+                let had_pending_mutations = !self.pending_session_writes.lock().is_empty();
+                self.flush_pending_session_writes()?;
+                self.emit_async(AgentHarnessEvent::SavePoint {
+                    had_pending_mutations,
+                })
+                .await;
+                drop(events);
+                self.flush_pending_session_writes()?;
+                return Err(error);
+            }
+        };
+        for message in after_messages {
+            if let Some(message) = message.to_llm_message() {
+                session
+                    .append_message(message)
+                    .map_err(AgentHarnessError::session)?;
+            }
+        }
+        let had_pending_mutations = !self.pending_session_writes.lock().is_empty();
+        self.flush_pending_session_writes()?;
+        self.emit_async(AgentHarnessEvent::SavePoint {
+            had_pending_mutations,
+        })
+        .await;
+        drop(events);
+        self.flush_pending_session_writes()?;
         self.emit_async(AgentHarnessEvent::Settled {
             next_turn_count: self.next_turn_queue.snapshot().len(),
         })
@@ -1155,6 +1586,10 @@ impl AgentHarness {
     }
 
     fn start_turn(&self) -> Result<(), AgentHarnessError> {
+        self.start_phase(AgentHarnessPhase::Turn)
+    }
+
+    fn start_phase(&self, next_phase: AgentHarnessPhase) -> Result<(), AgentHarnessError> {
         let mut phase = self.phase.lock();
         if *phase != AgentHarnessPhase::Idle {
             return Err(AgentHarnessError::new(
@@ -1162,13 +1597,21 @@ impl AgentHarness {
                 "AgentHarness is busy",
             ));
         }
-        *phase = AgentHarnessPhase::Turn;
+        *phase = next_phase;
         Ok(())
     }
 
     fn finish_turn(&self) {
         *self.phase.lock() = AgentHarnessPhase::Idle;
         self.idle_notify.notify_waiters();
+    }
+
+    fn abort_queues(&self) -> AbortResult {
+        self.abort_flag.store(true, Ordering::SeqCst);
+        AbortResult {
+            cleared_steer: self.steering_queue.drain_all(),
+            cleared_follow_up: self.follow_up_queue.drain_all(),
+        }
     }
 
     fn require_running(&self, message: &'static str) -> Result<(), AgentHarnessError> {
@@ -1181,12 +1624,78 @@ impl AgentHarness {
         Ok(())
     }
 
+    fn resolve_provider_auth(&self, model: &Model) -> Result<ProviderAuth, AgentHarnessError> {
+        self.get_api_key_and_headers
+            .as_ref()
+            .map(|provider| provider(model))
+            .unwrap_or_else(|| Ok(ProviderAuth::default()))
+    }
+
     fn emit_before_agent_start(
         &self,
         event: BeforeAgentStartEvent,
     ) -> Result<Option<BeforeAgentStartResult>, AgentHarnessError> {
         let hooks: Vec<BeforeAgentStartHook> = self
             .before_agent_start_hooks
+            .lock()
+            .values()
+            .cloned()
+            .collect();
+        let mut last_result = None;
+        for hook in hooks {
+            if let Some(result) = hook(event.clone())? {
+                last_result = Some(result);
+            }
+        }
+        Ok(last_result)
+    }
+
+    fn emit_after_agent_finish(
+        &self,
+        event: AfterAgentFinishEvent,
+    ) -> Result<Vec<AgentMessage>, AgentHarnessError> {
+        let hooks: Vec<AfterAgentFinishHook> = self
+            .after_agent_finish_hooks
+            .lock()
+            .values()
+            .cloned()
+            .collect();
+        let mut messages = Vec::new();
+        for hook in hooks {
+            if let Some(result) = hook(event.clone())?
+                && let Some(mut result_messages) = result.messages
+            {
+                messages.append(&mut result_messages);
+            }
+        }
+        Ok(messages)
+    }
+
+    fn emit_session_before_compact(
+        &self,
+        event: SessionBeforeCompactEvent,
+    ) -> Result<Option<SessionBeforeCompactResult>, AgentHarnessError> {
+        let hooks: Vec<SessionBeforeCompactHook> = self
+            .session_before_compact_hooks
+            .lock()
+            .values()
+            .cloned()
+            .collect();
+        let mut last_result = None;
+        for hook in hooks {
+            if let Some(result) = hook(event.clone())? {
+                last_result = Some(result);
+            }
+        }
+        Ok(last_result)
+    }
+
+    fn emit_session_before_branch_summary(
+        &self,
+        event: SessionBeforeBranchSummaryEvent,
+    ) -> Result<Option<SessionBeforeBranchSummaryResult>, AgentHarnessError> {
+        let hooks: Vec<SessionBeforeBranchSummaryHook> = self
+            .session_before_branch_summary_hooks
             .lock()
             .values()
             .cloned()
@@ -1251,6 +1760,23 @@ impl AgentHarness {
         flush_pending_session_writes_for(&self.session, &self.pending_session_writes)
     }
 
+    fn has_pending_session_writes(&self) -> bool {
+        !self.pending_session_writes.lock().is_empty()
+    }
+
+    async fn flush_pending_session_writes_and_emit_savepoint(
+        &self,
+        had_pending_mutations: bool,
+    ) -> Result<(), AgentHarnessError> {
+        let had_pending_mutations = had_pending_mutations || self.has_pending_session_writes();
+        self.flush_pending_session_writes()?;
+        self.emit_async(AgentHarnessEvent::SavePoint {
+            had_pending_mutations,
+        })
+        .await;
+        Ok(())
+    }
+
     fn apply_session_write(&self, write: HarnessSessionWrite) -> Result<(), AgentHarnessError> {
         apply_session_write_for(&self.session, write)
     }
@@ -1287,6 +1813,49 @@ fn resolve_system_prompt_from_parts(
     match provider {
         Some(provider) => provider(context),
         None => Ok(fallback),
+    }
+}
+
+fn compaction_details_value(details: &CompactionDetails) -> Option<Value> {
+    if details.read_files.is_empty() && details.modified_files.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "readFiles": details.read_files.clone(),
+        "modifiedFiles": details.modified_files.clone(),
+    }))
+}
+
+fn branch_summary_details_value(result: &BranchSummaryResult) -> Option<Value> {
+    if result.read_files.is_empty() && result.modified_files.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "readFiles": result.read_files.clone(),
+        "modifiedFiles": result.modified_files.clone(),
+    }))
+}
+
+fn collect_branch_summary_entries_for_target(
+    session: &Session,
+    old_leaf_id: Option<&str>,
+    target_id: Option<&str>,
+) -> Result<CollectEntriesResult, AgentHarnessError> {
+    match target_id {
+        Some(target_id) => collect_entries_for_branch_summary(session, old_leaf_id, target_id)
+            .map_err(|error| AgentHarnessError::unknown(error.to_string())),
+        None => {
+            let entries = match old_leaf_id {
+                Some(old_leaf_id) => session
+                    .branch(Some(old_leaf_id))
+                    .map_err(AgentHarnessError::session)?,
+                None => Vec::new(),
+            };
+            Ok(CollectEntriesResult {
+                entries,
+                common_ancestor_id: None,
+            })
+        }
     }
 }
 

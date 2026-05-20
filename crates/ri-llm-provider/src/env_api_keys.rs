@@ -33,6 +33,10 @@ fn api_key_env_vars(provider: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+pub fn api_key_env_var_names(provider: &str) -> Option<&'static [&'static str]> {
+    api_key_env_vars(provider)
+}
+
 pub fn find_env_keys(provider: &str) -> Option<Vec<String>> {
     let keys: Vec<String> = api_key_env_vars(provider)?
         .iter()
@@ -63,9 +67,10 @@ fn has_bedrock_credentials() -> bool {
         || (env::var_os("AWS_ACCESS_KEY_ID").is_some()
             && env::var_os("AWS_SECRET_ACCESS_KEY").is_some())
         || env::var_os("AWS_BEARER_TOKEN_BEDROCK").is_some()
+        || (env::var_os("AWS_WEB_IDENTITY_TOKEN_FILE").is_some()
+            && env::var_os("AWS_ROLE_ARN").is_some())
         || env::var_os("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").is_some()
         || env::var_os("AWS_CONTAINER_CREDENTIALS_FULL_URI").is_some()
-        || env::var_os("AWS_WEB_IDENTITY_TOKEN_FILE").is_some()
 }
 
 fn has_vertex_credentials() -> bool {
