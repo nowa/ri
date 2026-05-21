@@ -1398,15 +1398,9 @@ pub fn load_jsonl_session_metadata(
     })?;
     let mut reader = BufReader::new(file);
     let mut line = String::new();
-    loop {
-        line.clear();
-        let bytes_read = reader.read_line(&mut line).map_err(storage_error)?;
-        if bytes_read == 0 {
-            return Err(invalid_session(file_path, "missing session header"));
-        }
-        if !line.trim().is_empty() {
-            break;
-        }
+    let bytes_read = reader.read_line(&mut line).map_err(storage_error)?;
+    if bytes_read == 0 || line.trim().is_empty() {
+        return Err(invalid_session(file_path, "missing session header"));
     }
     let header = parse_header_line(line.trim_end_matches(['\r', '\n']), file_path)?;
     Ok(JsonlSessionMetadata {

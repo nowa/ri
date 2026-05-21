@@ -253,6 +253,20 @@ fn jsonl_storage_writes_loads_metadata_entries_leaf_and_labels() {
     assert_eq!(metadata.id, "metadata-session");
     assert_eq!(metadata.cwd, dir.to_string_lossy());
 
+    let blank_prefixed_path = dir.join("blank-prefixed.jsonl");
+    fs::write(&blank_prefixed_path, format!("\n{header}\n")).expect("write blank-prefixed session");
+    let err =
+        load_jsonl_session_metadata(&blank_prefixed_path).expect_err("metadata reads first line");
+    assert_eq!(err.code, SessionErrorCode::InvalidSession);
+    assert!(err.message.contains("missing session header"));
+    assert_eq!(
+        JsonlSessionStorage::open(&blank_prefixed_path)
+            .expect("open skips blank lines")
+            .metadata()
+            .id,
+        "metadata-session"
+    );
+
     let loaded = JsonlSessionStorage::open(&path).expect("open");
     assert_eq!(loaded.leaf_id().expect("leaf"), Some("label-1".to_owned()));
     assert_eq!(loaded.label("root"), Some("checkpoint"));

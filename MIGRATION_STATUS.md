@@ -211,9 +211,10 @@ counterparts that pass.
     request timeout behavior, retry/backoff handling for retryable HTTP/network
     failures, non-retryable HTTP errors, invalid JSON responses, and
     aborted/error result mapping.
-  - JSONL session metadata loading now reads only the first non-empty header
+  - JSONL session metadata loading now reads only the first physical header
     line, matching the source line-reading metadata path without requiring the
-    whole session file to decode successfully.
+    whole session file to decode successfully; full JSONL storage loading still
+    filters blank lines like the source full-file path.
   - Gated live provider smoke tests for OpenAI Responses, OpenAI Completions,
     Anthropic Messages, Google/Gemini, Google Vertex API-key/ADC,
     Mistral Conversations, Azure OpenAI Responses, Bedrock Converse, and
@@ -464,6 +465,17 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-22 after aligning
+  `session/jsonl-storage.ts` metadata loading: `load_jsonl_session_metadata`
+  now reads only the first physical line like Pi's `readTextLines(...,
+  { maxLines: 1 })` path, so a blank first line reports `invalid_session` even
+  though full JSONL storage loading still skips blank lines like Pi's
+  full-file path:
+  `cargo test -p ri-agent-core --test session_storage jsonl_storage_writes_loads_metadata_entries_leaf_and_labels -- --exact --test-threads=1`,
+  `cargo test -p ri-agent-core --test session_storage -- --test-threads=1`,
+  `cargo fmt`, `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --test-threads=1` passed.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
   RFC3339 timestamp values, matching Pi's `new Date(createdAt).getTime()`
