@@ -163,6 +163,23 @@ fn local_execution_env_read_text_lines_stops_at_requested_limit() {
 }
 
 #[test]
+fn local_execution_env_text_reads_replace_invalid_utf8_like_node() {
+    let root = temp_dir();
+    let env = LocalExecutionEnv::new(&root);
+    env.write_file("invalid.txt", b"a\xffb\n\xfe")
+        .expect("write invalid utf8");
+
+    assert_eq!(
+        env.read_text_file("invalid.txt").expect("read"),
+        "a\u{fffd}b\n\u{fffd}"
+    );
+    assert_eq!(
+        env.read_text_lines("invalid.txt", 2).expect("lines"),
+        vec!["a\u{fffd}b".to_owned(), "\u{fffd}".to_owned()]
+    );
+}
+
+#[test]
 fn local_execution_env_returns_file_errors_for_missing_and_wrong_kinds() {
     let root = temp_dir();
     let env = LocalExecutionEnv::new(&root);

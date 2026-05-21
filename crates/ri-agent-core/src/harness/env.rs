@@ -227,7 +227,8 @@ impl LocalExecutionEnv {
         abort_flag: Option<&AtomicBool>,
     ) -> Result<String, FileError> {
         check_file_abort(abort_flag, path)?;
-        fs::read_to_string(path).map_err(|error| file_error_from_io(error, path))
+        let bytes = fs::read(path).map_err(|error| file_error_from_io(error, path))?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     pub fn read_text_lines(
@@ -250,13 +251,24 @@ impl LocalExecutionEnv {
             return Ok(Vec::new());
         }
         let file = fs::File::open(&path).map_err(|error| file_error_from_io(error, &path))?;
+        let mut reader = BufReader::new(file);
         let mut lines = Vec::new();
-        for line in BufReader::new(file).lines() {
+        while lines.len() < max_lines {
             check_file_abort(abort_flag, &path)?;
-            lines.push(line.map_err(|error| file_error_from_io(error, &path))?);
-            if lines.len() >= max_lines {
+            let mut bytes = Vec::new();
+            let bytes_read = reader
+                .read_until(b'\n', &mut bytes)
+                .map_err(|error| file_error_from_io(error, &path))?;
+            if bytes_read == 0 {
                 break;
             }
+            if bytes.ends_with(b"\n") {
+                bytes.pop();
+                if bytes.ends_with(b"\r") {
+                    bytes.pop();
+                }
+            }
+            lines.push(String::from_utf8_lossy(&bytes).into_owned());
         }
         check_file_abort(abort_flag, &path)?;
         Ok(lines)
