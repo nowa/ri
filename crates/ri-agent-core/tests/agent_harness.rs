@@ -2696,6 +2696,182 @@ async fn agent_harness_move_session_to_generates_and_persists_branch_summary() {
 }
 
 #[tokio::test]
+async fn agent_harness_navigate_tree_emits_pi_tree_event_and_returns_editor_text() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions {
+        models: vec![FauxModelDefinition::new("navigate-tree-model")],
+        ..Default::default()
+    });
+    let mut session = Session::new(InMemorySessionStorage::new());
+    let anchor = session
+        .append_message(Message::User(UserMessage::text("main path")))
+        .expect("append anchor");
+    let target_user = session
+        .append_message(Message::User(UserMessage {
+            content: UserContentValue::Blocks(vec![
+                UserContent::Text(TextContent::new("revise ")),
+                UserContent::Image(ImageContent {
+                    data: "base64-image".to_owned(),
+                    mime_type: "image/png".to_owned(),
+                }),
+                UserContent::Text(TextContent::new("this")),
+            ]),
+            timestamp: now_millis(),
+        }))
+        .expect("append target user");
+    let old_leaf = session
+        .append_message(Message::Assistant(faux_assistant_message(
+            "old branch response",
+            Default::default(),
+        )))
+        .expect("append old leaf");
+
+    let harness = AgentHarness::new(AgentHarnessOptions::new(
+        test_env(),
+        session.clone(),
+        registration.get_model(),
+    ));
+    let hook_seen = Arc::new(Mutex::new(Vec::new()));
+    let hook_seen_ref = hook_seen.clone();
+    harness.on_session_before_tree(move |event| {
+        hook_seen_ref.lock().expect("hook seen").push((
+            event.preparation.target_id.clone(),
+            event.preparation.old_leaf_id.clone(),
+            event.preparation.common_ancestor_id.clone(),
+            event.preparation.entries_to_summarize.len(),
+            event.preparation.user_wants_summary,
+            event.preparation.custom_instructions.clone(),
+            event.preparation.replace_instructions,
+            event.preparation.label.clone(),
+        ));
+        Ok(Some(SessionBeforeTreeResult {
+            summary: Some(TreeSummary {
+                summary: "Hook tree summary".to_owned(),
+                details: Some(json!({ "source": "hook" })),
+            }),
+            ..Default::default()
+        }))
+    });
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let events_ref = events.clone();
+    harness.subscribe(move |event| {
+        if let AgentHarnessEvent::SessionTree(event) = event {
+            events_ref.lock().expect("events").push((
+                event.new_leaf_id.clone(),
+                event.old_leaf_id.clone(),
+                event.from_hook,
+                event.summary_entry.as_ref().map(|entry| entry.entry_type()),
+            ));
+        }
+    });
+
+    let result = harness
+        .navigate_tree(
+            target_user.clone(),
+            AgentHarnessNavigateTreeOptions {
+                summarize: false,
+                custom_instructions: Some("focus edits".to_owned()),
+                replace_instructions: true,
+                label: Some("branch label".to_owned()),
+                reserve_tokens: None,
+            },
+        )
+        .await
+        .expect("navigate tree");
+
+    assert!(!result.cancelled);
+    assert_eq!(result.editor_text.as_deref(), Some("revise this"));
+    let summary_entry = result.summary_entry.expect("summary entry");
+    let SessionTreeEntry::BranchSummary {
+        id: summary_id,
+        parent_id,
+        from_id,
+        summary,
+        details,
+        from_hook,
+        ..
+    } = summary_entry
+    else {
+        panic!("expected branch summary entry");
+    };
+    assert_eq!(parent_id, Some(anchor.clone()));
+    assert_eq!(from_id, anchor);
+    assert_eq!(summary, "Hook tree summary");
+    assert_eq!(details, Some(json!({ "source": "hook" })));
+    assert_eq!(from_hook, Some(true));
+    assert_eq!(session.leaf_id().expect("leaf"), Some(summary_id.clone()));
+    assert_eq!(
+        *hook_seen.lock().expect("hook seen"),
+        vec![(
+            target_user.clone(),
+            Some(old_leaf.clone()),
+            Some(target_user.clone()),
+            1,
+            false,
+            Some("focus edits".to_owned()),
+            true,
+            Some("branch label".to_owned())
+        )]
+    );
+    assert_eq!(
+        *events.lock().expect("events"),
+        vec![(
+            Some(summary_id),
+            Some(old_leaf),
+            true,
+            Some("branch_summary")
+        )]
+    );
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_harness_navigate_tree_hook_can_cancel_without_moving() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions {
+        models: vec![FauxModelDefinition::new("navigate-cancel-model")],
+        ..Default::default()
+    });
+    let mut session = Session::new(InMemorySessionStorage::new());
+    let anchor = session
+        .append_message(Message::User(UserMessage::text("main path")))
+        .expect("append anchor");
+    let old_leaf = session
+        .append_message(Message::User(UserMessage::text("branch work")))
+        .expect("append branch");
+
+    let harness = AgentHarness::new(AgentHarnessOptions::new(
+        test_env(),
+        session.clone(),
+        registration.get_model(),
+    ));
+    harness.on_session_before_tree(|_| {
+        Ok(Some(SessionBeforeTreeResult {
+            cancel: true,
+            ..Default::default()
+        }))
+    });
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let events_ref = events.clone();
+    harness.subscribe(move |event| {
+        if matches!(event, AgentHarnessEvent::SessionTree(_)) {
+            events_ref.lock().expect("events").push("session_tree");
+        }
+    });
+
+    let result = harness
+        .navigate_tree(anchor.clone(), AgentHarnessNavigateTreeOptions::default())
+        .await
+        .expect("navigate cancel");
+
+    assert!(result.cancelled);
+    assert!(result.editor_text.is_none());
+    assert!(result.summary_entry.is_none());
+    assert_eq!(session.leaf_id().expect("leaf"), Some(old_leaf));
+    assert!(events.lock().expect("events").is_empty());
+    registration.unregister();
+}
+
+#[tokio::test]
 async fn agent_harness_session_before_branch_summary_hook_can_supply_summary() {
     let registration = register_faux_provider(RegisterFauxProviderOptions {
         models: vec![FauxModelDefinition::new("hook-branch-summary-model")],

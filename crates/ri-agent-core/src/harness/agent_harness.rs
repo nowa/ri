@@ -110,6 +110,15 @@ pub struct AgentHarnessMoveSessionOptions {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentHarnessNavigateTreeOptions {
+    pub summarize: bool,
+    pub custom_instructions: Option<String>,
+    pub replace_instructions: bool,
+    pub label: Option<String>,
+    pub reserve_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentHarnessResources {
     pub skills: Vec<Skill>,
     pub prompt_templates: Vec<PromptTemplate>,
@@ -269,6 +278,44 @@ pub type SessionBeforeBranchSummaryHook = Arc<
         + Sync,
 >;
 
+#[derive(Debug, Clone)]
+pub struct TreePreparation {
+    pub target_id: String,
+    pub old_leaf_id: Option<String>,
+    pub common_ancestor_id: Option<String>,
+    pub entries_to_summarize: Vec<SessionTreeEntry>,
+    pub user_wants_summary: bool,
+    pub custom_instructions: Option<String>,
+    pub replace_instructions: bool,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreeSummary {
+    pub summary: String,
+    pub details: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionBeforeTreeEvent {
+    pub preparation: TreePreparation,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SessionBeforeTreeResult {
+    pub cancel: bool,
+    pub summary: Option<TreeSummary>,
+    pub custom_instructions: Option<String>,
+    pub replace_instructions: Option<bool>,
+    pub label: Option<String>,
+}
+
+pub type SessionBeforeTreeHook = Arc<
+    dyn Fn(SessionBeforeTreeEvent) -> Result<Option<SessionBeforeTreeResult>, AgentHarnessError>
+        + Send
+        + Sync,
+>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionCompactEvent {
     pub compaction_entry: SessionTreeEntry,
@@ -283,6 +330,21 @@ pub struct SessionBranchSummaryEvent {
     pub from_hook: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionTreeEvent {
+    pub new_leaf_id: Option<String>,
+    pub old_leaf_id: Option<String>,
+    pub summary_entry: Option<SessionTreeEntry>,
+    pub from_hook: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NavigateTreeResult {
+    pub cancelled: bool,
+    pub editor_text: Option<String>,
+    pub summary_entry: Option<SessionTreeEntry>,
+}
+
 #[derive(Debug, Clone)]
 pub enum AgentHarnessEvent {
     Agent(AgentEvent),
@@ -293,6 +355,7 @@ pub enum AgentHarnessEvent {
     ThinkingLevelSelect(ThinkingLevelSelectEvent),
     SessionCompact(SessionCompactEvent),
     SessionBranchSummary(SessionBranchSummaryEvent),
+    SessionTree(SessionTreeEvent),
     Compaction(CompactionResult),
     BranchSummary(BranchSummaryResult),
     SavePoint { had_pending_mutations: bool },
@@ -635,6 +698,7 @@ pub struct AgentHarness {
     provider_payload_hooks: Arc<Mutex<BTreeMap<u64, BeforeProviderPayloadHook>>>,
     session_before_compact_hooks: Mutex<BTreeMap<u64, SessionBeforeCompactHook>>,
     session_before_branch_summary_hooks: Mutex<BTreeMap<u64, SessionBeforeBranchSummaryHook>>,
+    session_before_tree_hooks: Mutex<BTreeMap<u64, SessionBeforeTreeHook>>,
     pending_session_writes: Arc<Mutex<VecDeque<HarnessSessionWrite>>>,
     next_listener_id: AtomicU64,
     next_hook_id: AtomicU64,
@@ -679,6 +743,7 @@ impl AgentHarness {
             provider_payload_hooks: Arc::new(Mutex::new(BTreeMap::new())),
             session_before_compact_hooks: Mutex::new(BTreeMap::new()),
             session_before_branch_summary_hooks: Mutex::new(BTreeMap::new()),
+            session_before_tree_hooks: Mutex::new(BTreeMap::new()),
             pending_session_writes: Arc::new(Mutex::new(VecDeque::new())),
             next_listener_id: AtomicU64::new(1),
             next_hook_id: AtomicU64::new(1),
@@ -1051,6 +1116,26 @@ impl AgentHarness {
         self.session_before_branch_summary_hooks.lock().remove(&id);
     }
 
+    pub fn on_session_before_tree(
+        &self,
+        hook: impl Fn(
+            SessionBeforeTreeEvent,
+        ) -> Result<Option<SessionBeforeTreeResult>, AgentHarnessError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> u64 {
+        let id = self.next_hook_id.fetch_add(1, Ordering::SeqCst);
+        self.session_before_tree_hooks
+            .lock()
+            .insert(id, Arc::new(hook));
+        id
+    }
+
+    pub fn remove_session_before_tree_hook(&self, id: u64) {
+        self.session_before_tree_hooks.lock().remove(&id);
+    }
+
     pub fn steer(&self, text: impl Into<String>) -> Result<(), AgentHarnessError> {
         self.steer_message(user_message(text))
     }
@@ -1320,6 +1405,128 @@ impl AgentHarness {
             self.flush_pending_session_writes_and_emit_savepoint(had_pending_mutations)
                 .await?;
             Ok(summary_result)
+        }
+        .await;
+        self.finish_turn();
+        result
+    }
+
+    pub async fn navigate_tree(
+        &self,
+        target_id: impl Into<String>,
+        options: AgentHarnessNavigateTreeOptions,
+    ) -> Result<NavigateTreeResult, AgentHarnessError> {
+        self.start_phase(AgentHarnessPhase::BranchSummary)?;
+        let target_id = target_id.into();
+        let result = async {
+            let old_leaf_id = self.session.leaf_id().map_err(AgentHarnessError::session)?;
+            if old_leaf_id.as_deref() == Some(target_id.as_str()) {
+                return Ok(NavigateTreeResult {
+                    cancelled: false,
+                    editor_text: None,
+                    summary_entry: None,
+                });
+            }
+
+            let target_entry =
+                self.session
+                    .get_entry(&target_id)
+                    .ok_or_else(|| AgentHarnessError {
+                        code: AgentHarnessErrorCode::InvalidArgument,
+                        message: format!("Entry {target_id} not found"),
+                    })?;
+            let collected = collect_branch_summary_entries_for_target(
+                &self.session,
+                old_leaf_id.as_deref(),
+                Some(target_id.as_str()),
+            )?;
+            let preparation = TreePreparation {
+                target_id: target_id.clone(),
+                old_leaf_id: old_leaf_id.clone(),
+                common_ancestor_id: collected.common_ancestor_id,
+                entries_to_summarize: collected.entries.clone(),
+                user_wants_summary: options.summarize,
+                custom_instructions: options.custom_instructions.clone(),
+                replace_instructions: options.replace_instructions,
+                label: options.label.clone(),
+            };
+            let hook_result =
+                self.emit_session_before_tree(SessionBeforeTreeEvent { preparation })?;
+            if hook_result
+                .as_ref()
+                .map(|result| result.cancel)
+                .unwrap_or(false)
+            {
+                return Ok(NavigateTreeResult {
+                    cancelled: true,
+                    editor_text: None,
+                    summary_entry: None,
+                });
+            }
+
+            let mut summary_text = hook_result
+                .as_ref()
+                .and_then(|result| result.summary.as_ref())
+                .map(|summary| summary.summary.clone());
+            let mut summary_details = hook_result
+                .as_ref()
+                .and_then(|result| result.summary.as_ref())
+                .and_then(|summary| summary.details.clone());
+
+            if summary_text.is_none() && options.summarize && !collected.entries.is_empty() {
+                let model = self.get_model();
+                let auth = self.resolve_provider_auth(&model)?;
+                let headers = (!auth.headers.is_empty()).then_some(auth.headers);
+                let custom_instructions = hook_result
+                    .as_ref()
+                    .and_then(|result| result.custom_instructions.as_deref())
+                    .or(options.custom_instructions.as_deref());
+                let replace_instructions = hook_result
+                    .as_ref()
+                    .and_then(|result| result.replace_instructions)
+                    .unwrap_or(options.replace_instructions);
+                let result = generate_branch_summary(
+                    &collected.entries,
+                    &model,
+                    auth.api_key.unwrap_or_default(),
+                    headers,
+                    custom_instructions,
+                    replace_instructions,
+                    options.reserve_tokens,
+                )
+                .await
+                .map_err(|error| AgentHarnessError::unknown(error.to_string()))?;
+                summary_text = Some(result.summary.clone());
+                summary_details = branch_summary_details_value(&result);
+            }
+
+            let (new_leaf_id, editor_text) = navigate_tree_target(&target_entry, &target_id);
+            let from_hook = hook_result
+                .as_ref()
+                .and_then(|result| result.summary.as_ref())
+                .is_some();
+            let summary_for_move = summary_text.map(|summary| BranchMoveSummary {
+                summary,
+                details: summary_details,
+                from_hook: from_hook.then_some(true),
+            });
+            let mut session = self.session.clone();
+            let summary_id = session
+                .move_to(new_leaf_id.clone(), summary_for_move)
+                .map_err(AgentHarnessError::session)?;
+            let summary_entry = summary_id.and_then(|id| session.get_entry(&id));
+            self.emit_async(AgentHarnessEvent::SessionTree(SessionTreeEvent {
+                new_leaf_id: session.leaf_id().map_err(AgentHarnessError::session)?,
+                old_leaf_id,
+                summary_entry: summary_entry.clone(),
+                from_hook,
+            }))
+            .await;
+            Ok(NavigateTreeResult {
+                cancelled: false,
+                editor_text,
+                summary_entry,
+            })
         }
         .await;
         self.finish_turn();
@@ -1708,6 +1915,25 @@ impl AgentHarness {
         Ok(last_result)
     }
 
+    fn emit_session_before_tree(
+        &self,
+        event: SessionBeforeTreeEvent,
+    ) -> Result<Option<SessionBeforeTreeResult>, AgentHarnessError> {
+        let hooks: Vec<SessionBeforeTreeHook> = self
+            .session_before_tree_hooks
+            .lock()
+            .values()
+            .cloned()
+            .collect();
+        let mut last_result = None;
+        for hook in hooks {
+            if let Some(result) = hook(event.clone())? {
+                last_result = Some(result);
+            }
+        }
+        Ok(last_result)
+    }
+
     fn queue_update_emitter_async(&self) -> Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync> {
         let listeners = self.listeners.clone();
         let steering_queue = self.steering_queue.clone();
@@ -1823,6 +2049,52 @@ fn compaction_details_value(details: &CompactionDetails) -> Option<Value> {
         "readFiles": details.read_files.clone(),
         "modifiedFiles": details.modified_files.clone(),
     }))
+}
+
+fn navigate_tree_target(
+    target_entry: &SessionTreeEntry,
+    target_id: &str,
+) -> (Option<String>, Option<String>) {
+    match target_entry {
+        SessionTreeEntry::Message {
+            parent_id,
+            message: crate::harness::SessionEntryMessage::Llm(Message::User(user)),
+            ..
+        } => (parent_id.clone(), Some(user_content_to_text(&user.content))),
+        SessionTreeEntry::CustomMessage {
+            parent_id, content, ..
+        } => (
+            parent_id.clone(),
+            Some(custom_message_content_to_text(content)),
+        ),
+        _ => (Some(target_id.to_owned()), None),
+    }
+}
+
+fn user_content_to_text(content: &UserContentValue) -> String {
+    match content {
+        UserContentValue::Plain(text) => text.clone(),
+        UserContentValue::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block {
+                UserContent::Text(text) => Some(text.text.as_str()),
+                UserContent::Image(_) => None,
+            })
+            .collect::<String>(),
+    }
+}
+
+fn custom_message_content_to_text(content: &CustomMessageContent) -> String {
+    match content {
+        CustomMessageContent::Text(text) => text.clone(),
+        CustomMessageContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block {
+                UserContent::Text(text) => Some(text.text.as_str()),
+                UserContent::Image(_) => None,
+            })
+            .collect::<String>(),
+    }
 }
 
 fn branch_summary_details_value(result: &BranchSummaryResult) -> Option<Value> {

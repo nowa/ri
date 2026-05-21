@@ -105,8 +105,8 @@ credentials, local model services where applicable, and manual OAuth flows.
 - Steering and follow-up queues.
 - Context transforms and custom `AgentMessage` conversion before LLM calls.
 - Custom stream providers, including proxy streaming through `/api/stream`.
-- Prompt templates, skills/resources loading, session storage, compaction, and
-  local execution environment utilities.
+- Prompt templates, skills/resources loading, session storage, compaction,
+  Pi-style session tree navigation, and local execution environment utilities.
 - Harness prompt context conversion for LLM messages, bash execution messages,
   custom session messages, branch summaries, and compaction summaries.
 - Pi-style skill metadata validation diagnostics and prompt-template argument
@@ -241,6 +241,7 @@ coding agent or UI needs around the raw agent loop.
 - provider authentication and stream option patching.
 - provider payload patching before network dispatch.
 - message queues for steering, follow-up, and next-turn work.
+- session tree navigation events and editable target text restoration.
 - save-point and settlement events for durable app state.
 
 Session context built by the harness preserves pi-style custom messages,

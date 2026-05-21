@@ -304,8 +304,11 @@ counterparts that pass.
     compact events, plus high-level
     session branch moves that generate and persist branch summaries with
     `session_before_branch_summary` supplied-summary/skip hooks,
-    hook success/error and generation-error pending-write flushes, and
-    branch-summary events.
+    hook success/error and generation-error pending-write flushes, branch-summary
+    events, and Pi-style `navigateTree` behavior through `navigate_tree` with
+    `session_before_tree` cancellation/provided-summary hooks, `session_tree`
+    events, target user/custom-message editor text restoration, and target-parent
+    leaf movement.
   - In-memory and JSONL session storage/repositories with branching, labels,
     metadata, context building, full-session fork, before-target user-message
     fork, at-target fork, invalid-target errors, and source-shaped
@@ -327,16 +330,16 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1105 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1107 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 925 tests: 1 library test, 293 `provider_core` tests, and
   631 `provider_live` tests. This is 204 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 180 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 182 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 30 above the 150 direct simple
+  `resources`, and `session_storage`. This is 32 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -365,7 +368,7 @@ Current Rust tests: 1105 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1105-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1107-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -388,7 +391,21 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after adding Rust-native
+- Latest local verification on 2026-05-21 after adding Rust-native Pi
+  `navigateTree` parity from `harness/agent-harness.ts` and
+  `harness/types.ts`: `navigate_tree` emits `session_tree`, calls
+  `session_before_tree` hooks with target/common-ancestor/branch preparation,
+  supports hook cancellation and hook-provided summaries, returns editor text
+  when navigating to a user or custom-message entry, and moves the leaf to the
+  target parent before appending branch summaries:
+  `cargo fmt`, `cargo fmt --check`,
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_navigate_tree_emits_pi_tree_event_and_returns_editor_text -- --exact`,
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_navigate_tree_hook_can_cancel_without_moving -- --exact`,
+  `cargo test -p ri-agent-core -- --test-threads=1`, `git diff --check`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1107 tests.
+- Previous local verification on 2026-05-21 after adding Rust-native
   `AgentToolUpdateCallback` / `tool_execution_update` parity from
   `packages/agent/src/types.ts` and `agent-loop.ts`: tool executors can emit
   partial `AgentToolResult` updates through an async callback, update events
@@ -498,6 +515,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1105 Rust tests cover the
+- Test parity is not certified by raw count alone: 1107 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
