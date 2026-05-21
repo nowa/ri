@@ -361,7 +361,7 @@ pub fn parse_authorization_input(input: &str) -> AuthorizationInput {
     if let Some((code, state)) = value.split_once('#') {
         return AuthorizationInput {
             code: non_empty(code),
-            state: non_empty(state),
+            state: non_empty(state.split('#').next().unwrap_or_default()),
         };
     }
 
@@ -613,7 +613,7 @@ fn parse_query_string(query: &str) -> AuthorizationInput {
 }
 
 fn looks_like_url(value: &str) -> bool {
-    value.starts_with("http://") || value.starts_with("https://")
+    value.contains("://")
 }
 
 fn non_empty(value: &str) -> Option<String> {

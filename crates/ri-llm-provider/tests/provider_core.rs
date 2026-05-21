@@ -2129,6 +2129,16 @@ fn anthropic_oauth_authorize_url_uses_localhost_callback() {
     );
     assert_eq!(parsed.code.as_deref(), Some("manual-code"));
     assert_eq!(parsed.state.as_deref(), Some("state-value"));
+
+    let parsed = parse_anthropic_authorization_input(
+        "HTTP://LOCALHOST:53692/callback?code=upper-code&state=upper-state",
+    );
+    assert_eq!(parsed.code.as_deref(), Some("upper-code"));
+    assert_eq!(parsed.state.as_deref(), Some("upper-state"));
+
+    let parsed = parse_anthropic_authorization_input("hash-code#hash-state#ignored");
+    assert_eq!(parsed.code.as_deref(), Some("hash-code"));
+    assert_eq!(parsed.state.as_deref(), Some("hash-state"));
 }
 
 #[test]

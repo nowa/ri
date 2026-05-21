@@ -137,15 +137,16 @@ counterparts that pass.
   - Anthropic OAuth helpers for PKCE generation, authorization URL
     construction, local callback server/state validation with pi-style
     success/error HTML pages and escaped details, manual redirect input login
-    flow, token/refresh JSON requests, localhost callback preservation, token
-    response parsing, and proxy-aware async authorization-code/refresh token
-    exchange primitives.
+    flow with source-style mixed-case callback URL and `code#state` parsing,
+    token/refresh JSON requests, localhost callback preservation, token response
+    parsing, and proxy-aware async authorization-code/refresh token exchange
+    primitives.
   - OpenAI Codex OAuth helpers for authorization URL construction,
-    local callback server/state validation, callback-driven login flow,
-    form-encoded token/refresh requests, refresh failure message formatting,
-    proxy-aware async authorization-code/refresh token exchange primitives,
-    ChatGPT JWT account-id validation, and source-style `accountId` credential
-    preservation.
+    local callback server/state validation, callback-driven login flow, shared
+    manual redirect input parsing parity, form-encoded token/refresh requests,
+    refresh failure message formatting, proxy-aware async
+    authorization-code/refresh token exchange primitives, ChatGPT JWT account-id
+    validation, and source-style `accountId` credential preservation.
   - OpenAI Codex Responses helpers for ChatGPT JWT account-id extraction,
     SSE/WebSocket headers, request-body construction, URL resolution, reasoning
     effort mapping, cached WebSocket input-delta continuation, SSE frame parsing
@@ -630,6 +631,15 @@ This migration is not complete.
   responses must include the same required `interval` and `expires_in` numeric
   fields as Pi before polling starts:
   `cargo fmt`, `cargo test -p ri-llm-provider --test provider_core github_copilot_oauth -- --test-threads=1`,
+  `cargo fmt --check`, and `git diff --check` passed.
+- Latest local verification on 2026-05-22 after aligning shared Anthropic/OpenAI
+  Codex OAuth manual authorization input parsing with Pi: full callback URLs
+  with mixed-case schemes now parse query `code`/`state`, and `code#state#...`
+  input keeps only the first state segment like JavaScript `split("#", 2)`:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core anthropic_oauth -- --test-threads=1`,
+  and
+  `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth -- --test-threads=1`,
   `cargo fmt --check`, and `git diff --check` passed.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
