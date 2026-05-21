@@ -497,12 +497,20 @@ pub struct OpenAIResponsesStreamProcessor {
     current_item_type: Option<String>,
     current_item: Option<Value>,
     current_partial_json: String,
+    request_service_tier: Option<String>,
     terminal: bool,
 }
 
 impl OpenAIResponsesStreamProcessor {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_request_service_tier(request_service_tier: Option<String>) -> Self {
+        Self {
+            request_service_tier,
+            ..Default::default()
+        }
     }
 
     pub fn is_terminal(&self) -> bool {
@@ -900,13 +908,14 @@ impl OpenAIResponsesStreamProcessor {
                     output.response_id = Some(id.to_owned());
                 }
                 if let Some(usage) = event.pointer("/response/usage") {
-                    output.usage = parse_openai_responses_usage(
-                        usage,
+                    let service_tier = effective_openai_responses_service_tier(
                         model,
                         event
                             .pointer("/response/service_tier")
                             .and_then(Value::as_str),
+                        self.request_service_tier.as_deref(),
                     );
+                    output.usage = parse_openai_responses_usage(usage, model, service_tier);
                 }
                 output.stop_reason = match event.pointer("/response/status").and_then(Value::as_str)
                 {
@@ -1100,6 +1109,20 @@ pub fn parse_openai_responses_usage(
     usage.cost.total =
         usage.cost.input + usage.cost.output + usage.cost.cache_read + usage.cost.cache_write;
     usage
+}
+
+fn effective_openai_responses_service_tier<'a>(
+    model: &Model,
+    response_service_tier: Option<&'a str>,
+    request_service_tier: Option<&'a str>,
+) -> Option<&'a str> {
+    if model.api == "openai-codex-responses"
+        && response_service_tier == Some("default")
+        && matches!(request_service_tier, Some("flex" | "priority"))
+    {
+        return request_service_tier;
+    }
+    response_service_tier.or(request_service_tier)
 }
 
 pub fn openai_responses_service_tier_cost_multiplier(

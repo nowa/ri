@@ -15232,6 +15232,46 @@ async fn builtin_openai_responses_provider_posts_json_and_parses_sse() {
 }
 
 #[tokio::test]
+async fn builtin_openai_responses_provider_prices_requested_service_tier_without_response_echo() {
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_service_tier\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_service_tier\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_service_tier\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hi\"}]}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_service_tier\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1000000,\"output_tokens\":1000000,\"total_tokens\":2000000}}}\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let mut model = get_model("openai", "gpt-5.5").expect("model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("test-key".to_owned());
+    options
+        .stream
+        .extra
+        .insert("serviceTier".to_owned(), json!("priority"));
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(text_of(&message), Some("Hi"));
+    assert_eq!(message.usage.input, 1_000_000);
+    assert_eq!(message.usage.output, 1_000_000);
+    assert!(request.contains("\"service_tier\":\"priority\""));
+    assert_cost_close(
+        "openai responses request service tier input cost",
+        message.usage.cost.input,
+        model.cost.input * 2.5,
+    );
+    assert_cost_close(
+        "openai responses request service tier output cost",
+        message.usage.cost.output,
+        model.cost.output * 2.5,
+    );
+}
+
+#[tokio::test]
 async fn builtin_openai_responses_provider_stream_options_preserve_reasoning_effort() {
     let sse = concat!(
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_reasoning\"}}\n\n",
@@ -16751,6 +16791,50 @@ async fn builtin_openai_codex_provider_posts_json_and_parses_sse() {
     assert!(request.contains("\"stream\":true"));
     assert!(request.contains("\"prompt_cache_key\":\"codex-session\""));
     assert!(request.contains("\"verbosity\":\"medium\""));
+}
+
+#[tokio::test]
+async fn builtin_openai_codex_provider_prices_requested_service_tier_when_response_echoes_default()
+{
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_codex_service_tier\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_codex_service_tier\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Code\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_codex_service_tier\",\"content\":[{\"type\":\"output_text\",\"text\":\"Code\"}]}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_codex_service_tier\",\"status\":\"completed\",\"service_tier\":\"default\",\"usage\":{\"input_tokens\":1000000,\"output_tokens\":1000000,\"total_tokens\":2000000}}}\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.session_id = Some("codex-service-tier-session".to_owned());
+    options.stream.transport = Some(Transport::Sse);
+    options
+        .stream
+        .extra
+        .insert("serviceTier".to_owned(), json!("priority"));
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(text_of(&message), Some("Code"));
+    assert_eq!(message.usage.input, 1_000_000);
+    assert_eq!(message.usage.output, 1_000_000);
+    assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
+    assert!(request.contains("\"service_tier\":\"priority\""));
+    assert_cost_close(
+        "openai codex request service tier input cost",
+        message.usage.cost.input,
+        model.cost.input * 2.5,
+    );
+    assert_cost_close(
+        "openai codex request service tier output cost",
+        message.usage.cost.output,
+        model.cost.output * 2.5,
+    );
 }
 
 #[tokio::test]

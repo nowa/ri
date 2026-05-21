@@ -145,9 +145,10 @@ counterparts that pass.
     SSE/WebSocket headers, request-body construction, URL resolution, reasoning
     effort mapping, cached WebSocket input-delta continuation, SSE frame parsing
     and retry/backoff request handling, WebSocket debug-stat accounting, and
-    service-tier usage cost resolution. WebSocket transport fallback now writes
-    pi-shaped `provider_transport_failure` diagnostics with nested `error` and
-    `details` fields.
+    service-tier usage cost resolution, including request-tier fallback when
+    Codex responses echo the API default tier. WebSocket transport fallback now
+    writes pi-shaped `provider_transport_failure` diagnostics with nested
+    `error` and `details` fields.
   - Session-scoped provider resource cleanup now covers both the OpenAI Codex
     WebSocket session cache and source-style registered cleanup hooks. This is
     the Rust-native counterpart of `session-resources.ts`: callers explicitly
@@ -193,7 +194,8 @@ counterparts that pass.
     summary stream blocks, refusal final content, source-shaped failed-response
     errors, incomplete terminal events, aborted reasoning history pruning,
     same-provider model handoff item-id omission, empty assistant-turn pruning,
-    and service-tier usage cost multipliers.
+    and service-tier usage cost multipliers, including request-tier fallback
+    when Responses API streams omit a service-tier echo.
   - OpenAI Completions payload helpers for empty-tools omission, string and
     function-object tool choice forwarding, strict-mode compatibility,
     provider reasoning fields, z.ai tool streaming, Anthropic-style

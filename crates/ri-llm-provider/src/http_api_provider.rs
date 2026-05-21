@@ -1214,7 +1214,9 @@ async fn stream_openai_codex_websocket_json(
         .await
         .map_err(CodexWebSocketStreamError::transport)?;
 
-    let mut processor = OpenAIResponsesStreamProcessor::new();
+    let mut processor = OpenAIResponsesStreamProcessor::with_request_service_tier(
+        request_service_tier_for_usage(model, options),
+    );
     loop {
         if push_abort_if_requested(sender, options, output) {
             let _ = socket.close().await;
@@ -1465,7 +1467,9 @@ async fn stream_openai_responses_sse_response(
     let mut byte_stream = response.bytes_stream();
     let mut parser = SseJsonParser::default();
     let mut events = Vec::new();
-    let mut processor = OpenAIResponsesStreamProcessor::new();
+    let mut processor = OpenAIResponsesStreamProcessor::with_request_service_tier(
+        request_service_tier_for_usage(model, options),
+    );
     while let Some(chunk) = byte_stream.next().await {
         if push_abort_if_requested(sender, options, output) {
             return Ok(());
@@ -1503,6 +1507,21 @@ async fn stream_openai_responses_sse_response(
     }
     processor.finish(output, sender);
     Ok(())
+}
+
+fn request_service_tier_for_usage(model: &Model, options: &SimpleStreamOptions) -> Option<String> {
+    if !matches!(
+        model.api.as_str(),
+        "openai-responses" | "openai-codex-responses"
+    ) {
+        return None;
+    }
+    options
+        .stream
+        .extra
+        .get("serviceTier")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 async fn stream_google_sse_json(
