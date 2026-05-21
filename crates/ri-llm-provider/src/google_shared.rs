@@ -82,7 +82,14 @@ pub fn build_google_simple_payload(
     options: SimpleStreamOptions,
 ) -> Value {
     let options = apply_simple_stream_defaults(model, options);
-    let thinking = if let Some(reasoning) = options.reasoning {
+    let explicit_thinking = options
+        .stream
+        .extra
+        .get("thinking")
+        .and_then(parse_google_thinking_options);
+    let thinking = if explicit_thinking.is_some() {
+        explicit_thinking
+    } else if let Some(reasoning) = options.reasoning {
         let clamped = crate::clamp_thinking_level(model, reasoning);
         let effort = if clamped == ThinkingLevel::Off {
             ThinkingLevel::High
@@ -136,6 +143,19 @@ pub fn build_google_simple_payload(
             ..Default::default()
         },
     )
+}
+
+fn parse_google_thinking_options(value: &Value) -> Option<GoogleThinkingOptions> {
+    let object = value.as_object()?;
+    let enabled = object.get("enabled")?.as_bool()?;
+    Some(GoogleThinkingOptions {
+        enabled,
+        budget_tokens: object.get("budgetTokens").and_then(Value::as_i64),
+        level: object
+            .get("level")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    })
 }
 
 pub fn build_google_payload(

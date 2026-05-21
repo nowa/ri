@@ -6583,6 +6583,31 @@ fn google_simple_payload_maps_reasoning_to_budget_or_level() {
         json!({ "includeThoughts": true, "thinkingLevel": "MEDIUM" })
     );
 
+    let mut provider_options = SimpleStreamOptions::default();
+    provider_options.stream.extra.insert(
+        "thinking".to_owned(),
+        json!({ "enabled": true, "budgetTokens": -1 }),
+    );
+    let payload = build_google_simple_payload(&flash, &context, provider_options);
+    assert_eq!(
+        payload["config"]["thinkingConfig"],
+        json!({ "includeThoughts": true, "thinkingBudget": -1 })
+    );
+
+    let mut provider_options = SimpleStreamOptions {
+        reasoning: Some(ThinkingLevel::High),
+        ..Default::default()
+    };
+    provider_options
+        .stream
+        .extra
+        .insert("thinking".to_owned(), json!({ "enabled": false }));
+    let payload = build_google_simple_payload(&flash, &context, provider_options);
+    assert_eq!(
+        payload["config"]["thinkingConfig"],
+        json!({ "thinkingBudget": 0 })
+    );
+
     let tool_context = Context {
         messages: vec![Message::User(UserMessage::text("Use a tool."))],
         tools: vec![Tool {
@@ -15726,12 +15751,17 @@ async fn builtin_google_provider_posts_json_and_parses_sse() {
     let (base_url, request_task) = mock_sse_server(sse).await;
     let mut model = Model::faux("google-generative-ai", "google", "gemini-test");
     model.base_url = base_url;
+    model.reasoning = true;
     let mut options = SimpleStreamOptions::default();
     options.stream.api_key = Some("gemini-key".to_owned());
     options
         .stream
         .extra
         .insert("toolChoice".to_owned(), json!("any"));
+    options.stream.extra.insert(
+        "thinking".to_owned(),
+        json!({ "enabled": true, "level": "LOW" }),
+    );
 
     let context = Context {
         messages: vec![Message::User(UserMessage::text("hello"))],
@@ -15773,6 +15803,10 @@ async fn builtin_google_provider_posts_json_and_parses_sse() {
     assert_eq!(
         request_json["config"]["toolConfig"]["functionCallingConfig"]["mode"],
         json!("ANY")
+    );
+    assert_eq!(
+        request_json["config"]["thinkingConfig"],
+        json!({ "includeThoughts": true, "thinkingLevel": "LOW" })
     );
 }
 
@@ -15893,12 +15927,17 @@ async fn builtin_google_vertex_provider_posts_json_and_parses_sse() {
     let (base_url, request_task) = mock_sse_server(sse).await;
     let mut model = Model::faux("google-vertex", "google-vertex", "gemini-test");
     model.base_url = base_url;
+    model.reasoning = true;
     let mut options = SimpleStreamOptions::default();
     options.stream.api_key = Some("vertex-key".to_owned());
     options
         .stream
         .extra
         .insert("toolChoice".to_owned(), json!("none"));
+    options.stream.extra.insert(
+        "thinking".to_owned(),
+        json!({ "enabled": true, "budgetTokens": 77 }),
+    );
 
     let context = Context {
         messages: vec![Message::User(UserMessage::text("hello"))],
@@ -15933,6 +15972,10 @@ async fn builtin_google_vertex_provider_posts_json_and_parses_sse() {
     assert_eq!(
         request_json["config"]["toolConfig"]["functionCallingConfig"]["mode"],
         json!("NONE")
+    );
+    assert_eq!(
+        request_json["config"]["thinkingConfig"],
+        json!({ "includeThoughts": true, "thinkingBudget": 77 })
     );
 }
 

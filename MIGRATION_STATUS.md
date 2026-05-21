@@ -454,6 +454,19 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning
+  `providers/google.ts` and `providers/google-vertex.ts` native `thinking`
+  option objects: Google/Gemini and Google Vertex payload construction now lets
+  explicit `thinking: { enabled, budgetTokens, level }` extras override generic
+  simple `reasoning` mapping, preserving Pi's provider-native
+  `thinkingConfig` forms for enabled, disabled, budget, and level controls:
+  `cargo test -p ri-llm-provider --test provider_core google_simple_payload_maps_reasoning_to_budget_or_level -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_google_provider_posts_json_and_parses_sse -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_google_vertex_provider_posts_json_and_parses_sse -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`,
+  `cargo test --workspace -- --list` (1161 tests enumerated), and
+  `cargo fmt --check` and `git diff --check` passed.
+- Latest local verification on 2026-05-21 after aligning
   `providers/anthropic.ts` provider-specific stream options: Anthropic payload
   construction now forwards `metadata.user_id`, string and object `toolChoice`,
   explicit `thinkingEnabled`, `thinkingBudgetTokens`, `effort`, and
