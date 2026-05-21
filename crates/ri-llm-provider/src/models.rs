@@ -315,8 +315,19 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("google", "gemini-2.5-flash"),
     ("google", "gemini-3-flash-preview"),
     ("google", "gemini-3.1-pro-preview"),
+    ("google-vertex", "gemini-1.5-flash"),
+    ("google-vertex", "gemini-1.5-flash-8b"),
+    ("google-vertex", "gemini-1.5-pro"),
+    ("google-vertex", "gemini-2.0-flash"),
+    ("google-vertex", "gemini-2.0-flash-lite"),
     ("google-vertex", "gemini-2.5-flash"),
+    ("google-vertex", "gemini-2.5-flash-lite"),
+    ("google-vertex", "gemini-2.5-flash-lite-preview-09-2025"),
+    ("google-vertex", "gemini-2.5-pro"),
     ("google-vertex", "gemini-3-flash-preview"),
+    ("google-vertex", "gemini-3-pro-preview"),
+    ("google-vertex", "gemini-3.1-pro-preview"),
+    ("google-vertex", "gemini-3.1-pro-preview-customtools"),
     ("deepseek", "deepseek-v4-flash"),
     ("deepseek", "deepseek-v4-pro"),
     ("opencode", "big-pickle"),
@@ -622,6 +633,9 @@ fn apply_known_model_overrides(model: &mut Model) {
     if model.provider == "deepseek" && apply_deepseek_generated_metadata(model) {
         return;
     }
+    if model.provider == "google-vertex" && apply_google_vertex_generated_metadata(model) {
+        return;
+    }
     if model.provider == "xai" && apply_xai_generated_metadata(model) {
         return;
     }
@@ -912,6 +926,178 @@ fn apply_deepseek_generated_metadata(model: &mut Model) -> bool {
         "requiresReasoningContentOnAssistantMessages": true,
         "thinkingFormat": "deepseek",
     }));
+    true
+}
+
+fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
+    let metadata = match model.id.as_str() {
+        "gemini-1.5-flash" => Some((
+            false,
+            None,
+            ModelCost {
+                input: 0.075,
+                output: 0.3,
+                cache_read: 0.01875,
+                cache_write: 0.0,
+            },
+            1_000_000,
+            8_192,
+        )),
+        "gemini-1.5-flash-8b" => Some((
+            false,
+            None,
+            ModelCost {
+                input: 0.0375,
+                output: 0.15,
+                cache_read: 0.01,
+                cache_write: 0.0,
+            },
+            1_000_000,
+            8_192,
+        )),
+        "gemini-1.5-pro" => Some((
+            false,
+            None,
+            ModelCost {
+                input: 1.25,
+                output: 5.0,
+                cache_read: 0.3125,
+                cache_write: 0.0,
+            },
+            1_000_000,
+            8_192,
+        )),
+        "gemini-2.0-flash" => Some((
+            false,
+            None,
+            ModelCost {
+                input: 0.15,
+                output: 0.6,
+                cache_read: 0.0375,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            8_192,
+        )),
+        "gemini-2.0-flash-lite" => Some((
+            true,
+            None,
+            ModelCost {
+                input: 0.075,
+                output: 0.3,
+                cache_read: 0.01875,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        )),
+        "gemini-2.5-flash" => Some((
+            true,
+            None,
+            ModelCost {
+                input: 0.3,
+                output: 2.5,
+                cache_read: 0.03,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        )),
+        "gemini-2.5-flash-lite" | "gemini-2.5-flash-lite-preview-09-2025" => Some((
+            true,
+            None,
+            ModelCost {
+                input: 0.1,
+                output: 0.4,
+                cache_read: 0.01,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        )),
+        "gemini-2.5-pro" => Some((
+            true,
+            None,
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        )),
+        "gemini-3-flash-preview" => Some((
+            true,
+            Some("flash3"),
+            ModelCost {
+                input: 0.5,
+                output: 3.0,
+                cache_read: 0.05,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        )),
+        "gemini-3-pro-preview" => Some((
+            true,
+            Some("pro3"),
+            ModelCost {
+                input: 2.0,
+                output: 12.0,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+            1_000_000,
+            64_000,
+        )),
+        "gemini-3.1-pro-preview" | "gemini-3.1-pro-preview-customtools" => Some((
+            true,
+            Some("pro3"),
+            ModelCost {
+                input: 2.0,
+                output: 12.0,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        )),
+        _ => None,
+    };
+    let Some((reasoning, thinking_map, cost, context_window, max_tokens)) = metadata else {
+        return false;
+    };
+
+    model.api = "google-vertex".to_owned();
+    model.base_url = base_url_for_provider("google-vertex").to_owned();
+    model.reasoning = reasoning;
+    model.thinking_level_map.clear();
+    match thinking_map {
+        Some("flash3") => {
+            model.thinking_level_map.insert(ThinkingLevel::Off, None);
+        }
+        Some("pro3") => {
+            model.thinking_level_map.insert(ThinkingLevel::Off, None);
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Minimal, None);
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Low, Some("LOW".to_owned()));
+            model.thinking_level_map.insert(ThinkingLevel::Medium, None);
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::High, Some("HIGH".to_owned()));
+        }
+        _ => {}
+    }
+    model.input = vec![crate::types::InputKind::Text];
+    ensure_image_input(model);
+    model.cost = cost;
+    model.context_window = context_window;
+    model.max_tokens = max_tokens;
+    model.compat = None;
     true
 }
 
