@@ -56,7 +56,8 @@ counterparts that pass.
     generated-catalog metadata parity for the current Codestral, Devstral,
     Magistral, Ministral, Mistral, and Pixtral model slice, Zai
     generated-catalog metadata parity for the current GLM coding model slice,
-    plus
+    Groq generated-catalog metadata parity for the current DeepSeek, Gemma,
+    Compound, Llama, Mistral, Kimi, GPT OSS, and Qwen model slice, plus
     OpenAI and Azure OpenAI Responses generated-catalog metadata parity for the
     current GPT-4/GPT-4.1/GPT-4o, GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5,
     and o-series model slices, plus OpenAI Codex generated-catalog metadata
@@ -447,10 +448,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1200 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1201 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 993 tests: 2 library tests, 360 `provider_core` tests, and
-  631 `provider_live` tests. This is 272 above the 721 direct simple source
+- `ri-llm-provider`: 994 tests: 2 library tests, 361 `provider_core` tests, and
+  631 `provider_live` tests. This is 273 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -485,7 +486,7 @@ Current Rust tests: 1200 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1200-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1201-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -912,6 +913,21 @@ This migration is not complete.
   `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
   `cargo fmt --check`, `git diff --check`, and
   `cargo test --workspace -- --list` passed; the list command enumerated 1200
+  tests.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` Groq catalog metadata: Rust now exposes the generated
+  DeepSeek, Gemma, Compound, Llama, Mistral, Kimi, GPT OSS, and Qwen model
+  slice and maps the source OpenAI-compatible API/base URL, text/image input
+  support, reasoning flags, Qwen thinking-level map, context/output windows,
+  and usage cost tables:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core groq_model_metadata_matches_generated_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_completions_payload_keeps_normal_groq_reasoning_effort_without_mapping -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core registered_model_apis_have_builtin_provider_implementations -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed; the list command enumerated 1201
   tests.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
@@ -1852,6 +1868,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1200 Rust tests cover the
+- Test parity is not certified by raw count alone: 1201 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

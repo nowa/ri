@@ -381,9 +381,23 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("vercel-ai-gateway", "google/gemini-2.5-flash"),
     ("vercel-ai-gateway", "anthropic/claude-opus-4.5"),
     ("vercel-ai-gateway", "openai/gpt-5.1-codex-max"),
+    ("groq", "deepseek-r1-distill-llama-70b"),
+    ("groq", "gemma2-9b-it"),
+    ("groq", "groq/compound"),
+    ("groq", "groq/compound-mini"),
+    ("groq", "llama-3.1-8b-instant"),
     ("groq", "llama-3.3-70b-versatile"),
+    ("groq", "llama3-70b-8192"),
+    ("groq", "llama3-8b-8192"),
+    ("groq", "meta-llama/llama-4-maverick-17b-128e-instruct"),
+    ("groq", "meta-llama/llama-4-scout-17b-16e-instruct"),
+    ("groq", "mistral-saba-24b"),
+    ("groq", "moonshotai/kimi-k2-instruct"),
+    ("groq", "moonshotai/kimi-k2-instruct-0905"),
     ("groq", "openai/gpt-oss-20b"),
     ("groq", "openai/gpt-oss-120b"),
+    ("groq", "openai/gpt-oss-safeguard-20b"),
+    ("groq", "qwen-qwq-32b"),
     ("groq", "qwen/qwen3-32b"),
     ("cerebras", "gpt-oss-120b"),
     ("cerebras", "llama3.1-8b"),
@@ -673,6 +687,10 @@ fn apply_known_model_overrides(model: &mut Model) {
     }
 
     if model.provider == "mistral" && apply_mistral_generated_metadata(model) {
+        return;
+    }
+
+    if model.provider == "groq" && apply_groq_generated_metadata(model) {
         return;
     }
 
@@ -2083,6 +2101,252 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
     model.base_url = base_url_for_provider("mistral").to_owned();
     model.reasoning = reasoning;
     model.thinking_level_map.clear();
+    model.input = vec![crate::types::InputKind::Text];
+    if image_input {
+        ensure_image_input(model);
+    }
+    model.cost = cost;
+    model.context_window = context_window;
+    model.max_tokens = max_tokens;
+    model.compat = None;
+    true
+}
+
+fn apply_groq_generated_metadata(model: &mut Model) -> bool {
+    let metadata = match model.id.as_str() {
+        "deepseek-r1-distill-llama-70b" => Some((
+            true,
+            false,
+            None,
+            ModelCost {
+                input: 0.75,
+                output: 0.99,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            8_192,
+        )),
+        "gemma2-9b-it" => Some((
+            false,
+            false,
+            None,
+            ModelCost {
+                input: 0.2,
+                output: 0.2,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            8_192,
+            8_192,
+        )),
+        "groq/compound" | "groq/compound-mini" => {
+            Some((true, false, None, ModelCost::default(), 131_072, 8_192))
+        }
+        "llama-3.1-8b-instant" => Some((
+            false,
+            false,
+            None,
+            ModelCost {
+                input: 0.05,
+                output: 0.08,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            131_072,
+        )),
+        "llama-3.3-70b-versatile" => Some((
+            false,
+            false,
+            None,
+            ModelCost {
+                input: 0.59,
+                output: 0.79,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            32_768,
+        )),
+        "llama3-70b-8192" => Some((
+            false,
+            false,
+            None,
+            ModelCost {
+                input: 0.59,
+                output: 0.79,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            8_192,
+            8_192,
+        )),
+        "llama3-8b-8192" => Some((
+            false,
+            false,
+            None,
+            ModelCost {
+                input: 0.05,
+                output: 0.08,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            8_192,
+            8_192,
+        )),
+        "meta-llama/llama-4-maverick-17b-128e-instruct" => Some((
+            false,
+            true,
+            None,
+            ModelCost {
+                input: 0.2,
+                output: 0.6,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            8_192,
+        )),
+        "meta-llama/llama-4-scout-17b-16e-instruct" => Some((
+            false,
+            true,
+            None,
+            ModelCost {
+                input: 0.11,
+                output: 0.34,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            8_192,
+        )),
+        "mistral-saba-24b" => Some((
+            false,
+            false,
+            None,
+            ModelCost {
+                input: 0.79,
+                output: 0.79,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            32_768,
+            32_768,
+        )),
+        "moonshotai/kimi-k2-instruct" => Some((
+            false,
+            false,
+            None,
+            ModelCost {
+                input: 1.0,
+                output: 3.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            16_384,
+        )),
+        "moonshotai/kimi-k2-instruct-0905" => Some((
+            false,
+            false,
+            None,
+            ModelCost {
+                input: 1.0,
+                output: 3.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            16_384,
+        )),
+        "openai/gpt-oss-120b" => Some((
+            true,
+            false,
+            None,
+            ModelCost {
+                input: 0.15,
+                output: 0.6,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            65_536,
+        )),
+        "openai/gpt-oss-20b" => Some((
+            true,
+            false,
+            None,
+            ModelCost {
+                input: 0.075,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            65_536,
+        )),
+        "openai/gpt-oss-safeguard-20b" => Some((
+            true,
+            false,
+            None,
+            ModelCost {
+                input: 0.075,
+                output: 0.3,
+                cache_read: 0.037,
+                cache_write: 0.0,
+            },
+            131_072,
+            65_536,
+        )),
+        "qwen-qwq-32b" => Some((
+            true,
+            false,
+            None,
+            ModelCost {
+                input: 0.29,
+                output: 0.39,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            16_384,
+        )),
+        "qwen/qwen3-32b" => Some((
+            true,
+            false,
+            Some("qwen3"),
+            ModelCost {
+                input: 0.29,
+                output: 0.59,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            40_960,
+        )),
+        _ => None,
+    };
+    let Some((reasoning, image_input, thinking_profile, cost, context_window, max_tokens)) =
+        metadata
+    else {
+        return false;
+    };
+
+    model.api = "openai-completions".to_owned();
+    model.base_url = base_url_for_provider("groq").to_owned();
+    model.reasoning = reasoning;
+    model.thinking_level_map.clear();
+    if thinking_profile == Some("qwen3") {
+        model
+            .thinking_level_map
+            .insert(ThinkingLevel::Minimal, None);
+        model.thinking_level_map.insert(ThinkingLevel::Low, None);
+        model.thinking_level_map.insert(ThinkingLevel::Medium, None);
+        model
+            .thinking_level_map
+            .insert(ThinkingLevel::High, Some("default".to_owned()));
+    }
     model.input = vec![crate::types::InputKind::Text];
     if image_input {
         ensure_image_input(model);

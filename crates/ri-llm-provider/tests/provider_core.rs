@@ -1393,6 +1393,315 @@ fn mistral_model_metadata_matches_generated_catalog() {
 }
 
 #[test]
+fn groq_model_metadata_matches_generated_catalog() {
+    let models = get_models("groq");
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "deepseek-r1-distill-llama-70b",
+            "gemma2-9b-it",
+            "groq/compound",
+            "groq/compound-mini",
+            "llama-3.1-8b-instant",
+            "llama-3.3-70b-versatile",
+            "llama3-70b-8192",
+            "llama3-8b-8192",
+            "meta-llama/llama-4-maverick-17b-128e-instruct",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+            "mistral-saba-24b",
+            "moonshotai/kimi-k2-instruct",
+            "moonshotai/kimi-k2-instruct-0905",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "openai/gpt-oss-safeguard-20b",
+            "qwen-qwq-32b",
+            "qwen/qwen3-32b",
+        ]
+    );
+
+    for (model_id, reasoning, image_input, thinking, cost, context_window, max_tokens) in [
+        (
+            "deepseek-r1-distill-llama-70b",
+            true,
+            false,
+            "none",
+            ModelCost {
+                input: 0.75,
+                output: 0.99,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            8_192,
+        ),
+        (
+            "gemma2-9b-it",
+            false,
+            false,
+            "none",
+            ModelCost {
+                input: 0.2,
+                output: 0.2,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            8_192,
+            8_192,
+        ),
+        (
+            "groq/compound",
+            true,
+            false,
+            "none",
+            ModelCost::default(),
+            131_072,
+            8_192,
+        ),
+        (
+            "groq/compound-mini",
+            true,
+            false,
+            "none",
+            ModelCost::default(),
+            131_072,
+            8_192,
+        ),
+        (
+            "llama-3.1-8b-instant",
+            false,
+            false,
+            "none",
+            ModelCost {
+                input: 0.05,
+                output: 0.08,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            131_072,
+        ),
+        (
+            "llama-3.3-70b-versatile",
+            false,
+            false,
+            "none",
+            ModelCost {
+                input: 0.59,
+                output: 0.79,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            32_768,
+        ),
+        (
+            "llama3-70b-8192",
+            false,
+            false,
+            "none",
+            ModelCost {
+                input: 0.59,
+                output: 0.79,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            8_192,
+            8_192,
+        ),
+        (
+            "llama3-8b-8192",
+            false,
+            false,
+            "none",
+            ModelCost {
+                input: 0.05,
+                output: 0.08,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            8_192,
+            8_192,
+        ),
+        (
+            "meta-llama/llama-4-maverick-17b-128e-instruct",
+            false,
+            true,
+            "none",
+            ModelCost {
+                input: 0.2,
+                output: 0.6,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            8_192,
+        ),
+        (
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+            false,
+            true,
+            "none",
+            ModelCost {
+                input: 0.11,
+                output: 0.34,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            8_192,
+        ),
+        (
+            "mistral-saba-24b",
+            false,
+            false,
+            "none",
+            ModelCost {
+                input: 0.79,
+                output: 0.79,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            32_768,
+            32_768,
+        ),
+        (
+            "moonshotai/kimi-k2-instruct",
+            false,
+            false,
+            "none",
+            ModelCost {
+                input: 1.0,
+                output: 3.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            16_384,
+        ),
+        (
+            "moonshotai/kimi-k2-instruct-0905",
+            false,
+            false,
+            "none",
+            ModelCost {
+                input: 1.0,
+                output: 3.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            16_384,
+        ),
+        (
+            "openai/gpt-oss-120b",
+            true,
+            false,
+            "none",
+            ModelCost {
+                input: 0.15,
+                output: 0.6,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            65_536,
+        ),
+        (
+            "openai/gpt-oss-20b",
+            true,
+            false,
+            "none",
+            ModelCost {
+                input: 0.075,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            65_536,
+        ),
+        (
+            "openai/gpt-oss-safeguard-20b",
+            true,
+            false,
+            "none",
+            ModelCost {
+                input: 0.075,
+                output: 0.3,
+                cache_read: 0.037,
+                cache_write: 0.0,
+            },
+            131_072,
+            65_536,
+        ),
+        (
+            "qwen-qwq-32b",
+            true,
+            false,
+            "none",
+            ModelCost {
+                input: 0.29,
+                output: 0.39,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            16_384,
+        ),
+        (
+            "qwen/qwen3-32b",
+            true,
+            false,
+            "qwen3",
+            ModelCost {
+                input: 0.29,
+                output: 0.59,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            40_960,
+        ),
+    ] {
+        let model = get_model("groq", model_id).expect(model_id);
+        assert_eq!(model.api, "openai-completions", "{model_id} api");
+        assert_eq!(model.provider, "groq", "{model_id} provider");
+        assert_eq!(
+            model.base_url, "https://api.groq.com/openai/v1",
+            "{model_id} base URL"
+        );
+        assert_eq!(model.reasoning, reasoning, "{model_id} reasoning");
+        let expected_input = if image_input {
+            vec![InputKind::Text, InputKind::Image]
+        } else {
+            vec![InputKind::Text]
+        };
+        assert_eq!(model.input, expected_input, "{model_id} input");
+        assert_eq!(model.cost, cost, "{model_id} cost");
+        assert_eq!(model.context_window, context_window, "{model_id} context");
+        assert_eq!(model.max_tokens, max_tokens, "{model_id} max tokens");
+        assert!(model.compat.is_none(), "{model_id} compat");
+
+        let expected_thinking = match thinking {
+            "qwen3" => BTreeMap::from([
+                (ThinkingLevel::Minimal, None),
+                (ThinkingLevel::Low, None),
+                (ThinkingLevel::Medium, None),
+                (ThinkingLevel::High, Some("default".to_owned())),
+            ]),
+            _ => BTreeMap::new(),
+        };
+        assert_eq!(
+            model.thinking_level_map, expected_thinking,
+            "{model_id} thinking"
+        );
+    }
+}
+
+#[test]
 fn xai_model_metadata_matches_generated_catalog() {
     let models = get_models("xai");
     assert_eq!(
