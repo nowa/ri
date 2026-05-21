@@ -7,6 +7,7 @@ use crate::{
     openai_codex_responses::extract_openai_codex_account_id,
     types::now_millis,
 };
+use ring::rand::SecureRandom;
 use serde_json::Value;
 use std::{collections::BTreeMap, net::SocketAddr};
 
@@ -17,6 +18,14 @@ pub const OPENAI_CODEX_OAUTH_CALLBACK_PORT: u16 = 1455;
 pub const OPENAI_CODEX_OAUTH_CALLBACK_PATH: &str = "/auth/callback";
 pub const OPENAI_CODEX_OAUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 pub const OPENAI_CODEX_OAUTH_SCOPE: &str = "openid profile email offline_access";
+
+pub fn generate_openai_codex_oauth_state() -> Result<String, String> {
+    let rng = ring::rand::SystemRandom::new();
+    let mut bytes = [0_u8; 16];
+    rng.fill(&mut bytes)
+        .map_err(|_| "Failed to generate OpenAI Codex OAuth state".to_owned())?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
 
 pub fn build_openai_codex_authorize_url(
     code_challenge: &str,

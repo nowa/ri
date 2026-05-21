@@ -146,9 +146,10 @@ counterparts that pass.
     manual redirect input parsing parity, manual-code fallback when the local
     callback port is unavailable, form-encoded token/refresh requests, refresh
     failure message formatting, proxy-aware async authorization-code/refresh
-    token exchange primitives, source-style Codex token expiry without the
-    Anthropic/GitHub 5-minute early-refresh offset, ChatGPT JWT account-id
-    validation, and source-style `accountId` credential preservation.
+    token exchange primitives, source-style 16-byte lowercase-hex state
+    generation and Codex token expiry without the Anthropic/GitHub 5-minute
+    early-refresh offset, ChatGPT JWT account-id validation, and source-style
+    `accountId` credential preservation.
   - OpenAI Codex Responses helpers for ChatGPT JWT account-id extraction,
     SSE/WebSocket headers, request-body construction, URL resolution, reasoning
     effort mapping, cached WebSocket input-delta continuation, SSE frame parsing
@@ -658,6 +659,14 @@ This migration is not complete.
   Copilot:
   `cargo fmt`,
   `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth -- --test-threads=1`,
+  `cargo fmt --check`, and `git diff --check` passed.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `utils/oauth/openai-codex.ts` state generation: CLI Codex OAuth now uses 16
+  random bytes encoded as 32 lowercase hex characters, matching
+  `randomBytes(16).toString("hex")` instead of reusing a PKCE verifier prefix:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth -- --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core pi_ai_cli -- --test-threads=1`,
   `cargo fmt --check`, and `git diff --check` passed.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed

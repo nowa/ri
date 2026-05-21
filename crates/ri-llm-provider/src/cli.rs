@@ -14,7 +14,7 @@ use crate::{
     },
     openai_codex_oauth::{
         OPENAI_CODEX_OAUTH_TOKEN_URL, exchange_openai_codex_authorization_code_with_url_at,
-        start_openai_codex_oauth_login_flow,
+        generate_openai_codex_oauth_state, start_openai_codex_oauth_login_flow,
     },
     types::now_millis,
 };
@@ -350,8 +350,7 @@ fn prompt_line(prompt: &str) -> Result<String, String> {
 }
 
 fn generate_cli_state() -> Result<String, String> {
-    let pkce = crate::anthropic_oauth::generate_pkce()?;
-    Ok(pkce.verifier.chars().take(32).collect())
+    generate_openai_codex_oauth_state()
 }
 
 trait EmptyStringFallback {

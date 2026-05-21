@@ -2510,6 +2510,15 @@ async fn anthropic_oauth_refresh_routes_token_request_through_resolved_proxy() {
 
 #[test]
 fn openai_codex_oauth_authorize_url_matches_cli_flow_parameters() {
+    let state = generate_openai_codex_oauth_state().expect("state");
+    assert_eq!(state.len(), 32);
+    assert!(
+        state
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()),
+        "{state}"
+    );
+
     let url = build_openai_codex_authorize_url("challenge-value", "state-value", None);
 
     assert!(url.starts_with("https://auth.openai.com/oauth/authorize?"));
