@@ -320,15 +320,23 @@ async fn run_until_done(
     let mut hook_new_messages = initial_new_messages.to_vec();
     let mut active_config = config.clone();
     let max_turns = config.max_turns.max(1);
-    if !active_config.skip_initial_queued_message_poll {
-        let queued_messages = inject_queued_messages(context, &active_config, events).await?;
-        hook_new_messages.extend(queued_messages.clone());
-        all_messages.extend(queued_messages);
+    let mut pending_messages = if active_config.skip_initial_queued_message_poll {
+        Vec::new()
+    } else {
+        get_queued_messages(&active_config).await?
+    };
+    if active_config.skip_initial_queued_message_poll {
+        active_config.skip_initial_queued_message_poll = false;
     }
-    active_config.skip_initial_queued_message_poll = false;
     for turn_index in 0..max_turns {
         if turn_index > 0 {
             record_event(events, &active_config, AgentEvent::TurnStart).await;
+        }
+        if !pending_messages.is_empty() {
+            let queued_messages = std::mem::take(&mut pending_messages);
+            record_injected_messages(context, &active_config, events, &queued_messages).await;
+            hook_new_messages.extend(queued_messages.clone());
+            all_messages.extend(queued_messages);
         }
         let outcome = run_one_turn(context, &active_config, events).await?;
         let should_continue = !outcome.terminate && !outcome.tool_results.is_empty();
@@ -341,19 +349,15 @@ async fn run_until_done(
         if should_stop_after_turn(context, &active_config, &outcome, &hook_new_messages).await? {
             return Ok(all_messages);
         }
-        let queued_messages = inject_queued_messages(context, &active_config, events).await?;
-        let has_queued_messages = !queued_messages.is_empty();
-        hook_new_messages.extend(queued_messages.clone());
-        all_messages.extend(queued_messages);
+        pending_messages = get_queued_messages(&active_config).await?;
+        let has_queued_messages = !pending_messages.is_empty();
         if should_continue || has_queued_messages {
             continue;
         }
-        let follow_up_messages = inject_follow_up_messages(context, &active_config, events).await?;
-        if follow_up_messages.is_empty() {
+        pending_messages = get_follow_up_messages(&active_config).await?;
+        if pending_messages.is_empty() {
             return Ok(all_messages);
         }
-        hook_new_messages.extend(follow_up_messages.clone());
-        all_messages.extend(follow_up_messages);
     }
     Err(format!(
         "Agent loop exceeded maximum tool continuation turns: {max_turns}"
@@ -430,45 +434,30 @@ async fn should_stop_after_turn(
     .await
 }
 
-async fn inject_queued_messages(
-    context: &mut AgentContext,
-    config: &AgentLoopConfig,
-    events: &mut Vec<AgentEvent>,
-) -> Result<Vec<AgentMessage>, String> {
-    inject_messages_from_provider(
-        context,
-        config.queued_message_provider.as_ref(),
-        config,
-        events,
-    )
-    .await
+async fn get_queued_messages(config: &AgentLoopConfig) -> Result<Vec<AgentMessage>, String> {
+    get_messages_from_provider(config.queued_message_provider.as_ref()).await
 }
 
-async fn inject_follow_up_messages(
-    context: &mut AgentContext,
-    config: &AgentLoopConfig,
-    events: &mut Vec<AgentEvent>,
-) -> Result<Vec<AgentMessage>, String> {
-    inject_messages_from_provider(
-        context,
-        config.follow_up_message_provider.as_ref(),
-        config,
-        events,
-    )
-    .await
+async fn get_follow_up_messages(config: &AgentLoopConfig) -> Result<Vec<AgentMessage>, String> {
+    get_messages_from_provider(config.follow_up_message_provider.as_ref()).await
 }
 
-async fn inject_messages_from_provider(
-    context: &mut AgentContext,
+async fn get_messages_from_provider(
     provider: Option<&Arc<dyn AgentQueuedMessageProvider>>,
-    config: &AgentLoopConfig,
-    events: &mut Vec<AgentEvent>,
 ) -> Result<Vec<AgentMessage>, String> {
     let Some(provider) = provider else {
         return Ok(Vec::new());
     };
-    let queued_messages = provider.get_queued_messages().await?;
-    for message in &queued_messages {
+    provider.get_queued_messages().await
+}
+
+async fn record_injected_messages(
+    context: &mut AgentContext,
+    config: &AgentLoopConfig,
+    events: &mut Vec<AgentEvent>,
+    queued_messages: &[AgentMessage],
+) {
+    for message in queued_messages {
         record_event(
             events,
             config,
@@ -487,7 +476,6 @@ async fn inject_messages_from_provider(
         )
         .await;
     }
-    Ok(queued_messages)
 }
 
 async fn run_one_turn(

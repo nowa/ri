@@ -1567,6 +1567,36 @@ async fn agent_loop_injects_queued_messages_after_all_tool_results() {
         .expect("queued user event");
     assert!(tool_1_index < interrupt_index);
     assert!(tool_2_index < interrupt_index);
+    let event_markers = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::TurnStart => Some("turn_start".to_owned()),
+            AgentEvent::TurnEnd { .. } => Some("turn_end".to_owned()),
+            AgentEvent::MessageStart {
+                message: AgentMessage::User(user),
+            } => match &user.content {
+                UserContentValue::Plain(text) => Some(format!("message_start:user:{text}")),
+                UserContentValue::Blocks(_) => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let first_turn_end = event_markers
+        .iter()
+        .position(|marker| marker == "turn_end")
+        .expect("first turn_end");
+    let second_turn_start = event_markers
+        .iter()
+        .enumerate()
+        .skip(first_turn_end + 1)
+        .find_map(|(index, marker)| (marker == "turn_start").then_some(index))
+        .expect("second turn_start");
+    let interrupt_start = event_markers
+        .iter()
+        .position(|marker| marker == "message_start:user:interrupt")
+        .expect("queued user message_start");
+    assert!(first_turn_end < second_turn_start);
+    assert!(second_turn_start < interrupt_start);
     registration.unregister();
 }
 
@@ -1905,6 +1935,36 @@ async fn agent_loop_processes_follow_up_messages_after_agent_would_stop() {
         message_end_roles,
         vec!["user", "assistant", "user", "assistant"]
     );
+    let event_markers = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::TurnStart => Some("turn_start".to_owned()),
+            AgentEvent::TurnEnd { .. } => Some("turn_end".to_owned()),
+            AgentEvent::MessageStart {
+                message: AgentMessage::User(user),
+            } => match &user.content {
+                UserContentValue::Plain(text) => Some(format!("message_start:user:{text}")),
+                UserContentValue::Blocks(_) => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let first_turn_end = event_markers
+        .iter()
+        .position(|marker| marker == "turn_end")
+        .expect("first turn_end");
+    let second_turn_start = event_markers
+        .iter()
+        .enumerate()
+        .skip(first_turn_end + 1)
+        .find_map(|(index, marker)| (marker == "turn_start").then_some(index))
+        .expect("second turn_start");
+    let follow_up_start = event_markers
+        .iter()
+        .position(|marker| marker == "message_start:user:Queued follow-up")
+        .expect("follow-up message_start");
+    assert!(first_turn_end < second_turn_start);
+    assert!(second_turn_start < follow_up_start);
     registration.unregister();
 }
 

@@ -271,8 +271,10 @@ counterparts that pass.
     steering/follow-up queues, matching `agent-loop.ts`.
     Queued messages can be injected before the initial provider request or
     after all tool-result messages are written and before the next LLM request,
-    and follow-up messages can restart the loop after the agent would otherwise
-    stop. Tool batches terminate only when every finalized result terminates.
+    with Pi-style next-turn `turn_start` ordering for delayed
+    steering/follow-up injections, and follow-up messages can restart the loop
+    after the agent would otherwise stop. Tool batches terminate only when
+    every finalized result terminates.
     Parallel tool execution is the default, emits completion events in
     completion order while persisting tool-result messages in source order, and
     sequential batches emit each tool's end and tool-result message before the
@@ -427,6 +429,16 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning Pi
+  `agent-loop.ts` queued-message turn ordering: delayed steering messages and
+  follow-up messages are now emitted after the next turn's `turn_start`, rather
+  than between the previous `turn_end` and the next `turn_start`:
+  `cargo test -p ri-agent-core --test agent_core agent_loop_injects_queued_messages_after_all_tool_results -- --exact`,
+  `cargo test -p ri-agent-core --test agent_core agent_loop_processes_follow_up_messages_after_agent_would_stop -- --exact`,
+  `cargo fmt`, `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo test --workspace -- --list` (1133 tests enumerated), and
+  `cargo test --workspace -- --test-threads=1` passed.
+- Previous local verification on 2026-05-21 after aligning Pi
   stateful `Agent` executor-failure handling from `agent.ts`: Rust provider
   start failures now persist an assistant error message with the source-shaped
   empty text content block in addition to stop reason, error message, state, and
