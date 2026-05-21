@@ -453,6 +453,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-21 after aligning `providers/google.ts`
+  and `providers/google-vertex.ts` provider-specific `toolChoice` forwarding:
+  Google/Gemini and Google Vertex simple payload and built-in HTTP request
+  construction now preserve non-empty `toolChoice` extras from ordinary
+  `stream` options and emit Gemini `functionCallingConfig.mode` only when tools
+  are present, matching the Pi payload gate:
+  `cargo test -p ri-llm-provider --test provider_core google_simple_payload_maps_reasoning_to_budget_or_level -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_google_provider_posts_json_and_parses_sse -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_google_vertex_provider_posts_json_and_parses_sse -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`,
+  `cargo test --workspace -- --list` (1161 tests enumerated), and
+  `cargo fmt --check` and `git diff --check` passed.
 - Latest local verification on 2026-05-21 after aligning
   `providers/mistral.ts` provider-specific stream options: Mistral simple and
   built-in HTTP request construction now forwards `toolChoice`, `promptMode`,

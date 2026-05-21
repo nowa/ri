@@ -125,6 +125,13 @@ pub fn build_google_simple_payload(
         GooglePayloadOptions {
             temperature: options.stream.temperature,
             max_tokens: options.stream.max_tokens,
+            tool_choice: options
+                .stream
+                .extra
+                .get("toolChoice")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
             thinking,
             ..Default::default()
         },

@@ -6508,6 +6508,26 @@ fn google_simple_payload_maps_reasoning_to_budget_or_level() {
         flash3_payload["config"]["thinkingConfig"],
         json!({ "includeThoughts": true, "thinkingLevel": "MEDIUM" })
     );
+
+    let tool_context = Context {
+        messages: vec![Message::User(UserMessage::text("Use a tool."))],
+        tools: vec![Tool {
+            name: "lookup".to_owned(),
+            description: "Lookup tool".to_owned(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        }],
+        ..Default::default()
+    };
+    let mut provider_options = SimpleStreamOptions::default();
+    provider_options
+        .stream
+        .extra
+        .insert("toolChoice".to_owned(), json!("any"));
+    let payload = build_google_simple_payload(&flash, &tool_context, provider_options);
+    assert_eq!(
+        payload["config"]["toolConfig"]["functionCallingConfig"]["mode"],
+        json!("ANY")
+    );
 }
 
 #[test]
@@ -15532,8 +15552,22 @@ async fn builtin_google_provider_posts_json_and_parses_sse() {
     model.base_url = base_url;
     let mut options = SimpleStreamOptions::default();
     options.stream.api_key = Some("gemini-key".to_owned());
+    options
+        .stream
+        .extra
+        .insert("toolChoice".to_owned(), json!("any"));
 
-    let message = complete_simple(&model, user_context("hello"), options)
+    let context = Context {
+        messages: vec![Message::User(UserMessage::text("hello"))],
+        tools: vec![Tool {
+            name: "lookup".to_owned(),
+            description: "Lookup tool".to_owned(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        }],
+        ..Default::default()
+    };
+
+    let message = complete_simple(&model, context, options)
         .await
         .expect("complete");
     let request = request_task.await.expect("request task");
@@ -15558,6 +15592,12 @@ async fn builtin_google_provider_posts_json_and_parses_sse() {
     );
     assert!(request.contains("\"model\":\"gemini-test\""));
     assert!(request.contains("\"contents\""));
+    let request_body = request.split("\r\n\r\n").nth(1).expect("request body");
+    let request_json: Value = serde_json::from_str(request_body).expect("request json");
+    assert_eq!(
+        request_json["config"]["toolConfig"]["functionCallingConfig"]["mode"],
+        json!("ANY")
+    );
 }
 
 #[tokio::test]
@@ -15679,8 +15719,22 @@ async fn builtin_google_vertex_provider_posts_json_and_parses_sse() {
     model.base_url = base_url;
     let mut options = SimpleStreamOptions::default();
     options.stream.api_key = Some("vertex-key".to_owned());
+    options
+        .stream
+        .extra
+        .insert("toolChoice".to_owned(), json!("none"));
 
-    let message = complete_simple(&model, user_context("hello"), options)
+    let context = Context {
+        messages: vec![Message::User(UserMessage::text("hello"))],
+        tools: vec![Tool {
+            name: "lookup".to_owned(),
+            description: "Lookup tool".to_owned(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        }],
+        ..Default::default()
+    };
+
+    let message = complete_simple(&model, context, options)
         .await
         .expect("complete");
     let request = request_task.await.expect("request task");
@@ -15698,6 +15752,12 @@ async fn builtin_google_vertex_provider_posts_json_and_parses_sse() {
             .contains("x-goog-api-key: vertex-key")
     );
     assert!(request.contains("\"model\":\"gemini-test\""));
+    let request_body = request.split("\r\n\r\n").nth(1).expect("request body");
+    let request_json: Value = serde_json::from_str(request_body).expect("request json");
+    assert_eq!(
+        request_json["config"]["toolConfig"]["functionCallingConfig"]["mode"],
+        json!("NONE")
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
