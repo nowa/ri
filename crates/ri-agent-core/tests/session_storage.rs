@@ -937,6 +937,11 @@ fn jsonl_repo_stores_lists_opens_deletes_and_forks_by_metadata() {
     assert!(source_metadata.path.contains("--tmp-my-project--"));
     assert!(other_metadata.path.contains("--tmp-other-project--"));
     assert!(PathBuf::from(&source_metadata.path).exists());
+    fs::create_dir_all(
+        root.join(JsonlSessionRepo::encoded_cwd(cwd))
+            .join("skip.jsonl"),
+    )
+    .expect("jsonl-named directory");
     assert_eq!(
         repo.list(Some(cwd))
             .expect("list cwd")

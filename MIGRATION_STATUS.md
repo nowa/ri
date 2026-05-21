@@ -338,10 +338,11 @@ counterparts that pass.
     events, target user/custom-message editor text restoration, and target-parent
     leaf movement.
   - In-memory and JSONL session storage/repositories with branching, labels,
-    metadata, context building, full-session fork, before-target user-message
-    fork, at-target fork, invalid-target errors, Pi-style JSONL entry
-    validation for required `parentId`, non-empty `timestamp`, and
-    `leaf.targetId` fields, and source-shaped `bashExecution` message entries with LLM-context formatting,
+    metadata, context building, JSONL repo listing that ignores `.jsonl`
+    directories, full-session fork, before-target user-message fork, at-target
+    fork, invalid-target errors, Pi-style JSONL entry validation for required
+    `parentId`, non-empty `timestamp`, and `leaf.targetId` fields, and
+    source-shaped `bashExecution` message entries with LLM-context formatting,
     `excludeFromContext` filtering, JSONL round trips, token estimates, and
     compaction turn-start handling.
   - Skill and prompt-template invocation formatting plus skill/prompt-template
@@ -424,6 +425,15 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning Pi
+  `JsonlSessionRepo.list` filtering from `harness/session/jsonl-repo.ts`:
+  Rust repo listing now skips directory entries even when their name ends in
+  `.jsonl`, matching the source `file.kind !== "directory"` filter:
+  `cargo test -p ri-agent-core --test session_storage jsonl_repo_stores_lists_opens_deletes_and_forks_by_metadata -- --exact`,
+  `cargo fmt`, `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo test --workspace -- --list` (1132 tests enumerated), and
+  `cargo test --workspace -- --test-threads=1` passed.
+- Previous local verification on 2026-05-21 after aligning Pi
   `JsonlSessionStorage` entry parsing from `harness/session/jsonl-storage.ts`:
   Rust JSONL loading now rejects missing/invalid `parentId`, missing/empty
   `timestamp`, and missing/invalid `leaf.targetId` before deserializing the

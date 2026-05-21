@@ -1174,6 +1174,9 @@ impl JsonlSessionRepo {
             }
             for entry in fs::read_dir(&dir).map_err(storage_error)? {
                 let entry = entry.map_err(storage_error)?;
+                if entry.file_type().map_err(storage_error)?.is_dir() {
+                    continue;
+                }
                 let path = entry.path();
                 if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
                     continue;
