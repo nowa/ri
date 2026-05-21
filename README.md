@@ -129,7 +129,8 @@ credentials, local model services where applicable, and manual OAuth flows.
 - Dynamic API key providers for resolving refreshed credentials before each
   low-level LLM request.
 - Custom stream providers, including proxy streaming through `/api/stream`.
-- Prompt templates, skills/resources loading, session storage, compaction,
+- Prompt templates, skills/resources loading, including Pi-style skill
+  ignore-file glob and escaped-comment semantics, session storage, compaction,
   Pi-style session tree navigation, and local execution environment utilities.
 - Harness prompt context conversion for LLM messages, bash execution messages,
   custom session messages, branch summaries, and compaction summaries.

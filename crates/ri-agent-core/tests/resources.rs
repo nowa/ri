@@ -166,12 +166,13 @@ fn load_skills_honors_ignore_files() {
     let root = temp_dir();
     let skills_dir = root.join("skills");
     fs::create_dir_all(skills_dir.join("ignored-skill")).expect("ignored skill");
+    fs::create_dir_all(skills_dir.join("#literal")).expect("hash literal skill");
     fs::create_dir_all(skills_dir.join("nested/local-ignored")).expect("local ignored");
     fs::create_dir_all(skills_dir.join("nested/visible")).expect("visible");
 
     fs::write(
         skills_dir.join(".gitignore"),
-        "ignored-skill/\nroot-ignored.md\n*.tmp.md\n!keep.tmp.md\n",
+        "ignored-skill/\n\\#literal/\nroot-ignored.md\n*.tmp.md\n!keep.tmp.md\nnested/*.md\n",
     )
     .expect("gitignore");
     fs::write(skills_dir.join("nested/.ignore"), "local-ignored/\n").expect("nested ignore");
@@ -180,6 +181,11 @@ fn load_skills_honors_ignore_files() {
         "---\nname: ignored-skill\ndescription: ignored skill\n---\nIgnored",
     )
     .expect("ignored skill file");
+    fs::write(
+        skills_dir.join("#literal/SKILL.md"),
+        "---\nname: #literal\ndescription: hash literal\n---\nIgnored",
+    )
+    .expect("hash literal skill file");
     fs::write(
         skills_dir.join("nested/local-ignored/SKILL.md"),
         "---\nname: local-ignored\ndescription: local ignored\n---\nIgnored",

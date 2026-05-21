@@ -285,6 +285,8 @@ fn prefix_ignore_pattern(line: &str, prefix: &str) -> Option<String> {
     } else {
         if let Some(rest) = pattern.strip_prefix("\\!") {
             pattern = rest.to_owned();
+        } else if let Some(rest) = pattern.strip_prefix("\\#") {
+            pattern = format!("#{rest}");
         }
         false
     };
@@ -335,29 +337,72 @@ struct IgnoreRule {
 
 impl IgnoreRule {
     fn matches(&self, relative_path: &str) -> bool {
-        let pattern = self.pattern.as_str();
-        if pattern.is_empty() {
+        let raw_pattern = self.pattern.trim_start_matches("./");
+        if raw_pattern.is_empty() {
             return false;
         }
-        let pattern = pattern.trim_end_matches('/');
+        let directory_only = raw_pattern.ends_with('/');
+        let pattern = raw_pattern.trim_end_matches('/');
+        let relative_path = relative_path.trim_start_matches("./");
+        let is_dir = relative_path.ends_with('/');
         let relative_path = relative_path.trim_end_matches('/');
 
-        if self.pattern.contains('*') {
-            return wildcard_match(pattern, relative_path);
+        if directory_only {
+            return matches_directory_pattern(pattern, relative_path, is_dir);
         }
 
         if pattern.contains('/') {
-            relative_path == pattern || relative_path.starts_with(&format!("{pattern}/"))
+            if path_pattern_matches(pattern, relative_path) {
+                return true;
+            }
+            !has_glob(pattern) && relative_path.starts_with(&format!("{pattern}/"))
         } else {
             relative_path
                 .split('/')
-                .any(|component| component == pattern)
+                .any(|component| component_pattern_matches(pattern, component))
                 || relative_path.starts_with(&format!("{pattern}/"))
         }
     }
 }
 
-fn wildcard_match(pattern: &str, text: &str) -> bool {
+fn matches_directory_pattern(pattern: &str, relative_path: &str, is_dir: bool) -> bool {
+    if pattern.contains('/') {
+        if path_pattern_matches(pattern, relative_path) {
+            return is_dir || relative_path.starts_with(&format!("{pattern}/"));
+        }
+        return !has_glob(pattern) && relative_path.starts_with(&format!("{pattern}/"));
+    }
+
+    let mut components = relative_path.split('/').peekable();
+    while let Some(component) = components.next() {
+        if component_pattern_matches(pattern, component) && (is_dir || components.peek().is_some())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn path_pattern_matches(pattern: &str, relative_path: &str) -> bool {
+    let pattern_components = pattern.split('/').collect::<Vec<_>>();
+    let path_components = relative_path.split('/').collect::<Vec<_>>();
+    if pattern_components.len() != path_components.len() {
+        return false;
+    }
+    pattern_components
+        .iter()
+        .zip(path_components)
+        .all(|(pattern, component)| component_pattern_matches(pattern, component))
+}
+
+fn has_glob(pattern: &str) -> bool {
+    pattern.contains('*') || pattern.contains('?')
+}
+
+fn component_pattern_matches(pattern: &str, text: &str) -> bool {
+    if !has_glob(pattern) {
+        return pattern == text;
+    }
     let pattern = pattern.as_bytes();
     let text = text.as_bytes();
     let (mut p, mut t) = (0, 0);
@@ -365,7 +410,7 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
     let mut match_after_star = 0;
 
     while t < text.len() {
-        if p < pattern.len() && pattern[p] == text[t] {
+        if p < pattern.len() && (pattern[p] == text[t] || pattern[p] == b'?') {
             p += 1;
             t += 1;
         } else if p < pattern.len() && pattern[p] == b'*' {

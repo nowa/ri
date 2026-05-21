@@ -390,8 +390,9 @@ counterparts that pass.
     multi-digit numeric placeholders and regex-style rejection of malformed
     slice placeholders, YAML frontmatter parsing semantics for folded strings,
     inline comments, booleans, and non-string metadata fields,
-    skill ignore-file handling, and pi-style skill metadata validation
-    diagnostics for name/description rules.
+    skill ignore-file handling including slash-scoped globs and escaped
+    `#` literals, and pi-style skill metadata validation diagnostics for
+    name/description rules.
   - Local execution environment foundation for filesystem operations, shell
     execution with per-command working-directory overrides and shell
     environment overrides, Pi-style `-c` shell invocation for default and
@@ -465,6 +466,16 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-22 after tightening
+  `harness/skills.ts` ignore-file parity: Rust skill loading now keeps `*`
+  scoped to individual path components for slash-qualified patterns such as
+  `nested/*.md`, while still matching no-slash globs against any component, and
+  treats escaped `\#` as a literal path prefix like Pi's `ignore` matcher:
+  `cargo test -p ri-agent-core --test resources load_skills_honors_ignore_files -- --test-threads=1`,
+  `cargo test -p ri-agent-core --test resources -- --test-threads=1`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo test --workspace -- --list`, `cargo fmt --check`, and
+  `git diff --check` passed; the workspace list remains 1177 tests.
 - Latest local verification on 2026-05-22 after aligning `types.ts` and
   `providers/openai-responses-shared.ts` `TextContent.textSignature` wire
   shape: Rust now stores and serializes text signatures as Pi-compatible
