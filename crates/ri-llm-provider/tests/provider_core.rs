@@ -7473,6 +7473,78 @@ fn anthropic_sse_parser_preserves_start_usage_when_delta_omits_fields() {
     assert_usage_total_matches_components("anthropic partial usage", &result.usage);
 }
 
+#[test]
+fn anthropic_sse_parser_maps_provider_stop_reason_errors() {
+    let model = get_model("anthropic", "claude-haiku-4-5").expect("anthropic model");
+
+    for reason in ["refusal", "sensitive"] {
+        let body = anthropic_sse_body(vec![
+            (
+                "message_start",
+                json!({
+                    "type": "message_start",
+                    "message": {
+                        "id": format!("msg_{reason}"),
+                        "usage": { "input_tokens": 3, "output_tokens": 0 },
+                    },
+                })
+                .to_string(),
+            ),
+            (
+                "message_delta",
+                json!({
+                    "type": "message_delta",
+                    "delta": { "stop_reason": reason },
+                    "usage": { "output_tokens": 1 },
+                })
+                .to_string(),
+            ),
+            (
+                "message_stop",
+                json!({ "type": "message_stop" }).to_string(),
+            ),
+        ]);
+
+        let result = process_anthropic_sse_body(&model, &body).expect("parsed error reason");
+        let expected_error = format!("Provider stop_reason: {reason}");
+        assert_eq!(result.stop_reason, StopReason::Error, "{reason}");
+        assert_eq!(
+            result.error_message.as_deref(),
+            Some(expected_error.as_str())
+        );
+        assert_eq!(result.usage.input, 3);
+        assert_eq!(result.usage.output, 1);
+    }
+
+    let pause_body = anthropic_sse_body(vec![
+        (
+            "message_delta",
+            json!({
+                "type": "message_delta",
+                "delta": { "stop_reason": "pause_turn" },
+            })
+            .to_string(),
+        ),
+        (
+            "message_stop",
+            json!({ "type": "message_stop" }).to_string(),
+        ),
+    ]);
+    let pause = process_anthropic_sse_body(&model, &pause_body).expect("pause turn");
+    assert_eq!(pause.stop_reason, StopReason::Stop);
+
+    let unknown_body = anthropic_sse_body(vec![(
+        "message_delta",
+        json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "provider_added_reason" },
+        })
+        .to_string(),
+    )]);
+    let error = process_anthropic_sse_body(&model, &unknown_body).expect_err("unknown reason");
+    assert!(error.contains("Unhandled Anthropic stop_reason: provider_added_reason"));
+}
+
 fn anthropic_tool() -> Tool {
     Tool {
         name: "lookup".to_owned(),
@@ -8401,6 +8473,44 @@ async fn anthropic_oauth_stream_processor_restores_source_tool_name() {
         .expect("toolcall_end");
     assert_eq!(tool_call_end.name, "todowrite");
     assert_eq!(tool_call_end.arguments, object(json!({ "todos": [] })));
+}
+
+#[test]
+fn anthropic_stream_processor_returns_error_for_provider_stop_reason_errors() {
+    let model = anthropic_test_model(None);
+    let mut processor = AnthropicStreamProcessor::new();
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, _stream) = assistant_message_event_stream();
+
+    let error = processor
+        .process_event(
+            json!({
+                "type": "message_delta",
+                "delta": { "stop_reason": "refusal" },
+                "usage": { "input_tokens": 3, "output_tokens": 1 },
+            }),
+            &mut output,
+            &sender,
+        )
+        .expect_err("refusal stop reason should fail the stream");
+
+    assert_eq!(error, "Provider stop_reason: refusal");
+    assert_eq!(output.stop_reason, StopReason::Error);
+    assert_eq!(output.error_message.as_deref(), Some(error.as_str()));
+    assert_eq!(output.usage.input, 3);
+    assert_eq!(output.usage.output, 1);
+
+    let unknown = processor
+        .process_event(
+            json!({
+                "type": "message_delta",
+                "delta": { "stop_reason": "provider_added_reason" },
+            }),
+            &mut output,
+            &sender,
+        )
+        .expect_err("unknown stop reason should fail the stream");
+    assert!(unknown.contains("Unhandled Anthropic stop_reason: provider_added_reason"));
 }
 
 #[tokio::test]

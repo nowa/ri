@@ -182,13 +182,21 @@ pub fn process_anthropic_sse_body(model: &Model, body: &str) -> Result<Assistant
                 }
             }
             Some("message_delta") => {
-                if let Some(stop_reason) =
+                let mapped_stop_reason = if let Some(stop_reason) =
                     event.pointer("/delta/stop_reason").and_then(Value::as_str)
                 {
-                    output.stop_reason = map_anthropic_stop_reason(stop_reason);
+                    Some((stop_reason, map_anthropic_stop_reason(stop_reason)?))
+                } else {
+                    None
+                };
+                if let Some((_, stop_reason)) = mapped_stop_reason {
+                    output.stop_reason = stop_reason;
                 }
                 if let Some(usage) = event.get("usage") {
                     output.usage = parse_anthropic_usage(usage, &output.usage);
+                }
+                if let Some((raw_stop_reason, StopReason::Error)) = mapped_stop_reason {
+                    output.error_message = Some(format!("Provider stop_reason: {raw_stop_reason}"));
                 }
             }
             Some("message_stop") => {
@@ -442,13 +450,23 @@ impl AnthropicStreamProcessor {
                 }
             }
             "message_delta" => {
-                if let Some(stop_reason) =
+                let mapped_stop_reason = if let Some(stop_reason) =
                     event.pointer("/delta/stop_reason").and_then(Value::as_str)
                 {
-                    output.stop_reason = map_anthropic_stop_reason(stop_reason);
+                    Some((stop_reason, map_anthropic_stop_reason(stop_reason)?))
+                } else {
+                    None
+                };
+                if let Some((_, stop_reason)) = mapped_stop_reason {
+                    output.stop_reason = stop_reason;
                 }
                 if let Some(usage) = event.get("usage") {
                     output.usage = parse_anthropic_usage(usage, &output.usage);
+                }
+                if let Some((raw_stop_reason, StopReason::Error)) = mapped_stop_reason {
+                    let message = format!("Provider stop_reason: {raw_stop_reason}");
+                    output.error_message = Some(message.clone());
+                    return Err(message);
                 }
             }
             "message_stop" => {
@@ -527,12 +545,13 @@ fn parse_anthropic_usage(usage: &Value, previous: &Usage) -> Usage {
     }
 }
 
-fn map_anthropic_stop_reason(reason: &str) -> StopReason {
+fn map_anthropic_stop_reason(reason: &str) -> Result<StopReason, String> {
     match reason {
-        "end_turn" | "stop_sequence" => StopReason::Stop,
-        "max_tokens" => StopReason::Length,
-        "tool_use" => StopReason::ToolUse,
-        _ => StopReason::Stop,
+        "end_turn" | "stop_sequence" | "pause_turn" => Ok(StopReason::Stop),
+        "max_tokens" => Ok(StopReason::Length),
+        "tool_use" => Ok(StopReason::ToolUse),
+        "refusal" | "sensitive" => Ok(StopReason::Error),
+        other => Err(format!("Unhandled Anthropic stop_reason: {other}")),
     }
 }
 

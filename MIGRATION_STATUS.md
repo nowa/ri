@@ -439,6 +439,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-21 after aligning
+  `providers/anthropic.ts` stop-reason parity: Anthropic SSE parsing and the
+  streaming processor now map `refusal` and `sensitive` to provider error
+  results, preserve `pause_turn` as a normal stop, reject unknown provider-added
+  stop reasons instead of silently reporting success, and keep usage updates
+  attached to terminal provider-error deltas:
+  `cargo test -p ri-llm-provider --test provider_core anthropic_sse_parser_maps_provider_stop_reason_errors -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core anthropic_stream_processor_returns_error_for_provider_stop_reason_errors -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core anthropic_ -- --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`,
+  `cargo test --workspace -- --list` (1151 tests enumerated),
+  `cargo fmt --check`, and `git diff --check` passed.
 - Latest local verification on 2026-05-21 after tightening
   `providers/openai-completions.ts` payload/header/message/catalog parity:
   Chat Completions payload helpers now include source-style `stream`,
