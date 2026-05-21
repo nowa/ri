@@ -14,6 +14,10 @@ use crate::{
         resolve_aws_profile_region, resolve_bedrock_client_config, sign_aws_sigv4_headers,
         standard_bedrock_endpoint_region,
     },
+    diagnostics::{
+        AssistantMessageDiagnostic, append_assistant_message_diagnostic,
+        create_assistant_message_diagnostic,
+    },
     event_stream::{AssistantMessageEventStream, assistant_message_event_stream},
     get_env_api_key,
     google_shared::{GoogleStreamProcessor, build_google_simple_payload},
@@ -63,6 +67,24 @@ static OPENAI_CODEX_WS_CACHE: OnceLock<tokio::sync::Mutex<BTreeMap<String, Cache
 struct CachedCodexWebSocket {
     socket: OpenAICodexWebSocket,
     continuation: Option<OpenAICodexCachedWebSocketContinuation>,
+}
+
+pub async fn cleanup_openai_codex_websocket_sessions(session_id: Option<&str>) -> usize {
+    let entries = {
+        let mut cache = codex_ws_cache().lock().await;
+        if let Some(session_id) = session_id {
+            cache.remove(session_id).into_iter().collect::<Vec<_>>()
+        } else {
+            std::mem::take(&mut *cache)
+                .into_values()
+                .collect::<Vec<_>>()
+        }
+    };
+    let cleaned = entries.len();
+    for mut entry in entries {
+        let _ = entry.socket.close().await;
+    }
+    cleaned
 }
 
 pub fn ensure_builtin_api_providers() {
@@ -832,15 +854,30 @@ fn spawn_openai_codex_responses_request(
             {
                 Ok(()) => return,
                 Err(error) if websocket_started => {
+                    append_assistant_message_diagnostic(
+                        &mut output,
+                        provider_transport_failure_diagnostic(
+                            transport,
+                            None,
+                            error.clone(),
+                            true,
+                            payload.to_string().len(),
+                        ),
+                    );
                     push_provider_error(&sender, &mut output, StopReason::Error, error);
                     return;
                 }
                 Err(error) => {
-                    output
-                        .diagnostics
-                        .push(provider_transport_failure_diagnostic(
-                            transport, "sse", error,
-                        ));
+                    append_assistant_message_diagnostic(
+                        &mut output,
+                        provider_transport_failure_diagnostic(
+                            transport,
+                            Some("sse"),
+                            error,
+                            false,
+                            payload.to_string().len(),
+                        ),
+                    );
                 }
             }
         }
@@ -1619,15 +1656,43 @@ fn insert_object_field(value: &mut Value, key: &str, field: Value) {
 
 fn provider_transport_failure_diagnostic(
     configured_transport: Transport,
-    fallback_transport: &str,
+    fallback_transport: Option<&str>,
     error: String,
-) -> Value {
-    serde_json::json!({
-        "type": "provider_transport_failure",
-        "configuredTransport": transport_name(configured_transport),
-        "fallbackTransport": fallback_transport,
-        "message": error,
-    })
+    events_emitted: bool,
+    request_bytes: usize,
+) -> AssistantMessageDiagnostic {
+    let mut details = Map::new();
+    details.insert(
+        "configuredTransport".to_owned(),
+        Value::String(transport_name(configured_transport).to_owned()),
+    );
+    if let Some(fallback_transport) = fallback_transport {
+        details.insert(
+            "fallbackTransport".to_owned(),
+            Value::String(fallback_transport.to_owned()),
+        );
+    }
+    details.insert("eventsEmitted".to_owned(), Value::Bool(events_emitted));
+    details.insert(
+        "phase".to_owned(),
+        Value::String(
+            if events_emitted {
+                "after_message_stream_start"
+            } else {
+                "before_message_stream_start"
+            }
+            .to_owned(),
+        ),
+    );
+    details.insert(
+        "requestBytes".to_owned(),
+        Value::Number(serde_json::Number::from(request_bytes)),
+    );
+    create_assistant_message_diagnostic(
+        "provider_transport_failure",
+        error,
+        Some(Value::Object(details)),
+    )
 }
 
 fn transport_name(transport: Transport) -> &'static str {

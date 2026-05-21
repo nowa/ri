@@ -14081,8 +14081,22 @@ async fn builtin_openai_codex_provider_auto_falls_back_to_sse_when_websocket_fai
         .iter()
         .find(|diagnostic| diagnostic["type"] == "provider_transport_failure")
         .expect("transport failure diagnostic");
-    assert_eq!(diagnostic["configuredTransport"], "auto");
-    assert_eq!(diagnostic["fallbackTransport"], "sse");
+    assert!(diagnostic["timestamp"].as_i64().is_some());
+    assert_eq!(diagnostic["error"]["name"].as_str(), Some("ThrownValue"));
+    assert!(
+        diagnostic["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("404"))
+    );
+    assert_eq!(diagnostic["details"]["configuredTransport"], "auto");
+    assert_eq!(diagnostic["details"]["fallbackTransport"], "sse");
+    assert_eq!(diagnostic["details"]["eventsEmitted"], false);
+    assert_eq!(
+        diagnostic["details"]["phase"],
+        "before_message_stream_start"
+    );
+    assert!(diagnostic["details"]["requestBytes"].as_u64().is_some());
+    assert!(diagnostic.get("configuredTransport").is_none());
     assert!(
         request
             .websocket_handshake
@@ -14199,6 +14213,97 @@ async fn builtin_openai_codex_provider_reuses_websocket_cached_context_for_sessi
         "second websocket request should send only the new user input"
     );
     assert_eq!(second_body["input"][0]["role"], "user");
+}
+
+#[tokio::test]
+async fn session_resource_cleanup_removes_openai_codex_websocket_cache_for_session() {
+    let session_id = "ws-cleanup-session";
+    let (first_base_url, first_request_task) = mock_reusable_websocket_server(vec![vec![
+        json!({ "type": "response.created", "response": { "id": "resp_cleanup_1" } }),
+        json!({
+            "type": "response.output_item.added",
+            "item": { "type": "message", "id": "msg_cleanup_1", "role": "assistant", "content": [] }
+        }),
+        json!({ "type": "response.output_text.delta", "delta": "Cached" }),
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "id": "msg_cleanup_1",
+                "content": [{ "type": "output_text", "text": "Cached" }]
+            }
+        }),
+        json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_cleanup_1",
+                "status": "completed",
+                "usage": { "input_tokens": 3, "output_tokens": 2, "total_tokens": 5 }
+            }
+        }),
+    ]])
+    .await;
+
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = first_base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.session_id = Some(session_id.to_owned());
+    options.stream.transport = Some(Transport::Auto);
+
+    let first = complete_simple(&model, user_context("First"), options.clone())
+        .await
+        .expect("first complete");
+    assert_eq!(text_of(&first), Some("Cached"));
+    let first_request = first_request_task.await.expect("first request task");
+    assert_eq!(first_request.messages.len(), 1);
+
+    let report = cleanup_session_resources(Some(session_id)).await;
+    assert_eq!(report.openai_codex_websocket_sessions, 1);
+    assert_eq!(report.cleaned_count(), 1);
+
+    let (second_base_url, second_request_task) = mock_reusable_websocket_server(vec![vec![
+        json!({ "type": "response.created", "response": { "id": "resp_cleanup_2" } }),
+        json!({
+            "type": "response.output_item.added",
+            "item": { "type": "message", "id": "msg_cleanup_2", "role": "assistant", "content": [] }
+        }),
+        json!({ "type": "response.output_text.delta", "delta": "Fresh" }),
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "id": "msg_cleanup_2",
+                "content": [{ "type": "output_text", "text": "Fresh" }]
+            }
+        }),
+        json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_cleanup_2",
+                "status": "completed",
+                "usage": { "input_tokens": 4, "output_tokens": 2, "total_tokens": 6 }
+            }
+        }),
+    ]])
+    .await;
+    model.base_url = second_base_url;
+
+    let second = complete_simple(&model, user_context("Second"), options.clone())
+        .await
+        .expect("second complete");
+    assert_eq!(text_of(&second), Some("Fresh"));
+    let second_request = second_request_task.await.expect("second request task");
+    assert_eq!(second_request.messages.len(), 1);
+    let second_body: Value =
+        serde_json::from_str(&second_request.messages[0]).expect("second body");
+    assert!(
+        second_body.get("previous_response_id").is_none(),
+        "cleanup must remove the cached continuation for the session"
+    );
+
+    let report = cleanup_session_resources(Some(session_id)).await;
+    assert_eq!(report.openai_codex_websocket_sessions, 1);
 }
 
 #[tokio::test]

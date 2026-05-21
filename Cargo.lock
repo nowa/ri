@@ -957,6 +957,7 @@ dependencies = [
  "chrono",
  "futures",
  "parking_lot",
+ "reqwest",
  "ri-llm-provider",
  "serde",
  "serde_json",

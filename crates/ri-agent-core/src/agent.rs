@@ -5,8 +5,8 @@ use crate::{
     types::{
         AgentContext, AgentContextTransformer, AgentEvent, AgentEventSink, AgentMessage,
         AgentMessageConverter, AgentNextTurnPreparer, AgentQueuedMessageProvider,
-        AgentShouldStopAfterTurn, AgentState, AgentTool, AgentToolCallHook, AgentToolResultHook,
-        QueueMode, ToolExecutionMode,
+        AgentShouldStopAfterTurn, AgentState, AgentStreamProvider, AgentTool, AgentToolCallHook,
+        AgentToolResultHook, QueueMode, ToolExecutionMode,
     },
 };
 use async_trait::async_trait;
@@ -174,6 +174,7 @@ pub struct AgentOptions {
     pub tool_result_hooks: Vec<Arc<dyn AgentToolResultHook>>,
     pub transform_context: Option<Arc<dyn AgentContextTransformer>>,
     pub convert_to_llm: Option<Arc<dyn AgentMessageConverter>>,
+    pub stream_provider: Option<Arc<dyn AgentStreamProvider>>,
     pub prepare_next_turn: Option<Arc<dyn AgentNextTurnPreparer>>,
     pub should_stop_after_turn: Option<Arc<dyn AgentShouldStopAfterTurn>>,
     pub queued_message_provider: Option<Arc<dyn AgentQueuedMessageProvider>>,
@@ -197,6 +198,7 @@ impl AgentOptions {
             tool_result_hooks: Vec::new(),
             transform_context: None,
             convert_to_llm: None,
+            stream_provider: None,
             prepare_next_turn: None,
             should_stop_after_turn: None,
             queued_message_provider: None,
@@ -216,6 +218,7 @@ pub struct Agent {
     tool_result_hooks: Vec<Arc<dyn AgentToolResultHook>>,
     transform_context: Option<Arc<dyn AgentContextTransformer>>,
     convert_to_llm: Option<Arc<dyn AgentMessageConverter>>,
+    stream_provider: Option<Arc<dyn AgentStreamProvider>>,
     prepare_next_turn: Option<Arc<dyn AgentNextTurnPreparer>>,
     should_stop_after_turn: Option<Arc<dyn AgentShouldStopAfterTurn>>,
     queued_message_provider: Option<Arc<dyn AgentQueuedMessageProvider>>,
@@ -248,6 +251,7 @@ impl Agent {
             tool_result_hooks: options.tool_result_hooks,
             transform_context: options.transform_context,
             convert_to_llm: options.convert_to_llm,
+            stream_provider: options.stream_provider,
             prepare_next_turn: options.prepare_next_turn,
             should_stop_after_turn: options.should_stop_after_turn,
             queued_message_provider: options.queued_message_provider,
@@ -546,6 +550,7 @@ impl Agent {
             tool_result_hooks: self.tool_result_hooks.clone(),
             transform_context: self.transform_context.clone(),
             convert_to_llm: self.convert_to_llm.clone(),
+            stream_provider: self.stream_provider.clone(),
             prepare_next_turn: self.prepare_next_turn.clone(),
             should_stop_after_turn: self.should_stop_after_turn.clone(),
             queued_message_provider: Some(Arc::new(QueuedMessageProviderChain {

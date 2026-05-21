@@ -29,8 +29,8 @@ provider credentials.
 The test suite covers provider metadata, payload generation, streaming parsers,
 SSE and eventstream behavior, abort handling, response IDs, usage accounting,
 message transforms, tool calling, reasoning/thinking controls, agent loop
-control flow, stateful agents, tool execution, compaction, resources, session
-storage, and harness utilities.
+control flow, stateful agents, custom stream providers, proxy streaming, tool
+execution, compaction, resources, session storage, and harness utilities.
 
 Live provider E2E tests are not run by default. Provider behavior is covered
 locally through mock HTTP servers, payload assertions, parser tests, and stream
@@ -55,7 +55,8 @@ suite currently includes both:
   pi-agent-core source test case.
 - **Rust-specific coverage**: behavior needed because ri owns Rust-native
   implementations for HTTP transport, proxy construction, OAuth auth storage,
-  streaming parsers, session storage, and harness integration.
+  proxy stream forwarding, streaming parsers, session storage, and harness
+  integration.
 
 New tests should be added only when they cover a missing Pi exact case or a
 clearly necessary Rust-specific contract. Tests that inspect Rust source,
@@ -93,6 +94,7 @@ credentials, local model services where applicable, and manual OAuth flows.
 - Tool call and tool result hooks.
 - Steering and follow-up queues.
 - Context transforms and custom `AgentMessage` conversion before LLM calls.
+- Custom stream providers, including proxy streaming through `/api/stream`.
 - Prompt templates, skills/resources loading, session storage, compaction, and
   local execution environment utilities.
 
@@ -235,7 +237,7 @@ a first-class Rust surface.
 Run all tests:
 
 ```bash
-cargo test --all
+cargo test --workspace -- --test-threads=1
 ```
 
 Useful focused commands:

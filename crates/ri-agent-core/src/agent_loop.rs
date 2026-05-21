@@ -1,7 +1,7 @@
 use crate::types::{
     AgentContext, AgentContextTransformer, AgentEvent, AgentEventSink, AgentLoopTurnUpdate,
     AgentMessage, AgentMessageConverter, AgentNextTurnContext, AgentNextTurnPreparer,
-    AgentQueuedMessageProvider, AgentShouldStopAfterTurn, AgentToolCallHook,
+    AgentQueuedMessageProvider, AgentShouldStopAfterTurn, AgentStreamProvider, AgentToolCallHook,
     AgentToolCallHookContext, AgentToolResultContent, AgentToolResultHook,
     AgentToolResultHookContext, ToolExecutionMode, assistant_tool_calls,
 };
@@ -20,6 +20,7 @@ pub struct AgentLoopConfig {
     pub tool_result_hooks: Vec<Arc<dyn AgentToolResultHook>>,
     pub transform_context: Option<Arc<dyn AgentContextTransformer>>,
     pub convert_to_llm: Option<Arc<dyn AgentMessageConverter>>,
+    pub stream_provider: Option<Arc<dyn AgentStreamProvider>>,
     pub prepare_next_turn: Option<Arc<dyn AgentNextTurnPreparer>>,
     pub should_stop_after_turn: Option<Arc<dyn AgentShouldStopAfterTurn>>,
     pub queued_message_provider: Option<Arc<dyn AgentQueuedMessageProvider>>,
@@ -39,6 +40,7 @@ impl AgentLoopConfig {
             tool_result_hooks: Vec::new(),
             transform_context: None,
             convert_to_llm: None,
+            stream_provider: None,
             prepare_next_turn: None,
             should_stop_after_turn: None,
             queued_message_provider: None,
@@ -77,6 +79,12 @@ struct ToolExecutionOutcome {
 impl std::fmt::Debug for dyn AgentToolCallHook {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("AgentToolCallHook")
+    }
+}
+
+impl std::fmt::Debug for dyn AgentStreamProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AgentStreamProvider")
     }
 }
 
@@ -463,12 +471,14 @@ async fn run_one_turn(
     config: &AgentLoopConfig,
     events: &mut Vec<AgentEvent>,
 ) -> Result<TurnOutcome, String> {
-    let stream = stream_simple(
-        &config.model,
-        build_llm_context(context, config).await?,
-        config.stream_options.clone(),
-    )
-    .map_err(|error| error.to_string())?;
+    let llm_context = build_llm_context(context, config).await?;
+    let stream = match &config.stream_provider {
+        Some(provider) => {
+            provider.stream(&config.model, llm_context, config.stream_options.clone())?
+        }
+        None => stream_simple(&config.model, llm_context, config.stream_options.clone())
+            .map_err(|error| error.to_string())?,
+    };
 
     let mut stream = Box::pin(stream);
     let mut final_message: Option<AssistantMessage> = None;

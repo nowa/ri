@@ -3,9 +3,11 @@
 pub mod agent;
 pub mod agent_loop;
 pub mod harness;
+pub mod proxy;
 pub mod types;
 
 pub use agent::*;
 pub use agent_loop::*;
 pub use harness::*;
+pub use proxy::*;
 pub use types::*;

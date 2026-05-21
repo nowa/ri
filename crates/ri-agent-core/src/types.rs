@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use ri_llm_provider::{
-    AssistantMessage, AssistantMessageEvent, Context, ImageContent, Message, Model,
-    SimpleStreamOptions, TextContent, ThinkingLevel, Tool, ToolCall, ToolResultMessage,
-    UserMessage,
+    AssistantMessage, AssistantMessageEvent, AssistantMessageEventStream, Context, ImageContent,
+    Message, Model, SimpleStreamOptions, TextContent, ThinkingLevel, Tool, ToolCall,
+    ToolResultMessage, UserMessage,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -200,6 +200,15 @@ pub trait AgentContextTransformer: Send + Sync {
 
 pub trait AgentMessageConverter: Send + Sync {
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, String>;
+}
+
+pub trait AgentStreamProvider: Send + Sync {
+    fn stream(
+        &self,
+        model: &Model,
+        context: Context,
+        options: SimpleStreamOptions,
+    ) -> Result<AssistantMessageEventStream, String>;
 }
 
 #[async_trait]

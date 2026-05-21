@@ -40,6 +40,9 @@ counterparts that pass.
     `SimpleStreamOptions` for helper tests.
   - JSON repair/hash helpers, including malformed control-character repair and
     unpaired UTF-16 surrogate escape replacement.
+  - Assistant-message diagnostics helpers mirroring `utils/diagnostics.ts`,
+    represented as typed Rust structs that serialize to the pi
+    `{ type, timestamp, error, details }` diagnostic shape.
   - JSON-schema subset validation and coercion.
   - Context-overflow detection with provider-specific error-shape corpus and
     silent/length-stop overflow signals.
@@ -107,7 +110,14 @@ counterparts that pass.
     SSE/WebSocket headers, request-body construction, URL resolution, reasoning
     effort mapping, cached WebSocket input-delta continuation, SSE frame parsing
     and retry/backoff request handling, WebSocket debug-stat accounting, and
-    service-tier usage cost resolution.
+    service-tier usage cost resolution. WebSocket transport fallback now writes
+    pi-shaped `provider_transport_failure` diagnostics with nested `error` and
+    `details` fields.
+  - Session-scoped provider resource cleanup now covers the OpenAI Codex
+    WebSocket session cache. This is the Rust-native counterpart of
+    `session-resources.ts`: callers explicitly await `cleanup_session_resources`
+    for one session or all sessions, and cached Codex WebSocket continuations
+    are removed before later requests can reuse stale context.
   - GitHub Copilot OAuth helpers for device-flow request construction,
     slow-down-aware polling intervals, enterprise domain normalization,
     Copilot token refresh headers, base-URL derivation, proxy-aware async
@@ -238,6 +248,11 @@ counterparts that pass.
     drain modes plus queued state introspection, queue clearing/reset helpers,
     abort handles that cancel active provider streams, and provider start
     failures persisted as assistant error messages with lifecycle events.
+  - Custom stream-provider hooks for the low-level loop and `Agent` wrapper,
+    including a Rust-native `agent/src/proxy.ts` counterpart that posts model,
+    context, and proxy-safe stream options to `/api/stream`, reconstructs SSE
+    assistant events, preserves abort behavior, and keeps API keys and retry
+    policy out of the proxy payload.
   - Harness basics: system prompt helper, system skill formatting, UTF-8/line
     truncation, token/usage estimate, compaction predicates, cut-point
     selection, compaction preparation, file-operation metadata extraction, and
@@ -284,19 +299,19 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1086 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1089 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 914 tests: 1 library test, 282 `provider_core` tests, and
-  631 `provider_live` tests. This is 193 above the 721 direct simple source
+- `ri-llm-provider`: 915 tests: 1 library test, 283 `provider_core` tests, and
+  631 `provider_live` tests. This is 194 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 172 tests across `agent_core`, `agent_harness`,
-  `execution_env`, `harness_compaction`, `harness_truncate`, `resources`, and
-  `session_storage`. This is 22 above the 150 direct simple source cases counted
-  under `packages/agent/test`, because several Rust tests cover grouped source
-  behavior plus Rust-specific session, harness, and execution-environment
-  contracts.
+- `ri-agent-core`: 174 tests across `agent_core`, `agent_harness`,
+  `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
+  `resources`, and `session_storage`. This is 24 above the 150 direct simple
+  source cases counted under `packages/agent/test`, because several Rust tests
+  cover grouped source behavior plus Rust-specific session, harness, and
+  execution-environment contracts.
 - On 2026-05-20, 52 migration meta/audit/implementation-shape tests were
   removed. Those tests read Rust source, TypeScript source,
   `MIGRATION_STATUS.md`, or `Cargo.toml` to prove that source case titles,
@@ -322,7 +337,7 @@ Current Rust tests: 1086 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1086-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1089-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -345,7 +360,18 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-20 after removing the meta-tests and
+- Latest local verification on 2026-05-21 after adding Rust-native
+  `session-resources.ts` parity for OpenAI Codex WebSocket cache cleanup and
+  `utils/diagnostics.ts` parity for Codex transport fallback diagnostics, plus
+  `agent/src/proxy.ts` stream-provider/proxy parity:
+  `cargo fmt --check`,
+  `cargo test -p ri-llm-provider --test provider_core session_resource_cleanup_removes_openai_codex_websocket_cache_for_session -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_auto_falls_back_to_sse_when_websocket_fails_before_events -- --exact`,
+  `cargo test -p ri-agent-core --test proxy -- --test-threads=1`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1089 tests.
+- Previous full local verification on 2026-05-20 after removing the meta-tests and
   adding summary hook removal, Bedrock runtime proxy coverage, and OpenRouter
   Images custom authorization preservation:
   `cargo fmt --check`,
@@ -374,6 +400,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1086 Rust tests cover the
+- Test parity is not certified by raw count alone: 1089 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
