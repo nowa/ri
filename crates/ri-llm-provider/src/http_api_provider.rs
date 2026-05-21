@@ -1304,10 +1304,14 @@ async fn stream_openai_completions_sse_json(
         return Err(provider_error_from_body(status.as_u16(), &body));
     }
 
+    sender.push(AssistantMessageEvent::Start {
+        partial: output.clone(),
+    });
+
     let mut byte_stream = response.bytes_stream();
     let mut parser = SseJsonParser::default();
     let mut events = Vec::new();
-    let mut processor = OpenAICompletionsStreamProcessor::new();
+    let mut processor = OpenAICompletionsStreamProcessor::started();
     while let Some(chunk) = byte_stream.next().await {
         if push_abort_if_requested(sender, options, output) {
             return Ok(());

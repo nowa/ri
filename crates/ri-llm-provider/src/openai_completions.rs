@@ -462,6 +462,13 @@ impl OpenAICompletionsStreamProcessor {
         Self::default()
     }
 
+    pub fn started() -> Self {
+        Self {
+            started: true,
+            ..Default::default()
+        }
+    }
+
     pub fn process_chunk(
         &mut self,
         chunk: Value,

@@ -14950,6 +14950,44 @@ async fn builtin_openai_completions_provider_posts_json_and_parses_sse() {
 }
 
 #[tokio::test]
+async fn builtin_openai_completions_provider_emits_start_before_empty_stream_error() {
+    let (base_url, request_task) = mock_sse_server("").await;
+    let mut model = Model::faux("openai-completions", "openai", "mock-model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("test-key".to_owned());
+
+    let stream = stream_simple(&model, user_context("hello"), options).expect("stream");
+    let events = collect_events(stream).await;
+    let request = request_task.await.expect("request task");
+
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+    assert!(matches!(
+        events.first(),
+        Some(AssistantMessageEvent::Start { .. })
+    ));
+    let error = events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            AssistantMessageEvent::Error { error, .. } => Some(error),
+            _ => None,
+        })
+        .expect("error event");
+    assert_eq!(error.stop_reason, StopReason::Error);
+    assert_eq!(
+        error.error_message.as_deref(),
+        Some("Stream ended without finish_reason")
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AssistantMessageEvent::Done { .. })),
+        "empty completions stream should not emit done"
+    );
+}
+
+#[tokio::test]
 async fn builtin_openai_completions_provider_applies_response_hooks() {
     let sse = concat!(
         "data: {\"id\":\"chatcmpl_hook\",\"choices\":[{\"delta\":{\"content\":\"Hooked\"},\"finish_reason\":null}]}\n\n",

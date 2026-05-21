@@ -204,8 +204,9 @@ counterparts that pass.
     replay, prompt-cache fields, session-affinity headers,
     Cloudflare AI Gateway `cf-aig-authorization` and BYOK upstream
     authorization preservation, empty user-block pruning, stream usage parsing,
-    streamed text/thinking/tool delta aggregation, finish-reason mapping, and
-    routed response model metadata.
+    streamed text/thinking/tool delta aggregation, header-settled start events
+    before delayed or empty SSE bodies, finish-reason mapping, and routed
+    response model metadata.
   - Images API provider registry and `generate_images` dispatch with the same
     Pi-style mismatched `model.api` guard for direct registered provider calls,
     plus built-in image provider reset/restore behavior and
