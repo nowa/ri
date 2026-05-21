@@ -36,16 +36,16 @@ pub fn resolve_http_proxy_url_for_target(target_url: &str) -> Result<Option<Prox
     if !proxy.contains("://") {
         proxy = format!("{}://{proxy}", target.protocol);
     }
-    let Some(protocol) = proxy.split_once("://").map(|(protocol, _)| protocol) else {
-        return Err(format!("Invalid proxy URL {proxy:?}"));
-    };
+    let proxy_url = reqwest::Url::parse(&proxy)
+        .map_err(|error| format!("Invalid proxy URL {proxy:?}: {error}"))?;
+    let protocol = proxy_url.scheme();
     if protocol != "http" && protocol != "https" {
         return Err(format!(
             "{UNSUPPORTED_PROXY_PROTOCOL_MESSAGE} Got {protocol}:"
         ));
     }
     Ok(Some(ProxyUrl {
-        raw: normalize_proxy_url(&proxy),
+        raw: normalize_proxy_url(proxy_url.as_str()),
     }))
 }
 

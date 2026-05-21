@@ -78,8 +78,9 @@ counterparts that pass.
     user/tool-result images, and caller header overrides across Anthropic,
     OpenAI Responses, and OpenAI Completions paths.
   - HTTP proxy URL resolution with `NO_PROXY` and `npm_config_*` handling,
-    unsupported protocol errors, proxy-aware `reqwest` client construction for
-    provider, image, Bedrock runtime ConverseStream, Google ADC token-refresh,
+    invalid URL and unsupported protocol errors, proxy-aware `reqwest` client
+    construction for provider, image, Bedrock runtime ConverseStream, Google
+    ADC token-refresh,
     Anthropic/OpenAI Codex OAuth authorization-code token exchanges,
     Anthropic/GitHub Copilot/OpenAI Codex OAuth token-refresh HTTP paths,
     GitHub Copilot OAuth device-flow requests, plus OpenAI Codex WebSocket HTTP

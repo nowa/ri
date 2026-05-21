@@ -14359,6 +14359,10 @@ fn node_http_proxy_respects_no_proxy_and_rejects_unsupported_protocols() {
     set_env("HTTPS_PROXY", "socks5://proxy.example:1080");
     let error = resolve_http_proxy_url_for_target(target).expect_err("unsupported proxy protocol");
     assert!(error.contains(UNSUPPORTED_PROXY_PROTOCOL_MESSAGE));
+
+    set_env("HTTPS_PROXY", "http://");
+    let error = resolve_http_proxy_url_for_target(target).expect_err("invalid proxy url");
+    assert!(error.contains("Invalid proxy URL \"http://\""));
 }
 
 #[test]
