@@ -653,21 +653,34 @@ impl OpenAIResponsesStreamProcessor {
                     self.append_openai_responses_thinking_delta(output, sender, delta);
                 }
             }
+            "response.content_part.added" => {
+                if self.current_item_type.as_deref() == Some("message")
+                    && let Some(part) = event.get("part")
+                    && matches!(
+                        part.get("type").and_then(Value::as_str),
+                        Some("output_text" | "refusal")
+                    )
+                    && let Some(current_item) = self.current_item.as_mut()
+                {
+                    let content = current_item.as_object_mut().and_then(|item| {
+                        item.entry("content")
+                            .or_insert_with(|| Value::Array(Vec::new()))
+                            .as_array_mut()
+                    });
+                    if let Some(content) = content {
+                        content.push(part.clone());
+                    }
+                }
+            }
             "response.output_text.delta" => {
                 if self.current_item_type.as_deref() == Some("message") {
                     let delta = event
                         .get("delta")
                         .and_then(Value::as_str)
                         .unwrap_or_default();
-                    if let Some(index) = self.current_block_index {
-                        if let Some(AssistantContent::Text(text)) = output.content.get_mut(index) {
-                            text.text.push_str(delta);
-                        }
-                        sender.push(AssistantMessageEvent::TextDelta {
-                            content_index: index,
-                            delta: delta.to_owned(),
-                            partial: output.clone(),
-                        });
+                    if self.append_openai_responses_message_part_delta("output_text", "text", delta)
+                    {
+                        self.append_openai_responses_text_delta(output, sender, delta);
                     }
                 }
             }
@@ -677,15 +690,9 @@ impl OpenAIResponsesStreamProcessor {
                         .get("delta")
                         .and_then(Value::as_str)
                         .unwrap_or_default();
-                    if let Some(index) = self.current_block_index {
-                        if let Some(AssistantContent::Text(text)) = output.content.get_mut(index) {
-                            text.text.push_str(delta);
-                        }
-                        sender.push(AssistantMessageEvent::TextDelta {
-                            content_index: index,
-                            delta: delta.to_owned(),
-                            partial: output.clone(),
-                        });
+                    if self.append_openai_responses_message_part_delta("refusal", "refusal", delta)
+                    {
+                        self.append_openai_responses_text_delta(output, sender, delta);
                     }
                 }
             }
@@ -973,6 +980,55 @@ impl OpenAIResponsesStreamProcessor {
                 thinking.thinking.push_str(delta);
             }
             sender.push(AssistantMessageEvent::ThinkingDelta {
+                content_index: index,
+                delta: delta.to_owned(),
+                partial: output.clone(),
+            });
+        }
+    }
+
+    fn append_openai_responses_message_part_delta(
+        &mut self,
+        part_type: &str,
+        text_field: &str,
+        delta: &str,
+    ) -> bool {
+        let Some(current_item) = self.current_item.as_mut() else {
+            return false;
+        };
+        let Some(last_part) = current_item
+            .get_mut("content")
+            .and_then(Value::as_array_mut)
+            .and_then(|content| content.last_mut())
+        else {
+            return false;
+        };
+        if last_part.get("type").and_then(Value::as_str) != Some(part_type) {
+            return false;
+        }
+        let updated = format!(
+            "{}{}",
+            last_part
+                .get(text_field)
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            delta
+        );
+        last_part[text_field] = Value::String(updated);
+        true
+    }
+
+    fn append_openai_responses_text_delta(
+        &self,
+        output: &mut AssistantMessage,
+        sender: &AssistantMessageEventSender,
+        delta: &str,
+    ) {
+        if let Some(index) = self.current_block_index {
+            if let Some(AssistantContent::Text(text)) = output.content.get_mut(index) {
+                text.text.push_str(delta);
+            }
+            sender.push(AssistantMessageEvent::TextDelta {
                 content_index: index,
                 delta: delta.to_owned(),
                 partial: output.clone(),

@@ -9812,6 +9812,10 @@ fn openai_responses_stream_maps_text_deltas_and_replays_text_signature() {
                     "content": []
                 }
             }),
+            json!({
+                "type": "response.content_part.added",
+                "part": { "type": "output_text", "text": "" }
+            }),
             json!({ "type": "response.output_text.delta", "delta": "Hello" }),
             json!({
                 "type": "response.output_item.done",
@@ -9839,6 +9843,45 @@ fn openai_responses_stream_maps_text_deltas_and_replays_text_signature() {
     let replay_items = openai_codex_response_items_for_continuation(&model, &output);
     assert_eq!(replay_items[0]["id"], "msg_1");
     assert_eq!(replay_items[0]["content"][0]["text"], "Hello");
+}
+
+#[tokio::test]
+async fn openai_responses_stream_ignores_text_delta_before_content_part() {
+    let model = get_model("openai", "gpt-5.5").expect("openai model");
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, stream) = assistant_message_event_stream();
+
+    process_openai_responses_events(
+        [
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "message",
+                    "id": "msg_no_part",
+                    "role": "assistant",
+                    "status": "in_progress",
+                    "content": []
+                }
+            }),
+            json!({ "type": "response.output_text.delta", "delta": "ignored" }),
+        ],
+        &mut output,
+        &sender,
+        &model,
+    )
+    .expect("process ignored text delta");
+    drop(sender);
+
+    let AssistantContent::Text(text) = &output.content[0] else {
+        panic!("text block");
+    };
+    assert!(text.text.is_empty());
+    let events = collect_events(stream).await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AssistantMessageEvent::TextDelta { .. }))
+    );
 }
 
 #[tokio::test]
@@ -9934,6 +9977,10 @@ fn openai_responses_stream_preserves_text_phase_and_refusal_content() {
                     "status": "in_progress",
                     "content": []
                 }
+            }),
+            json!({
+                "type": "response.content_part.added",
+                "part": { "type": "refusal", "refusal": "" }
             }),
             json!({ "type": "response.refusal.delta", "delta": "No." }),
             json!({
@@ -10403,6 +10450,10 @@ fn openai_codex_responses_cached_websocket_request_sends_only_input_delta() {
                     "status": "in_progress",
                     "content": []
                 }
+            }),
+            json!({
+                "type": "response.content_part.added",
+                "part": { "type": "output_text", "text": "" }
             }),
             json!({ "type": "response.output_text.delta", "delta": "Hello" }),
             json!({
@@ -14573,6 +14624,7 @@ async fn builtin_openai_responses_provider_emits_sse_events_incrementally() {
         vec![
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream\"}}\n\n",
             "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_stream\"}}\n\n\
+             data: {\"type\":\"response.content_part.added\",\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n\
              data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n",
             "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_stream\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hi\"}]}}\n\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream\",\"status\":\"completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":1,\"total_tokens\":4}}}\n\n",
@@ -14624,6 +14676,7 @@ async fn builtin_openai_responses_provider_respects_abort_flag_while_streaming()
         vec![
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_abort\"}}\n\n",
             "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_abort\"}}\n\n\
+             data: {\"type\":\"response.content_part.added\",\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n\
              data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n",
             "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_abort\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hi\"}]}}\n\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_abort\",\"status\":\"completed\"}}\n\n",
@@ -14768,6 +14821,7 @@ async fn builtin_azure_openai_responses_provider_respects_abort_flag_while_strea
         vec![
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_azure_abort\"}}\n\n",
             "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_azure_abort\"}}\n\n",
+            "data: {\"type\":\"response.content_part.added\",\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n",
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Azur\"}\n\n",
             "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_azure_abort\",\"content\":[{\"type\":\"output_text\",\"text\":\"Azure\"}]}}\n\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_azure_abort\",\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"total_tokens\":3}}}\n\n",
@@ -15910,6 +15964,7 @@ async fn builtin_openai_codex_provider_respects_abort_flag_while_streaming() {
         vec![
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_codex_abort\"}}\n\n",
             "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_codex_abort\"}}\n\n",
+            "data: {\"type\":\"response.content_part.added\",\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n",
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Code\"}\n\n",
             "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_codex_abort\",\"content\":[{\"type\":\"output_text\",\"text\":\"Code\"}]}}\n\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_codex_abort\",\"status\":\"completed\",\"usage\":{\"input_tokens\":6,\"output_tokens\":2,\"total_tokens\":8}}}\n\n",
