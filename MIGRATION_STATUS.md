@@ -33,7 +33,9 @@ counterparts that pass.
   - `AssistantMessageEventStream` source parity for terminal-event result
     settlement, ignored post-terminal pushes, and explicit `end(result)`
     closure without a terminal event.
-  - API provider registry.
+  - API provider registry with Pi-style registration wrappers that reject
+    mismatched `model.api` before delegating, including direct providers
+    retrieved through `get_api_provider`.
   - `stream`, `complete`, `stream_simple`, `complete_simple`.
   - Built-in model registry seed and thinking-level helpers.
   - Faux provider with queued responses, multi-model registrations,
@@ -170,7 +172,9 @@ counterparts that pass.
     authorization preservation, empty user-block pruning, stream usage parsing,
     streamed text/thinking/tool delta aggregation, finish-reason mapping, and
     routed response model metadata.
-  - Images API provider registry and `generate_images` dispatch, plus
+  - Images API provider registry and `generate_images` dispatch with the same
+    Pi-style mismatched `model.api` guard for direct registered provider calls,
+    plus
     the full 28-model OpenRouter image model registry from the source generated
     catalog and image payload/response helpers for chat-completions image
     generation, inline data URLs, caller-supplied authorization/header
@@ -350,10 +354,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1124 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1125 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 928 tests: 1 library test, 296 `provider_core` tests, and
-  631 `provider_live` tests. This is 207 above the 721 direct simple source
+- `ri-llm-provider`: 929 tests: 1 library test, 297 `provider_core` tests, and
+  631 `provider_live` tests. This is 208 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -388,7 +392,7 @@ Current Rust tests: 1124 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1124-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1125-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -411,7 +415,21 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning Pi `Agent.reset()`
+- Latest local verification on 2026-05-21 after aligning Pi provider
+  registration wrapper behavior from `api-registry.ts` and
+  `images-api-registry.ts`: Rust now wraps registered LLM and Images API
+  providers at the registry boundary, so providers retrieved through
+  `get_api_provider` / `get_images_api_provider` reject a mismatched
+  `model.api` before delegating to user provider code, matching Pi's
+  `wrapStream`, `wrapStreamSimple`, and `wrapGenerateImages` behavior:
+  `cargo test -p ri-llm-provider --test provider_core api_registry_provider_rejects_mismatched_model_api_before_delegating -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core images_api_registry_dispatches_generate_images_and_reports_missing_provider -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1125 tests.
+- Previous local verification on 2026-05-21 after aligning Pi `Agent.reset()`
   active-run behavior from `agent.ts`: Rust now separates public
   `is_streaming` state from the internal active-run guard, so reset can clear
   public transcript/runtime state without allowing a concurrent prompt or
@@ -735,6 +753,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1124 Rust tests cover the
+- Test parity is not certified by raw count alone: 1125 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

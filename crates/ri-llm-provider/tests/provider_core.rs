@@ -194,6 +194,60 @@ fn registered_model_apis_have_builtin_provider_implementations() {
     assert!(checked > 0, "model registry should expose provider models");
 }
 
+struct RecordingApiProvider {
+    api: String,
+    called: Arc<AtomicBool>,
+}
+
+impl ApiProvider for RecordingApiProvider {
+    fn api(&self) -> &str {
+        &self.api
+    }
+
+    fn stream(
+        &self,
+        model: &Model,
+        _context: Context,
+        _options: StreamOptions,
+    ) -> Result<AssistantMessageEventStream, ProviderError> {
+        self.called.store(true, Ordering::SeqCst);
+        let (sender, stream) = assistant_message_event_stream();
+        sender.end(empty_assistant_for_model(model));
+        Ok(stream)
+    }
+}
+
+#[test]
+fn api_registry_provider_rejects_mismatched_model_api_before_delegating() {
+    let api = format!("record-api-{}", now_millis());
+    let source_id = format!("source-{api}");
+    let called = Arc::new(AtomicBool::new(false));
+    register_api_provider(
+        Arc::new(RecordingApiProvider {
+            api: api.clone(),
+            called: called.clone(),
+        }),
+        Some(source_id.clone()),
+    );
+
+    let provider = get_api_provider(&api).expect("registered provider");
+    let model = Model::faux(format!("other-{api}"), "fake-provider", "fake-model");
+    let err = match provider.stream(&model, user_context("hello"), StreamOptions::default()) {
+        Ok(_) => panic!("mismatched model api should fail"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(
+        err,
+        ProviderError::MismatchedApi { actual, expected }
+            if actual == model.api && expected == api
+    ));
+    assert!(!called.load(Ordering::SeqCst));
+
+    unregister_api_providers(&source_id);
+    assert!(get_api_provider(&api).is_none());
+}
+
 fn user_context(text: &str) -> Context {
     Context {
         messages: vec![Message::User(UserMessage::text(text))],
@@ -1853,17 +1907,17 @@ async fn images_api_registry_dispatches_generate_images_and_reports_missing_prov
         ImagesContent::Image(image)
             if image.mime_type == "image/png" && image.data == "ZmFrZS1wbmc="
     ));
-    let seen = seen.lock().expect("seen");
-    assert_eq!(seen.len(), 1);
-    assert_eq!(seen[0].0, "fake-image-model");
-    assert_eq!(seen[0].1, vec!["Generate a dog"]);
-    assert_eq!(seen[0].2.api_key.as_deref(), Some("test-api-key"));
+    let seen_guard = seen.lock().expect("seen");
+    assert_eq!(seen_guard.len(), 1);
+    assert_eq!(seen_guard[0].0, "fake-image-model");
+    assert_eq!(seen_guard[0].1, vec!["Generate a dog"]);
+    assert_eq!(seen_guard[0].2.api_key.as_deref(), Some("test-api-key"));
     assert_eq!(
-        seen[0].2.headers.get("X-Test").map(String::as_str),
+        seen_guard[0].2.headers.get("X-Test").map(String::as_str),
         Some("yes")
     );
-    assert!(seen[0].2.abort_flag.is_some());
-    drop(seen);
+    assert!(seen_guard[0].2.abort_flag.is_some());
+    drop(seen_guard);
 
     let mut missing = model.clone();
     missing.api = format!("missing-{api}");
@@ -1871,6 +1925,27 @@ async fn images_api_registry_dispatches_generate_images_and_reports_missing_prov
         .await
         .expect_err("missing provider");
     assert!(matches!(err, ProviderError::MissingApi(api) if api == missing.api));
+
+    let direct_provider = get_images_api_provider(&api).expect("registered image provider");
+    let mut mismatched = model.clone();
+    mismatched.api = format!("other-{api}");
+    let err = match direct_provider
+        .generate_images(
+            &mismatched,
+            ImagesContext::default(),
+            ImagesOptions::default(),
+        )
+        .await
+    {
+        Ok(_) => panic!("mismatched image model api should fail"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        err,
+        ProviderError::MismatchedApi { actual, expected }
+            if actual == mismatched.api && expected == api
+    ));
+    assert_eq!(seen.lock().expect("seen").len(), 1);
 
     unregister_images_api_providers(&source_id);
     assert!(get_images_api_provider(&api).is_none());

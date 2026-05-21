@@ -42,12 +42,48 @@ struct RegistryEntry {
     source_id: Option<String>,
 }
 
+struct CheckedApiProvider {
+    api: Api,
+    inner: Arc<dyn ApiProvider>,
+}
+
+impl ApiProvider for CheckedApiProvider {
+    fn api(&self) -> &str {
+        &self.api
+    }
+
+    fn stream(
+        &self,
+        model: &Model,
+        context: Context,
+        options: StreamOptions,
+    ) -> Result<AssistantMessageEventStream, ProviderError> {
+        ensure_model_api(model, &self.api)?;
+        self.inner.stream(model, context, options)
+    }
+
+    fn stream_simple(
+        &self,
+        model: &Model,
+        context: Context,
+        options: SimpleStreamOptions,
+    ) -> Result<AssistantMessageEventStream, ProviderError> {
+        ensure_model_api(model, &self.api)?;
+        self.inner.stream_simple(model, context, options)
+    }
+}
+
 static API_PROVIDER_REGISTRY: std::sync::LazyLock<RwLock<BTreeMap<Api, RegistryEntry>>> =
     std::sync::LazyLock::new(|| RwLock::new(BTreeMap::new()));
 
 pub fn register_api_provider(provider: Arc<dyn ApiProvider>, source_id: Option<String>) {
+    let api = provider.api().to_owned();
+    let provider = Arc::new(CheckedApiProvider {
+        api: api.clone(),
+        inner: provider,
+    });
     API_PROVIDER_REGISTRY.write().insert(
-        provider.api().to_owned(),
+        api,
         RegistryEntry {
             provider,
             source_id,

@@ -25,6 +25,28 @@ struct ImagesRegistryEntry {
     source_id: Option<String>,
 }
 
+struct CheckedImagesApiProvider {
+    api: ImagesApi,
+    inner: Arc<dyn ImagesApiProvider>,
+}
+
+#[async_trait]
+impl ImagesApiProvider for CheckedImagesApiProvider {
+    fn api(&self) -> &str {
+        &self.api
+    }
+
+    async fn generate_images(
+        &self,
+        model: &ImagesModel,
+        context: ImagesContext,
+        options: ImagesOptions,
+    ) -> Result<AssistantImages, ProviderError> {
+        ensure_images_model_api(model, &self.api)?;
+        self.inner.generate_images(model, context, options).await
+    }
+}
+
 static IMAGES_API_PROVIDER_REGISTRY: std::sync::LazyLock<
     RwLock<BTreeMap<ImagesApi, ImagesRegistryEntry>>,
 > = std::sync::LazyLock::new(|| RwLock::new(BTreeMap::new()));
@@ -33,8 +55,13 @@ pub fn register_images_api_provider(
     provider: Arc<dyn ImagesApiProvider>,
     source_id: Option<String>,
 ) {
+    let api = provider.api().to_owned();
+    let provider = Arc::new(CheckedImagesApiProvider {
+        api: api.clone(),
+        inner: provider,
+    });
     IMAGES_API_PROVIDER_REGISTRY.write().insert(
-        provider.api().to_owned(),
+        api,
         ImagesRegistryEntry {
             provider,
             source_id,
