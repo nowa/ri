@@ -10855,7 +10855,7 @@ fn openai_completions_payload_sets_stream_usage_store_and_omits_falsey_options()
         &user_context("hi"),
         OpenAICompletionsPayloadOptions {
             max_tokens: Some(0),
-            tool_choice: Some(String::new()),
+            tool_choice: Some(json!("")),
             ..Default::default()
         },
     );
@@ -10920,12 +10920,32 @@ fn openai_completions_payload_forwards_tool_choice_and_strict_compat() {
             ..Default::default()
         },
         OpenAICompletionsPayloadOptions {
-            tool_choice: Some("required".to_owned()),
+            tool_choice: Some(json!("required")),
             ..Default::default()
         },
     );
     assert_eq!(payload["tool_choice"], "required");
     assert_eq!(payload["tools"][0]["function"]["strict"], false);
+
+    let payload = build_openai_completions_payload(
+        &model,
+        &Context {
+            messages: vec![Message::User(UserMessage::text("Call ping"))],
+            tools: vec![tool.clone()],
+            ..Default::default()
+        },
+        OpenAICompletionsPayloadOptions {
+            tool_choice: Some(json!({
+                "type": "function",
+                "function": { "name": "ping" },
+            })),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        payload["tool_choice"],
+        json!({ "type": "function", "function": { "name": "ping" } })
+    );
 
     let together_model = get_model("together", "openai/gpt-oss-120b").expect("together model");
     let payload = build_openai_completions_payload(
@@ -14334,8 +14354,21 @@ async fn builtin_openai_completions_provider_posts_json_and_parses_sse() {
     options.stream.api_key = Some("test-key".to_owned());
     options.stream.session_id = Some("session-1".to_owned());
     options.stream.cache_retention = Some(CacheRetention::Long);
+    options.stream.extra.insert(
+        "toolChoice".to_owned(),
+        json!({ "type": "function", "function": { "name": "ping" } }),
+    );
+    let context = Context {
+        messages: vec![Message::User(UserMessage::text("hello"))],
+        tools: vec![Tool {
+            name: "ping".to_owned(),
+            description: "Ping tool".to_owned(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        }],
+        ..Default::default()
+    };
 
-    let message = complete_simple(&model, user_context("hello"), options)
+    let message = complete_simple(&model, context, options)
         .await
         .expect("complete");
     let request = request_task.await.expect("request task");
@@ -14346,6 +14379,8 @@ async fn builtin_openai_completions_provider_posts_json_and_parses_sse() {
     assert_eq!(message.usage.input, 4);
     assert_eq!(message.usage.output, 2);
     assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+    let request_body = request.split("\r\n\r\n").nth(1).expect("request body");
+    let request_json: Value = serde_json::from_str(request_body).expect("request json");
     assert!(
         request
             .to_ascii_lowercase()
@@ -14353,6 +14388,10 @@ async fn builtin_openai_completions_provider_posts_json_and_parses_sse() {
     );
     assert!(request.contains("\"stream\":true"));
     assert!(request.contains("\"prompt_cache_key\":\"session-1\""));
+    assert_eq!(
+        request_json["tool_choice"],
+        json!({ "type": "function", "function": { "name": "ping" } })
+    );
 }
 
 #[tokio::test]

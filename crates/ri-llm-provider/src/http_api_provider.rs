@@ -190,12 +190,7 @@ impl ApiProvider for OpenAICompletionsHttpProvider {
             model,
             &context,
             OpenAICompletionsPayloadOptions {
-                tool_choice: options
-                    .stream
-                    .extra
-                    .get("toolChoice")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
+                tool_choice: options.stream.extra.get("toolChoice").cloned(),
                 reasoning: options.reasoning,
                 cache_retention: Some(cache_retention),
                 session_id: options.stream.session_id.clone(),

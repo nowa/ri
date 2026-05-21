@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OpenAICompletionsPayloadOptions {
-    pub tool_choice: Option<String>,
+    pub tool_choice: Option<Value>,
     pub reasoning: Option<ThinkingLevel>,
     pub cache_retention: Option<CacheRetention>,
     pub session_id: Option<String>,
@@ -64,8 +64,11 @@ pub fn build_openai_completions_payload(
         payload["tools"] = Value::Array(Vec::new());
     }
 
-    if let Some(tool_choice) = options.tool_choice.filter(|value| !value.is_empty()) {
-        payload["tool_choice"] = Value::String(tool_choice);
+    if let Some(tool_choice) = options
+        .tool_choice
+        .filter(|value| !matches!(value, Value::String(text) if text.is_empty()))
+    {
+        payload["tool_choice"] = tool_choice;
     }
 
     if should_set_prompt_cache_key(model, cache_retention) {

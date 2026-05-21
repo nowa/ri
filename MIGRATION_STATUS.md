@@ -189,10 +189,11 @@ counterparts that pass.
     errors, incomplete terminal events, aborted reasoning history pruning,
     same-provider model handoff item-id omission, empty assistant-turn pruning,
     and service-tier usage cost multipliers.
-  - OpenAI Completions payload helpers for empty-tools omission, tool choice,
-    strict-mode compatibility, provider reasoning fields, z.ai tool streaming,
-    Anthropic-style cache-control markers, tool-result image replay, and
-    thinking-as-text replay, prompt-cache fields, session-affinity headers,
+  - OpenAI Completions payload helpers for empty-tools omission, string and
+    function-object tool choice forwarding, strict-mode compatibility,
+    provider reasoning fields, z.ai tool streaming, Anthropic-style
+    cache-control markers, tool-result image replay, and thinking-as-text
+    replay, prompt-cache fields, session-affinity headers,
     Cloudflare AI Gateway `cf-aig-authorization` and BYOK upstream
     authorization preservation, empty user-block pruning, stream usage parsing,
     streamed text/thinking/tool delta aggregation, finish-reason mapping, and
@@ -452,7 +453,7 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning `stream.ts`
+- Previous local verification on 2026-05-21 after aligning `stream.ts`
   provider-option reasoning behavior: ordinary Rust `stream`/`complete` now
   parse source provider extras such as `reasoningEffort` and Bedrock-style
   `reasoning` into typed `SimpleStreamOptions`, built-in HTTP provider wrappers
@@ -461,6 +462,17 @@ This migration is not complete.
   provider/network failure:
   `cargo test -p ri-llm-provider --test provider_core unsupported_xhigh_reasoning_returns_error_message_without_network -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core builtin_openai_responses_provider_stream_options_preserve_reasoning_effort -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`,
+  `cargo test --workspace -- --list` (1161 tests enumerated), and
+  `cargo fmt --check` and `git diff --check` passed.
+- Latest local verification on 2026-05-21 after aligning
+  `providers/openai-completions.ts` `toolChoice` forwarding: Rust now keeps the
+  source's string form and function-object form as JSON values through payload
+  construction and built-in HTTP provider request building, while preserving
+  the existing empty-string omission behavior:
+  `cargo test -p ri-llm-provider --test provider_core openai_completions_payload_forwards_tool_choice_and_strict_compat -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_openai_completions_provider_posts_json_and_parses_sse -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
   `cargo test --workspace -- --test-threads=1`,
   `cargo test --workspace -- --list` (1161 tests enumerated), and
