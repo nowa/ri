@@ -121,7 +121,9 @@ pub fn build_mistral_request_headers(
     let mut headers = model.headers.clone();
     headers.extend(option_headers.clone());
     if let Some(session_id) = session_id
-        && !headers.contains_key("x-affinity")
+        && headers
+            .get("x-affinity")
+            .is_none_or(|value| value.is_empty())
     {
         headers.insert("x-affinity".to_owned(), session_id.to_owned());
     }
@@ -230,6 +232,12 @@ impl MistralChatStreamProcessor {
         output: &mut AssistantMessage,
         sender: &AssistantMessageEventSender,
     ) -> Result<(), String> {
+        if !self.started {
+            self.started = true;
+            sender.push(AssistantMessageEvent::Start {
+                partial: output.clone(),
+            });
+        }
         finish_mistral_active_block(output, sender, &mut self.active_block);
         finish_mistral_tool_call_blocks(output, sender, &self.tool_call_partial_args);
 

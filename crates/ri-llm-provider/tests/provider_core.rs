@@ -4467,6 +4467,16 @@ fn mistral_request_headers_apply_session_affinity_without_overriding_callers() {
         headers.get("x-affinity").map(String::as_str),
         Some("caller-affinity")
     );
+
+    let headers = build_mistral_request_headers(
+        &model,
+        Some("session-3"),
+        &BTreeMap::from([("x-affinity".to_owned(), String::new())]),
+    );
+    assert_eq!(
+        headers.get("x-affinity").map(String::as_str),
+        Some("session-3")
+    );
 }
 
 #[tokio::test]
@@ -4577,6 +4587,31 @@ async fn mistral_stream_chunks_preserve_response_id_usage_and_tool_calls() {
         events.last(),
         Some(AssistantMessageEvent::Done {
             reason: StopReason::ToolUse,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn mistral_stream_chunks_emit_start_before_done_for_empty_stream() {
+    let model = get_model("mistral", "devstral-medium-latest").expect("mistral model");
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, stream) = assistant_message_event_stream();
+
+    process_mistral_chat_chunks(std::iter::empty::<Value>(), &mut output, &sender, &model)
+        .expect("empty mistral stream");
+    drop(sender);
+
+    let events = collect_events(stream).await;
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        events.first(),
+        Some(AssistantMessageEvent::Start { .. })
+    ));
+    assert!(matches!(
+        events.last(),
+        Some(AssistantMessageEvent::Done {
+            reason: StopReason::Stop,
             ..
         })
     ));

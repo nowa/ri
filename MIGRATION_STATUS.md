@@ -378,10 +378,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1139 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1140 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 938 tests: 1 library test, 306 `provider_core` tests, and
-  631 `provider_live` tests. This is 217 above the 721 direct simple source
+- `ri-llm-provider`: 939 tests: 1 library test, 307 `provider_core` tests, and
+  631 `provider_live` tests. This is 218 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -416,7 +416,7 @@ Current Rust tests: 1139 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1139-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1140-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -440,6 +440,18 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after tightening
+  `providers/mistral.ts` stream/header parity: Mistral now emits `start`
+  before `done` even for an empty stream, matching the source stream wrapper,
+  and empty caller `x-affinity` headers are filled from `sessionId` while
+  non-empty caller values remain authoritative:
+  `cargo test -p ri-llm-provider --test provider_core mistral_stream_chunks_emit_start_before_done_for_empty_stream -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core mistral_request_headers_apply_session_affinity_without_overriding_callers -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core mistral_ -- --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`, `cargo fmt --check`,
+  `git diff --check`, and `cargo test --workspace -- --list` (1140 tests
+  enumerated) passed.
+- Previous local verification on 2026-05-21 after tightening
   `providers/google-vertex.ts` parity: empty `GOOGLE_CLOUD_PROJECT` now falls
   through to `GCLOUD_PROJECT`, placeholder API-key matching follows the source
   `<[^>]+>` rule, and Vertex `gemini-2.5-flash-lite` reasoning budgets follow
@@ -1037,6 +1049,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1139 Rust tests cover the
+- Test parity is not certified by raw count alone: 1140 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
