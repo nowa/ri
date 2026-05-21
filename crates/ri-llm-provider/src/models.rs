@@ -186,7 +186,15 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ),
     ("amazon-bedrock", "global.anthropic.claude-opus-4-6-v1"),
     ("amazon-bedrock", "us.anthropic.claude-opus-4-7"),
+    ("openai", "gpt-4"),
+    ("openai", "gpt-4-turbo"),
+    ("openai", "gpt-4.1"),
+    ("openai", "gpt-4.1-mini"),
+    ("openai", "gpt-4.1-nano"),
     ("openai", "gpt-4o"),
+    ("openai", "gpt-4o-2024-05-13"),
+    ("openai", "gpt-4o-2024-08-06"),
+    ("openai", "gpt-4o-2024-11-20"),
     ("openai", "gpt-4o-mini"),
     ("openai", "gpt-5"),
     ("openai", "gpt-5-chat-latest"),
@@ -226,6 +234,15 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("openai-codex", "gpt-5.4"),
     ("openai-codex", "gpt-5.4-mini"),
     ("openai-codex", "gpt-5.5"),
+    ("azure-openai-responses", "gpt-4"),
+    ("azure-openai-responses", "gpt-4-turbo"),
+    ("azure-openai-responses", "gpt-4.1"),
+    ("azure-openai-responses", "gpt-4.1-mini"),
+    ("azure-openai-responses", "gpt-4.1-nano"),
+    ("azure-openai-responses", "gpt-4o"),
+    ("azure-openai-responses", "gpt-4o-2024-05-13"),
+    ("azure-openai-responses", "gpt-4o-2024-08-06"),
+    ("azure-openai-responses", "gpt-4o-2024-11-20"),
     ("azure-openai-responses", "gpt-4o-mini"),
     ("azure-openai-responses", "gpt-5"),
     ("azure-openai-responses", "gpt-5-chat-latest"),
@@ -551,6 +568,14 @@ fn apply_known_model_overrides(model: &mut Model) {
         ensure_image_input(model);
     }
 
+    if model.provider == "openai" && apply_openai_gpt4_generated_metadata(model) {
+        return;
+    }
+    if model.provider == "azure-openai-responses"
+        && apply_azure_openai_gpt4_generated_metadata(model)
+    {
+        return;
+    }
     if model.provider == "openai" && apply_openai_gpt5_generated_metadata(model) {
         return;
     }
@@ -768,6 +793,107 @@ fn apply_known_model_overrides(model: &mut Model) {
             }
         }
         _ => {}
+    }
+}
+
+struct Gpt4GeneratedMetadata {
+    text_only: bool,
+    context_window: u64,
+    max_tokens: u64,
+    cost: ModelCost,
+}
+
+fn gpt4_generated_metadata(model_id: &str) -> Option<Gpt4GeneratedMetadata> {
+    match model_id {
+        "gpt-4" => Some(Gpt4GeneratedMetadata {
+            text_only: true,
+            context_window: 8_192,
+            max_tokens: 8_192,
+            cost: ModelCost {
+                input: 30.0,
+                output: 60.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-4-turbo" => Some(Gpt4GeneratedMetadata {
+            text_only: false,
+            context_window: 128_000,
+            max_tokens: 4_096,
+            cost: ModelCost {
+                input: 10.0,
+                output: 30.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-4.1" => Some(Gpt4GeneratedMetadata {
+            text_only: false,
+            context_window: 1_047_576,
+            max_tokens: 32_768,
+            cost: ModelCost {
+                input: 2.0,
+                output: 8.0,
+                cache_read: 0.5,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-4.1-mini" => Some(Gpt4GeneratedMetadata {
+            text_only: false,
+            context_window: 1_047_576,
+            max_tokens: 32_768,
+            cost: ModelCost {
+                input: 0.4,
+                output: 1.6,
+                cache_read: 0.1,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-4.1-nano" => Some(Gpt4GeneratedMetadata {
+            text_only: false,
+            context_window: 1_047_576,
+            max_tokens: 32_768,
+            cost: ModelCost {
+                input: 0.1,
+                output: 0.4,
+                cache_read: 0.03,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-4o" | "gpt-4o-2024-08-06" | "gpt-4o-2024-11-20" => Some(Gpt4GeneratedMetadata {
+            text_only: false,
+            context_window: 128_000,
+            max_tokens: 16_384,
+            cost: ModelCost {
+                input: 2.5,
+                output: 10.0,
+                cache_read: 1.25,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-4o-2024-05-13" => Some(Gpt4GeneratedMetadata {
+            text_only: false,
+            context_window: 128_000,
+            max_tokens: 4_096,
+            cost: ModelCost {
+                input: 5.0,
+                output: 15.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-4o-mini" => Some(Gpt4GeneratedMetadata {
+            text_only: false,
+            context_window: 128_000,
+            max_tokens: 16_384,
+            cost: ModelCost {
+                input: 0.15,
+                output: 0.6,
+                cache_read: 0.08,
+                cache_write: 0.0,
+            },
+        }),
+        _ => None,
     }
 }
 
@@ -1105,6 +1231,36 @@ fn o_series_generated_metadata(model_id: &str) -> Option<OSeriesGeneratedMetadat
     }
 }
 
+fn apply_openai_gpt4_generated_metadata(model: &mut Model) -> bool {
+    let Some(metadata) = gpt4_generated_metadata(model.id.as_str()) else {
+        return false;
+    };
+    model.api = "openai-responses".to_owned();
+    apply_gpt4_generated_metadata(model, metadata);
+    true
+}
+
+fn apply_azure_openai_gpt4_generated_metadata(model: &mut Model) -> bool {
+    let Some(metadata) = gpt4_generated_metadata(model.id.as_str()) else {
+        return false;
+    };
+    model.base_url.clear();
+    apply_gpt4_generated_metadata(model, metadata);
+    true
+}
+
+fn apply_gpt4_generated_metadata(model: &mut Model, metadata: Gpt4GeneratedMetadata) {
+    model.reasoning = false;
+    model.thinking_level_map.clear();
+    model.input = vec![crate::types::InputKind::Text];
+    if !metadata.text_only {
+        ensure_image_input(model);
+    }
+    model.context_window = metadata.context_window;
+    model.max_tokens = metadata.max_tokens;
+    model.cost = metadata.cost;
+}
+
 fn apply_openai_gpt5_generated_metadata(model: &mut Model) -> bool {
     let Some(metadata) = gpt5_generated_metadata(model.id.as_str()) else {
         return false;
@@ -1379,7 +1535,9 @@ fn base_url_for_model(provider: &str, model_id: &str) -> String {
 
 fn api_for_provider(provider: &str, model_id: &str) -> &'static str {
     if provider == "openai"
-        && (model_id.starts_with("gpt-5") || o_series_generated_metadata(model_id).is_some())
+        && (model_id.starts_with("gpt-5")
+            || gpt4_generated_metadata(model_id).is_some()
+            || o_series_generated_metadata(model_id).is_some())
     {
         return "openai-responses";
     }

@@ -42,10 +42,11 @@ counterparts that pass.
     preservation through Rust `StreamOptions`.
   - Built-in model registry seed and thinking-level helpers, including
     OpenAI and Azure OpenAI Responses generated-catalog metadata parity for the
-    current GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5 and o-series model
-    slices, plus OpenAI Codex generated-catalog metadata parity for the six
-    current ChatGPT backend models, base URL, context/output windows,
-    image-input capability, thinking-level map, and usage cost table.
+    current GPT-4/GPT-4.1/GPT-4o, GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5,
+    and o-series model slices, plus OpenAI Codex generated-catalog metadata
+    parity for the six current ChatGPT backend models, base URL,
+    context/output windows, image-input capability, thinking-level map, and
+    usage cost table.
   - Faux provider with queued responses, multi-model registrations,
     model-aware response factories, event deltas, terminal error/abort events,
     abort flags before and during paced streams, usage estimates, session cache
@@ -430,10 +431,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1190 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1191 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 983 tests: 2 library tests, 350 `provider_core` tests, and
-  631 `provider_live` tests. This is 262 above the 721 direct simple source
+- `ri-llm-provider`: 984 tests: 2 library tests, 351 `provider_core` tests, and
+  631 `provider_live` tests. This is 263 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -742,6 +743,21 @@ This migration is not complete.
   `cargo test -p ri-llm-provider --test provider_core azure_openai -- --test-threads=1`,
   `cargo fmt --check`, `git diff --check`, and
   `cargo test --workspace -- --list` passed; the list command enumerated 1190
+  tests.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` OpenAI and Azure OpenAI Responses GPT-4/GPT-4.1/GPT-4o
+  catalog metadata: Rust now exposes the generated GPT-4 family model slice for
+  both providers, maps the source Responses API/base URL shape, non-reasoning
+  flag, empty thinking-level map, text-only `gpt-4` input capability,
+  context/output windows, and non-zero usage cost table:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core openai_and_azure_gpt4_model_metadata_matches_generated_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_model_metadata_matches_generated_gpt5_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core azure_openai_model_metadata_matches_generated_gpt5_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_responses_ -- --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core azure_openai -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed; the list command enumerated 1191
   tests.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
