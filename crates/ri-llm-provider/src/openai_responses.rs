@@ -270,9 +270,15 @@ pub fn convert_openai_responses_messages(
                             if text.text.trim().is_empty() {
                                 continue;
                             }
-                            let message_id = openai_responses_text_signature_id(&text)
+                            let signature = openai_responses_text_signature_parts(&text);
+                            let mut message_id = signature
+                                .as_ref()
+                                .map(|signature| signature.id.clone())
                                 .unwrap_or_else(|| format!("msg_{message_index}"));
-                            output.push(json!({
+                            if message_id.len() > 64 {
+                                message_id = format!("msg_{}", short_hash(&message_id));
+                            }
+                            let mut message = json!({
                                 "type": "message",
                                 "role": "assistant",
                                 "content": [{
@@ -282,7 +288,11 @@ pub fn convert_openai_responses_messages(
                                 }],
                                 "status": "completed",
                                 "id": message_id,
-                            }));
+                            });
+                            if let Some(phase) = signature.and_then(|signature| signature.phase) {
+                                message["phase"] = Value::String(phase);
+                            }
+                            output.push(message);
                         }
                         AssistantContent::ToolCall(tool_call) => {
                             let (call_id, item_id_raw) =
@@ -423,26 +433,52 @@ fn split_responses_tool_call_id(id: &str) -> (&str, Option<&str>) {
     }
 }
 
-fn openai_responses_text_signature_id(text: &TextContent) -> Option<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OpenAIResponsesTextSignature {
+    id: String,
+    phase: Option<String>,
+}
+
+fn openai_responses_text_signature_parts(
+    text: &TextContent,
+) -> Option<OpenAIResponsesTextSignature> {
     match &text.text_signature {
         Some(Value::Object(signature)) => {
             let valid_version = signature.get("v").and_then(Value::as_u64) == Some(1);
             if valid_version {
-                signature
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
+                signature.get("id").and_then(Value::as_str).map(|id| {
+                    let phase = signature
+                        .get("phase")
+                        .and_then(Value::as_str)
+                        .filter(|phase| *phase == "commentary" || *phase == "final_answer")
+                        .map(ToOwned::to_owned);
+                    OpenAIResponsesTextSignature {
+                        id: id.to_owned(),
+                        phase,
+                    }
+                })
             } else {
                 None
             }
         }
-        Some(Value::String(id)) => Some(id.clone()),
+        Some(Value::String(id)) => Some(OpenAIResponsesTextSignature {
+            id: id.clone(),
+            phase: None,
+        }),
         _ => None,
     }
 }
 
-fn openai_responses_text_signature(id: Option<&str>) -> Option<Value> {
-    id.map(|id| json!({ "v": 1, "id": id }))
+fn openai_responses_text_signature(id: Option<&str>, phase: Option<&str>) -> Option<Value> {
+    id.map(|id| {
+        let mut signature = json!({ "v": 1, "id": id });
+        if let Some(phase) =
+            phase.filter(|phase| *phase == "commentary" || *phase == "final_answer")
+        {
+            signature["phase"] = Value::String(phase.to_owned());
+        }
+        signature
+    })
 }
 
 pub fn process_openai_responses_events<I>(
@@ -466,6 +502,7 @@ where
 pub struct OpenAIResponsesStreamProcessor {
     current_block_index: Option<usize>,
     current_item_type: Option<String>,
+    current_item: Option<Value>,
     current_partial_json: String,
     terminal: bool,
 }
@@ -504,6 +541,7 @@ impl OpenAIResponsesStreamProcessor {
                     return Ok(());
                 };
                 self.current_item_type = Some(item_type.to_owned());
+                self.current_item = Some(item.clone());
 
                 if item_type == "function_call" {
                     self.current_partial_json = item
@@ -536,9 +574,7 @@ impl OpenAIResponsesStreamProcessor {
                 } else if item_type == "message" {
                     let text = TextContent {
                         text: String::new(),
-                        text_signature: openai_responses_text_signature(
-                            item.get("id").and_then(Value::as_str),
-                        ),
+                        text_signature: None,
                     };
                     output.content.push(AssistantContent::Text(text));
                     self.current_block_index = Some(output.content.len() - 1);
@@ -546,9 +582,96 @@ impl OpenAIResponsesStreamProcessor {
                         content_index: self.current_block_index.unwrap(),
                         partial: output.clone(),
                     });
+                } else if item_type == "reasoning" {
+                    output
+                        .content
+                        .push(AssistantContent::Thinking(crate::ThinkingContent::new("")));
+                    self.current_block_index = Some(output.content.len() - 1);
+                    sender.push(AssistantMessageEvent::ThinkingStart {
+                        content_index: self.current_block_index.unwrap(),
+                        partial: output.clone(),
+                    });
+                }
+            }
+            "response.reasoning_summary_part.added" => {
+                if self.current_item_type.as_deref() == Some("reasoning")
+                    && let Some(current_item) = self.current_item.as_mut()
+                    && let Some(part) = event.get("part")
+                {
+                    let summary = current_item.as_object_mut().and_then(|item| {
+                        item.entry("summary")
+                            .or_insert_with(|| Value::Array(Vec::new()))
+                            .as_array_mut()
+                    });
+                    if let Some(summary) = summary {
+                        summary.push(part.clone());
+                    }
+                }
+            }
+            "response.reasoning_summary_text.delta" => {
+                if self.current_item_type.as_deref() == Some("reasoning") {
+                    let delta = event
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if let Some(current_item) = self.current_item.as_mut()
+                        && let Some(last_part) = current_item
+                            .get_mut("summary")
+                            .and_then(Value::as_array_mut)
+                            .and_then(|summary| summary.last_mut())
+                    {
+                        if let Some(text) = last_part.get("text").and_then(Value::as_str) {
+                            let updated = format!("{text}{delta}");
+                            last_part["text"] = Value::String(updated);
+                        }
+                        self.append_openai_responses_thinking_delta(output, sender, delta);
+                    }
+                }
+            }
+            "response.reasoning_summary_part.done" => {
+                if self.current_item_type.as_deref() == Some("reasoning") {
+                    if let Some(current_item) = self.current_item.as_mut()
+                        && let Some(last_part) = current_item
+                            .get_mut("summary")
+                            .and_then(Value::as_array_mut)
+                            .and_then(|summary| summary.last_mut())
+                    {
+                        if let Some(text) = last_part.get("text").and_then(Value::as_str) {
+                            let updated = format!("{text}\n\n");
+                            last_part["text"] = Value::String(updated);
+                        }
+                        self.append_openai_responses_thinking_delta(output, sender, "\n\n");
+                    }
+                }
+            }
+            "response.reasoning_text.delta" => {
+                if self.current_item_type.as_deref() == Some("reasoning") {
+                    let delta = event
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    self.append_openai_responses_thinking_delta(output, sender, delta);
                 }
             }
             "response.output_text.delta" => {
+                if self.current_item_type.as_deref() == Some("message") {
+                    let delta = event
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if let Some(index) = self.current_block_index {
+                        if let Some(AssistantContent::Text(text)) = output.content.get_mut(index) {
+                            text.text.push_str(delta);
+                        }
+                        sender.push(AssistantMessageEvent::TextDelta {
+                            content_index: index,
+                            delta: delta.to_owned(),
+                            partial: output.clone(),
+                        });
+                    }
+                }
+            }
+            "response.refusal.delta" => {
                 if self.current_item_type.as_deref() == Some("message") {
                     let delta = event
                         .get("delta")
@@ -675,6 +798,7 @@ impl OpenAIResponsesStreamProcessor {
 
                     self.current_block_index = None;
                     self.current_item_type = None;
+                    self.current_item = None;
                     self.current_partial_json.clear();
                     sender.push(AssistantMessageEvent::ToolcallEnd {
                         content_index: index,
@@ -683,43 +807,90 @@ impl OpenAIResponsesStreamProcessor {
                     });
                 } else if item.get("type").and_then(Value::as_str) == Some("message") {
                     let item_id = item.get("id").and_then(Value::as_str);
-                    let final_text =
-                        item.get("content")
-                            .and_then(Value::as_array)
-                            .and_then(|content| {
-                                content.iter().find_map(|part| {
-                                    (part.get("type").and_then(Value::as_str)
-                                        == Some("output_text"))
-                                    .then(|| part.get("text").and_then(Value::as_str))
-                                    .flatten()
+                    let item_phase = item.get("phase").and_then(Value::as_str);
+                    let final_text = item
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .map(|content| {
+                            content
+                                .iter()
+                                .filter_map(|part| match part.get("type").and_then(Value::as_str) {
+                                    Some("output_text") => part.get("text").and_then(Value::as_str),
+                                    Some("refusal") => part.get("refusal").and_then(Value::as_str),
+                                    _ => None,
                                 })
-                            });
+                                .collect::<String>()
+                        })
+                        .filter(|text| !text.is_empty());
                     let index = if let Some(index) = self.current_block_index {
                         if let Some(AssistantContent::Text(text)) = output.content.get_mut(index) {
-                            if let Some(final_text) = final_text {
-                                text.text = final_text.to_owned();
+                            if let Some(final_text) = &final_text {
+                                text.text = final_text.clone();
                             }
-                            if text.text_signature.is_none() {
-                                text.text_signature = openai_responses_text_signature(item_id);
-                            }
+                            text.text_signature =
+                                openai_responses_text_signature(item_id, item_phase);
                         }
                         index
                     } else {
                         output.content.push(AssistantContent::Text(TextContent {
                             text: final_text.unwrap_or_default().to_owned(),
-                            text_signature: openai_responses_text_signature(item_id),
+                            text_signature: openai_responses_text_signature(item_id, item_phase),
                         }));
                         output.content.len() - 1
                     };
 
                     self.current_block_index = None;
                     self.current_item_type = None;
+                    self.current_item = None;
                     sender.push(AssistantMessageEvent::TextEnd {
                         content_index: index,
                         content: match &output.content[index] {
                             AssistantContent::Text(text) => text.text.clone(),
                             _ => String::new(),
                         },
+                        partial: output.clone(),
+                    });
+                } else if item.get("type").and_then(Value::as_str) == Some("reasoning") {
+                    let summary_text = openai_responses_join_reasoning_text(item, "summary");
+                    let content_text = openai_responses_join_reasoning_text(item, "content");
+                    let index = if let Some(index) = self.current_block_index {
+                        if let Some(AssistantContent::Thinking(thinking)) =
+                            output.content.get_mut(index)
+                        {
+                            if !summary_text.is_empty() {
+                                thinking.thinking = summary_text;
+                            } else if !content_text.is_empty() {
+                                thinking.thinking = content_text;
+                            }
+                            thinking.thinking_signature = Some(item.to_string());
+                        }
+                        index
+                    } else {
+                        let thinking = if !summary_text.is_empty() {
+                            summary_text
+                        } else {
+                            content_text
+                        };
+                        output
+                            .content
+                            .push(AssistantContent::Thinking(crate::ThinkingContent {
+                                thinking,
+                                thinking_signature: Some(item.to_string()),
+                                redacted: false,
+                            }));
+                        output.content.len() - 1
+                    };
+
+                    self.current_block_index = None;
+                    self.current_item_type = None;
+                    self.current_item = None;
+                    let content = match &output.content[index] {
+                        AssistantContent::Thinking(thinking) => thinking.thinking.clone(),
+                        _ => String::new(),
+                    };
+                    sender.push(AssistantMessageEvent::ThinkingEnd {
+                        content_index: index,
+                        content,
                         partial: output.clone(),
                     });
                 }
@@ -765,15 +936,24 @@ impl OpenAIResponsesStreamProcessor {
                 return Err(format!("Error Code {code}: {message}"));
             }
             "response.failed" => {
-                let message = event
-                    .pointer("/response/error/message")
+                let message = if let Some(error) = event.pointer("/response/error") {
+                    let code = error
+                        .get("code")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    let message = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("no message");
+                    format!("{code}: {message}")
+                } else if let Some(reason) = event
+                    .pointer("/response/incomplete_details/reason")
                     .and_then(Value::as_str)
-                    .or_else(|| {
-                        event
-                            .pointer("/response/incomplete_details/reason")
-                            .and_then(Value::as_str)
-                    })
-                    .unwrap_or("Unknown error (no error details in response)");
+                {
+                    format!("incomplete: {reason}")
+                } else {
+                    "Unknown error (no error details in response)".to_owned()
+                };
                 return Err(message.to_owned());
             }
             _ => {}
@@ -782,12 +962,43 @@ impl OpenAIResponsesStreamProcessor {
         Ok(())
     }
 
+    fn append_openai_responses_thinking_delta(
+        &self,
+        output: &mut AssistantMessage,
+        sender: &AssistantMessageEventSender,
+        delta: &str,
+    ) {
+        if let Some(index) = self.current_block_index {
+            if let Some(AssistantContent::Thinking(thinking)) = output.content.get_mut(index) {
+                thinking.thinking.push_str(delta);
+            }
+            sender.push(AssistantMessageEvent::ThinkingDelta {
+                content_index: index,
+                delta: delta.to_owned(),
+                partial: output.clone(),
+            });
+        }
+    }
+
     pub fn finish(self, output: &mut AssistantMessage, sender: &AssistantMessageEventSender) {
         sender.push(AssistantMessageEvent::Done {
             reason: output.stop_reason,
             message: output.clone(),
         });
     }
+}
+
+fn openai_responses_join_reasoning_text(item: &Value, field: &str) -> String {
+    item.get(field)
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        })
+        .unwrap_or_default()
 }
 
 fn parse_arguments(json_text: &str) -> Map<String, Value> {

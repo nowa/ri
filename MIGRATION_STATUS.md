@@ -181,9 +181,11 @@ counterparts that pass.
     partial JSON cleanup, foreign tool-call ID normalization, tool-result
     images, prompt-cache fields, session-affinity headers, default reasoning
     payload rules, function tools with strict defaults, text deltas/signature
-    replay, incomplete terminal events, aborted reasoning history pruning,
-    same-provider model handoff item-id omission, empty assistant-turn pruning,
-    and service-tier usage cost multipliers.
+    replay including commentary/final-answer phase metadata and long ID
+    hashing, reasoning summary stream blocks, refusal deltas/final content,
+    source-shaped failed-response errors, incomplete terminal events, aborted
+    reasoning history pruning, same-provider model handoff item-id omission,
+    empty assistant-turn pruning, and service-tier usage cost multipliers.
   - OpenAI Completions payload helpers for empty-tools omission, tool choice,
     strict-mode compatibility, provider reasoning fields, z.ai tool streaming,
     Anthropic-style cache-control markers, tool-result image replay, and
@@ -386,10 +388,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1155 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1159 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 954 tests: 2 library tests, 321 `provider_core` tests, and
-  631 `provider_live` tests. This is 233 above the 721 direct simple source
+- `ri-llm-provider`: 958 tests: 2 library tests, 325 `provider_core` tests, and
+  631 `provider_live` tests. This is 237 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -424,7 +426,7 @@ Current Rust tests: 1155 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1155-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1159-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -447,6 +449,18 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-21 after aligning additional
+  `providers/openai-responses-shared.ts` stream/message parity: OpenAI
+  Responses stream processing now emits reasoning summary thinking blocks,
+  preserves refusal deltas/final refusal content, encodes and replays
+  `TextSignatureV1.phase` for `commentary`/`final_answer`, hashes long
+  response message IDs before replay, and formats `response.failed` errors with
+  the source code/message and incomplete-detail prefixes:
+  `cargo test -p ri-llm-provider --test provider_core openai_responses_ -- --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`,
+  `cargo test --workspace -- --list` (1159 tests enumerated), and
+  `cargo fmt --check` and `git diff --check` passed.
 - Latest local verification on 2026-05-21 after aligning
   `utils/typebox-helpers.ts`: added `string_enum_schema` and
   `StringEnumOptions` as a Rust-native counterpart of Pi's `StringEnum`
@@ -1146,6 +1160,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1155 Rust tests cover the
+- Test parity is not certified by raw count alone: 1159 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

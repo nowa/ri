@@ -9841,6 +9841,198 @@ fn openai_responses_stream_maps_text_deltas_and_replays_text_signature() {
     assert_eq!(replay_items[0]["content"][0]["text"], "Hello");
 }
 
+#[tokio::test]
+async fn openai_responses_stream_maps_reasoning_summary_events() {
+    let model = get_model("openai", "gpt-5.5").expect("openai model");
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, stream) = assistant_message_event_stream();
+
+    process_openai_responses_events(
+        [
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "encrypted_content": "encrypted"
+                }
+            }),
+            json!({
+                "type": "response.reasoning_summary_part.added",
+                "part": { "type": "summary_text", "text": "" }
+            }),
+            json!({
+                "type": "response.reasoning_summary_text.delta",
+                "delta": "Plan the answer"
+            }),
+            json!({ "type": "response.reasoning_summary_part.done" }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{ "type": "summary_text", "text": "Plan the answer\n\n" }],
+                    "content": [{ "type": "reasoning_text", "text": "private chain" }],
+                    "encrypted_content": "encrypted"
+                }
+            }),
+        ],
+        &mut output,
+        &sender,
+        &model,
+    )
+    .expect("process reasoning stream");
+    drop(sender);
+
+    let AssistantContent::Thinking(thinking) = &output.content[0] else {
+        panic!("thinking block");
+    };
+    assert_eq!(thinking.thinking, "Plan the answer\n\n");
+    let signature: Value =
+        serde_json::from_str(thinking.thinking_signature.as_deref().expect("signature"))
+            .expect("reasoning item signature");
+    assert_eq!(signature["id"], "rs_1");
+    assert_eq!(signature["encrypted_content"], "encrypted");
+
+    let events = collect_events(stream).await;
+    assert!(matches!(
+        events.first(),
+        Some(AssistantMessageEvent::ThinkingStart {
+            content_index: 0,
+            ..
+        })
+    ));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AssistantMessageEvent::ThinkingDelta { delta, .. } if delta == "Plan the answer"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AssistantMessageEvent::ThinkingDelta { delta, .. } if delta == "\n\n"
+    )));
+    assert!(matches!(
+        events.last(),
+        Some(AssistantMessageEvent::ThinkingEnd { content, .. }) if content == "Plan the answer\n\n"
+    ));
+}
+
+#[test]
+fn openai_responses_stream_preserves_text_phase_and_refusal_content() {
+    let model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, _stream) = assistant_message_event_stream();
+
+    process_openai_responses_events(
+        [
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "message",
+                    "id": "msg_refusal",
+                    "role": "assistant",
+                    "status": "in_progress",
+                    "content": []
+                }
+            }),
+            json!({ "type": "response.refusal.delta", "delta": "No." }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "id": "msg_refusal",
+                    "phase": "final_answer",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{ "type": "refusal", "refusal": "No." }]
+                }
+            }),
+        ],
+        &mut output,
+        &sender,
+        &model,
+    )
+    .expect("process refusal stream");
+
+    let AssistantContent::Text(text) = &output.content[0] else {
+        panic!("text block");
+    };
+    assert_eq!(text.text, "No.");
+    assert_eq!(
+        text.text_signature,
+        Some(json!({ "v": 1, "id": "msg_refusal", "phase": "final_answer" }))
+    );
+
+    let replay_items = openai_codex_response_items_for_continuation(&model, &output);
+    assert_eq!(replay_items[0]["id"], "msg_refusal");
+    assert_eq!(replay_items[0]["phase"], "final_answer");
+    assert_eq!(replay_items[0]["content"][0]["text"], "No.");
+}
+
+#[test]
+fn openai_responses_message_conversion_preserves_text_phase_and_hashes_long_ids() {
+    let model = get_model("openai", "gpt-5.5").expect("openai model");
+    let long_id = "msg_".to_owned() + &"x".repeat(80);
+    let mut assistant = empty_assistant_for_model(&model);
+    assistant.content.push(AssistantContent::Text(TextContent {
+        text: "Visible commentary".to_owned(),
+        text_signature: Some(json!({
+            "v": 1,
+            "id": long_id,
+            "phase": "commentary",
+        })),
+    }));
+
+    let input = convert_openai_responses_messages(
+        &model,
+        &Context {
+            messages: vec![Message::Assistant(assistant)],
+            ..Default::default()
+        },
+        &["openai", "openai-codex"],
+        false,
+    );
+
+    assert_eq!(input.len(), 1);
+    assert_eq!(input[0]["id"], format!("msg_{}", short_hash(&long_id)));
+    assert_eq!(input[0]["phase"], "commentary");
+    assert_eq!(input[0]["content"][0]["text"], "Visible commentary");
+}
+
+#[test]
+fn openai_responses_stream_formats_failed_response_errors_like_source() {
+    let model = get_model("openai", "gpt-5.5").expect("openai model");
+    let (sender, _stream) = assistant_message_event_stream();
+
+    let error = process_openai_responses_events(
+        [json!({
+            "type": "response.failed",
+            "response": {
+                "error": { "code": "invalid_request", "message": "bad input" }
+            }
+        })],
+        &mut empty_assistant_for_model(&model),
+        &sender,
+        &model,
+    )
+    .expect_err("failed response with error");
+    assert_eq!(error, "invalid_request: bad input");
+
+    let incomplete = process_openai_responses_events(
+        [json!({
+            "type": "response.failed",
+            "response": {
+                "incomplete_details": { "reason": "max_output_tokens" }
+            }
+        })],
+        &mut empty_assistant_for_model(&model),
+        &sender,
+        &model,
+    )
+    .expect_err("failed response with incomplete details");
+    assert_eq!(incomplete, "incomplete: max_output_tokens");
+}
+
 const CODEX_TEST_JWT_PAYLOAD: &str =
     "eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjX3Rlc3QifX0=";
 
