@@ -346,6 +346,7 @@ counterparts that pass.
     preservation, direct skill and prompt-template invocation,
     stream-options accessors, model/thinking selection events with session
     persistence and Pi-style model-select `source: "set"` payloads,
+    message-end session persistence before listener notification,
     listener-safe pending `append_message`, custom-entry,
     custom-message, label, and session-name writes, dynamic system-prompt
     providers over resources, live listener events and
@@ -397,14 +398,14 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1170 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1171 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 968 tests: 2 library tests, 335 `provider_core` tests, and
   631 `provider_live` tests. This is 247 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 202 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 203 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
   `resources`, and `session_storage`. This is 52 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
@@ -435,7 +436,7 @@ Current Rust tests: 1170 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1170-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1171-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -459,6 +460,17 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning `AgentHarness`
+  `message_end` persistence with Pi `handleAgentEvent`: high-level harness
+  agent-message events now append LLM messages to the session before notifying
+  subscribers, so listeners that read session context during `message_end` see
+  the just-ended user/assistant/tool-result message without waiting for the
+  whole loop to finish. The post-loop batch append was removed to avoid
+  double persistence while `after_agent_finish` extra messages are still
+  appended after the hook:
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_persists_message_before_message_end_listeners -- --exact --test-threads=1`,
+  `cargo fmt`, `cargo test -p ri-agent-core --test agent_harness -- --test-threads=1`,
+  and `cargo test --workspace -- --list` (1171 tests enumerated) passed.
+- Previous local verification on 2026-05-21 after aligning `AgentHarness`
   pending listener session writes with Pi `prepareNextTurn` context rebuild:
   `cargo test -p ri-agent-core --test agent_harness agent_harness_pending_listener_messages_are_visible_before_next_tool_turn -- --test-threads=1`,
   `cargo fmt`, `cargo test -p ri-agent-core --test agent_harness -- --test-threads=1`,
@@ -1327,6 +1339,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1170 Rust tests cover the
+- Test parity is not certified by raw count alone: 1171 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

@@ -700,11 +700,28 @@ impl AgentNextTurnPreparer for HarnessNextTurnPreparer {
 
 struct HarnessEventSink {
     listeners: Arc<Mutex<BTreeMap<u64, AgentHarnessListenerEntry>>>,
+    session: Session,
+    persistence_error: Arc<Mutex<Option<AgentHarnessError>>>,
 }
 
 #[async_trait]
 impl AgentEventSink for HarnessEventSink {
     async fn on_event(&self, event: &AgentEvent) {
+        if let AgentEvent::MessageEnd { message } = event
+            && let Some(message) = message.to_llm_message()
+        {
+            let result = {
+                let mut session = self.session.clone();
+                session.append_message(message)
+            };
+            if let Err(error) = result {
+                let mut persistence_error = self.persistence_error.lock();
+                if persistence_error.is_none() {
+                    *persistence_error = Some(AgentHarnessError::session(error));
+                }
+                return;
+            }
+        }
         emit_to_async(&self.listeners, AgentHarnessEvent::Agent(event.clone())).await;
     }
 }
@@ -1732,6 +1749,7 @@ impl AgentHarness {
             &self.listeners,
             self.abort_flag.clone(),
         )?;
+        let persistence_error = Arc::new(Mutex::new(None));
         let config = AgentLoopConfig {
             model: model.clone(),
             stream_options,
@@ -1776,6 +1794,8 @@ impl AgentHarness {
             })),
             event_sink: Some(Arc::new(HarnessEventSink {
                 listeners: self.listeners.clone(),
+                session: self.session.clone(),
+                persistence_error: persistence_error.clone(),
             })),
             skip_initial_queued_message_poll: false,
             tool_execution: *self.tool_execution.lock(),
@@ -1791,13 +1811,10 @@ impl AgentHarness {
         let (messages, events) = agent_loop_prompt_messages(context, prompt_messages, config)
             .await
             .map_err(AgentHarnessError::unknown)?;
-        let mut session = self.session.clone();
-        for message in &messages {
-            if let Some(message) = message.to_llm_message() {
-                session
-                    .append_message(message)
-                    .map_err(AgentHarnessError::session)?;
-            }
+        if let Some(error) = persistence_error.lock().clone() {
+            drop(events);
+            self.flush_pending_session_writes()?;
+            return Err(error);
         }
         let assistant = messages
             .iter()
@@ -1832,6 +1849,7 @@ impl AgentHarness {
                 return Err(error);
             }
         };
+        let mut session = self.session.clone();
         for message in after_messages {
             if let Some(message) = message.to_llm_message() {
                 session

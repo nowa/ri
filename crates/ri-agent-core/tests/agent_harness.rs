@@ -83,6 +83,24 @@ fn session_user_texts(session: &Session) -> Vec<String> {
         .collect()
 }
 
+fn session_roles(session: &Session) -> Vec<String> {
+    session
+        .entries()
+        .into_iter()
+        .filter_map(|entry| match entry {
+            SessionTreeEntry::Message { message, .. } => Some(message),
+            _ => None,
+        })
+        .filter_map(|message| {
+            Some(match message.into_llm_message()? {
+                Message::User(_) => "user".to_owned(),
+                Message::Assistant(_) => "assistant".to_owned(),
+                Message::ToolResult(_) => "toolResult".to_owned(),
+            })
+        })
+        .collect()
+}
+
 fn assistant_text(message: &AssistantMessage) -> Option<&str> {
     match message.content.first()? {
         AssistantContent::Text(text) => Some(text.text.as_str()),
@@ -663,6 +681,44 @@ async fn agent_harness_orders_pending_append_message_after_agent_messages() {
             }
         ]
     ));
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_harness_persists_message_before_message_end_listeners() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message("ok", Default::default()).into(),
+    ]);
+    let session = Session::new(InMemorySessionStorage::new());
+    let harness = AgentHarness::new(AgentHarnessOptions::new(
+        test_env(),
+        session.clone(),
+        registration.get_model(),
+    ));
+    let observed = Arc::new(Mutex::new(Vec::<String>::new()));
+    let observed_ref = observed.clone();
+    let session_ref = session.clone();
+    harness.subscribe(move |event| {
+        if let AgentHarnessEvent::Agent(AgentEvent::MessageEnd { message }) = event {
+            let role = message.role().unwrap_or("custom");
+            observed_ref.lock().expect("observed").push(format!(
+                "{}:{}",
+                role,
+                session_roles(&session_ref).join(",")
+            ));
+        }
+    });
+
+    harness.prompt("hello").await.expect("prompt");
+
+    assert_eq!(
+        *observed.lock().expect("observed"),
+        vec![
+            "user:user".to_owned(),
+            "assistant:user,assistant".to_owned()
+        ]
+    );
     registration.unregister();
 }
 
