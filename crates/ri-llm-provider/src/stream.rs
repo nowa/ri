@@ -16,6 +16,12 @@ pub fn stream(
     options: StreamOptions,
 ) -> Result<AssistantMessageEventStream, ProviderError> {
     ensure_builtin_api_providers();
+    if let Some(error) = unsupported_reasoning_error(
+        model,
+        SimpleStreamOptions::reasoning_from_stream_options(&options),
+    ) {
+        return Ok(error_stream(model, error));
+    }
     let provider =
         get_api_provider(&model.api).ok_or_else(|| ProviderError::MissingApi(model.api.clone()))?;
     provider.stream(model, context, options)

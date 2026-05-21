@@ -454,6 +454,23 @@ impl PartialEq for SimpleStreamOptions {
 }
 
 impl SimpleStreamOptions {
+    pub fn from_stream_options(stream: StreamOptions) -> Self {
+        let reasoning = Self::reasoning_from_stream_options(&stream);
+        Self {
+            stream,
+            reasoning,
+            ..Default::default()
+        }
+    }
+
+    pub fn reasoning_from_stream_options(stream: &StreamOptions) -> Option<ThinkingLevel> {
+        stream
+            .extra
+            .get("reasoningEffort")
+            .or_else(|| stream.extra.get("reasoning"))
+            .and_then(parse_provider_thinking_level)
+    }
+
     pub fn apply_payload_hooks(&self, model: &Model, mut payload: Value) -> Result<Value, String> {
         for hook in &self.payload_hooks {
             payload = hook.on_payload(model, payload)?;
@@ -470,6 +487,18 @@ impl SimpleStreamOptions {
             hook.on_response(model.clone(), response.clone()).await?;
         }
         Ok(())
+    }
+}
+
+fn parse_provider_thinking_level(value: &Value) -> Option<ThinkingLevel> {
+    match value.as_str()? {
+        "none" | "off" => Some(ThinkingLevel::Off),
+        "minimal" => Some(ThinkingLevel::Minimal),
+        "low" => Some(ThinkingLevel::Low),
+        "medium" => Some(ThinkingLevel::Medium),
+        "high" => Some(ThinkingLevel::High),
+        "xhigh" => Some(ThinkingLevel::XHigh),
+        _ => None,
     }
 }
 

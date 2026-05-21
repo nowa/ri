@@ -467,14 +467,33 @@ async fn unsupported_xhigh_reasoning_returns_error_message_without_network() {
         let mut model = get_model("openai", "gpt-5-mini").expect("gpt-5-mini");
         model.api = api.to_owned();
         model.base_url = "http://127.0.0.1:9".to_owned();
-        let options = SimpleStreamOptions {
+        let simple_options = SimpleStreamOptions {
             reasoning: Some(ThinkingLevel::XHigh),
             ..Default::default()
         };
 
-        let message = complete_simple(&model, user_context("hello"), options)
+        let message = complete_simple(&model, user_context("hello"), simple_options)
             .await
             .expect("error stream");
+
+        assert_eq!(message.stop_reason, StopReason::Error, "{api}");
+        assert!(
+            message
+                .error_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("xhigh"),
+            "{api}: {:?}",
+            message.error_message
+        );
+
+        let mut stream_options = StreamOptions::default();
+        stream_options
+            .extra
+            .insert("reasoningEffort".to_owned(), json!("xhigh"));
+        let message = complete(&model, user_context("hello"), stream_options)
+            .await
+            .expect("stream error message");
 
         assert_eq!(message.stop_reason, StopReason::Error, "{api}");
         assert!(
@@ -14581,6 +14600,39 @@ async fn builtin_openai_responses_provider_posts_json_and_parses_sse() {
     assert!(request.contains("\"stream\":true"));
     assert!(request.contains("\"prompt_cache_key\":\"session-2\""));
     assert!(request.contains("\"reasoning\":{\"effort\":\"low\""));
+}
+
+#[tokio::test]
+async fn builtin_openai_responses_provider_stream_options_preserve_reasoning_effort() {
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_reasoning\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_reasoning\"}}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_reasoning\",\"content\":[{\"type\":\"output_text\",\"text\":\"Done\"}]}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_reasoning\",\"status\":\"completed\"}}\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let mut model = Model::faux("openai-responses", "openai", "mock-gpt-5");
+    model.base_url = base_url;
+    model.reasoning = true;
+    let mut options = StreamOptions {
+        api_key: Some("test-key".to_owned()),
+        ..Default::default()
+    };
+    options
+        .extra
+        .insert("reasoningEffort".to_owned(), json!("high"));
+    options
+        .extra
+        .insert("reasoningSummary".to_owned(), json!("detailed"));
+
+    let message = complete(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(text_of(&message), Some("Done"));
+    assert!(request.contains("\"reasoning\":{\"effort\":\"high\",\"summary\":\"detailed\"}"));
+    assert!(request.contains("\"include\":[\"reasoning.encrypted_content\"]"));
 }
 
 #[tokio::test]

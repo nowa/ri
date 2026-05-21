@@ -301,10 +301,7 @@ impl ApiProvider for FauxProvider {
         self.stream_with_simple_options(
             model,
             context,
-            SimpleStreamOptions {
-                stream: options,
-                ..Default::default()
-            },
+            SimpleStreamOptions::from_stream_options(options),
         )
     }
 

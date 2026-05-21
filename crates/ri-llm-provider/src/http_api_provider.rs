@@ -173,10 +173,7 @@ impl ApiProvider for OpenAICompletionsHttpProvider {
         self.stream_simple(
             model,
             context,
-            SimpleStreamOptions {
-                stream: options,
-                ..Default::default()
-            },
+            SimpleStreamOptions::from_stream_options(options),
         )
     }
 
@@ -241,10 +238,7 @@ impl ApiProvider for OpenAIResponsesHttpProvider {
         self.stream_simple(
             model,
             context,
-            SimpleStreamOptions {
-                stream: options,
-                ..Default::default()
-            },
+            SimpleStreamOptions::from_stream_options(options),
         )
     }
 
@@ -313,10 +307,7 @@ impl ApiProvider for MistralHttpProvider {
         self.stream_simple(
             model,
             context,
-            SimpleStreamOptions {
-                stream: options,
-                ..Default::default()
-            },
+            SimpleStreamOptions::from_stream_options(options),
         )
     }
 
@@ -359,10 +350,7 @@ impl ApiProvider for AzureOpenAIResponsesHttpProvider {
         self.stream_simple(
             model,
             context,
-            SimpleStreamOptions {
-                stream: options,
-                ..Default::default()
-            },
+            SimpleStreamOptions::from_stream_options(options),
         )
     }
 
@@ -456,10 +444,7 @@ impl ApiProvider for AnthropicMessagesHttpProvider {
         self.stream_simple(
             model,
             context,
-            SimpleStreamOptions {
-                stream: options,
-                ..Default::default()
-            },
+            SimpleStreamOptions::from_stream_options(options),
         )
     }
 
@@ -535,10 +520,7 @@ impl ApiProvider for GoogleGenerativeAiHttpProvider {
         self.stream_simple(
             model,
             context,
-            SimpleStreamOptions {
-                stream: options,
-                ..Default::default()
-            },
+            SimpleStreamOptions::from_stream_options(options),
         )
     }
 
@@ -589,10 +571,7 @@ impl ApiProvider for GoogleVertexHttpProvider {
         self.stream_simple(
             model,
             context,
-            SimpleStreamOptions {
-                stream: options,
-                ..Default::default()
-            },
+            SimpleStreamOptions::from_stream_options(options),
         )
     }
 
@@ -666,10 +645,7 @@ impl ApiProvider for OpenAICodexResponsesHttpProvider {
         self.stream_simple(
             model,
             context,
-            SimpleStreamOptions {
-                stream: options,
-                ..Default::default()
-            },
+            SimpleStreamOptions::from_stream_options(options),
         )
     }
 
@@ -764,10 +740,7 @@ impl ApiProvider for BedrockConverseStreamHttpProvider {
         self.stream_simple(
             model,
             context,
-            SimpleStreamOptions {
-                stream: options,
-                ..Default::default()
-            },
+            SimpleStreamOptions::from_stream_options(options),
         )
     }
 
