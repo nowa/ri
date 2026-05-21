@@ -782,13 +782,16 @@ async fn agent_harness_provider_request_hooks_merge_auth_and_patch_stream_option
         faux_assistant_message("ok", Default::default())
     })]);
 
-    let session = Session::new(InMemorySessionStorage::with_options(
-        None,
-        Some(SessionMetadata {
-            id: "session-1".to_owned(),
-            created_at: "now".to_owned(),
-        }),
-    ));
+    let session = Session::new(
+        InMemorySessionStorage::with_options(
+            None,
+            Some(SessionMetadata {
+                id: "session-1".to_owned(),
+                created_at: "now".to_owned(),
+            }),
+        )
+        .expect("storage"),
+    );
     let mut options = AgentHarnessOptions::new(test_env(), session, registration.get_model());
     options.get_api_key_and_headers = Some(Arc::new(|_| {
         Ok(ProviderAuth {

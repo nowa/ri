@@ -91,7 +91,8 @@ fn in_memory_storage_matches_core_storage_behaviour() {
     let root = entry("entry-1", None, user_message_text("one"));
     let mut initial_entries = vec![root.clone()];
     let mut storage =
-        InMemorySessionStorage::with_options(Some(initial_entries.clone()), Some(metadata.clone()));
+        InMemorySessionStorage::with_options(Some(initial_entries.clone()), Some(metadata.clone()))
+            .expect("storage");
     initial_entries.push(entry("entry-2", None, user_message_text("two")));
 
     assert_eq!(storage.metadata(), &metadata);
@@ -126,9 +127,8 @@ fn in_memory_storage_matches_core_storage_behaviour() {
         timestamp: "2026-01-01T00:00:01.000Z".to_owned(),
         target_id: Some("missing".to_owned()),
     };
-    let corrupted =
-        InMemorySessionStorage::with_options(Some(vec![root.clone(), corrupted_leaf]), None);
-    let err = corrupted.leaf_id().expect_err("corrupted leaf target");
+    let err = InMemorySessionStorage::with_options(Some(vec![root.clone(), corrupted_leaf]), None)
+        .expect_err("corrupted leaf target");
     assert_eq!(err.code, SessionErrorCode::InvalidSession);
 
     storage.append_entry(SessionTreeEntry::Label {
@@ -153,7 +153,8 @@ fn in_memory_storage_matches_core_storage_behaviour() {
 fn in_memory_storage_walks_paths_to_root() {
     let root = entry("root", None, user_message_text("root"));
     let child = entry("child", Some("root"), assistant_message_text("child"));
-    let storage = InMemorySessionStorage::with_options(Some(vec![root, child]), None);
+    let storage =
+        InMemorySessionStorage::with_options(Some(vec![root, child]), None).expect("storage");
 
     assert_eq!(
         storage
@@ -170,7 +171,7 @@ fn in_memory_storage_walks_paths_to_root() {
 #[test]
 fn in_memory_storage_finds_entries_by_type() {
     let root = entry("entry-1", None, user_message_text("one"));
-    let storage = InMemorySessionStorage::with_options(Some(vec![root]), None);
+    let storage = InMemorySessionStorage::with_options(Some(vec![root]), None).expect("storage");
 
     assert_eq!(
         storage

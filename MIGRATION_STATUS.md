@@ -466,6 +466,18 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-22 after aligning
+  `session/memory-storage.ts` initial-entry validation:
+  `InMemorySessionStorage::with_options` now returns a typed
+  `invalid_session` error when the inferred current leaf points at a missing
+  entry, matching Pi's constructor-time validation while keeping Rust's
+  fallible-constructor API explicit:
+  `cargo test -p ri-agent-core --test session_storage in_memory_storage_matches_core_storage_behaviour -- --exact --test-threads=1`,
+  `cargo fmt`,
+  `cargo test -p ri-agent-core --test session_storage -- --test-threads=1`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --test-threads=1` passed.
+- Latest local verification on 2026-05-22 after aligning
   `session/jsonl-storage.ts` header and entry shallow validation: JSONL session
   headers now reject non-string `parentSession` values, including JSON `null`,
   before serde maps them to Rust `None`; JSONL entries now reject non-object JSON

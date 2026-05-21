@@ -454,13 +454,13 @@ pub struct InMemorySessionStorage {
 
 impl InMemorySessionStorage {
     pub fn new() -> Self {
-        Self::with_options(None, None)
+        Self::with_options(None, None).expect("empty in-memory session storage is valid")
     }
 
     pub fn with_options(
         entries: Option<Vec<SessionTreeEntry>>,
         metadata: Option<SessionMetadata>,
-    ) -> Self {
+    ) -> Result<Self, SessionError> {
         let entries = entries.unwrap_or_default();
         let by_id = entries
             .iter()
@@ -471,7 +471,8 @@ impl InMemorySessionStorage {
         for entry in &entries {
             leaf_id = leaf_id_after_entry(entry);
         }
-        Self {
+        validate_existing_leaf(&by_id, leaf_id.as_deref())?;
+        Ok(Self {
             metadata: metadata.unwrap_or_else(|| SessionMetadata {
                 id: uuidv7(),
                 created_at: now_iso(),
@@ -480,7 +481,7 @@ impl InMemorySessionStorage {
             by_id,
             labels_by_id,
             leaf_id,
-        }
+        })
     }
 
     pub fn metadata(&self) -> &SessionMetadata {
@@ -1075,10 +1076,10 @@ impl InMemorySessionRepo {
             id: id.unwrap_or_else(uuidv7),
             created_at: now_iso(),
         };
-        let session = Session::new(InMemorySessionStorage::with_options(
-            None,
-            Some(metadata.clone()),
-        ));
+        let session = Session::new(
+            InMemorySessionStorage::with_options(None, Some(metadata.clone()))
+                .expect("new in-memory session is valid"),
+        );
         self.sessions.insert(metadata.id, session.clone());
         session
     }
@@ -1114,10 +1115,10 @@ impl InMemorySessionRepo {
             id: options.id.unwrap_or_else(uuidv7),
             created_at: now_iso(),
         };
-        let session = Session::new(InMemorySessionStorage::with_options(
-            Some(entries),
-            Some(metadata.clone()),
-        ));
+        let session = Session::new(
+            InMemorySessionStorage::with_options(Some(entries), Some(metadata.clone()))
+                .expect("forked in-memory session is valid"),
+        );
         self.sessions.insert(metadata.id, session.clone());
         Ok(session)
     }
