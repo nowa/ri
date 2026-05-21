@@ -390,6 +390,40 @@ fn jsonl_storage_rejects_malformed_headers_and_entries() {
     fs::write(&path, format!("{header}\nnot json\n")).expect("write");
     let err = JsonlSessionStorage::open(&path).expect_err("bad entry");
     assert_eq!(err.code, SessionErrorCode::InvalidEntry);
+
+    let missing_parent = json!({
+        "type": "message",
+        "id": "entry-1",
+        "timestamp": "2026-01-01T00:00:01.000Z",
+        "message": { "role": "user", "content": "hello" }
+    });
+    fs::write(&path, format!("{header}\n{missing_parent}\n")).expect("write missing parent");
+    let err = JsonlSessionStorage::open(&path).expect_err("missing parentId");
+    assert_eq!(err.code, SessionErrorCode::InvalidEntry);
+    assert!(err.message.contains("has invalid parentId"));
+
+    let missing_timestamp = json!({
+        "type": "message",
+        "id": "entry-1",
+        "parentId": null,
+        "message": { "role": "user", "content": "hello" }
+    });
+    fs::write(&path, format!("{header}\n{missing_timestamp}\n")).expect("write missing timestamp");
+    let err = JsonlSessionStorage::open(&path).expect_err("missing timestamp");
+    assert_eq!(err.code, SessionErrorCode::InvalidEntry);
+    assert!(err.message.contains("is missing timestamp"));
+
+    let missing_leaf_target = json!({
+        "type": "leaf",
+        "id": "leaf-1",
+        "parentId": null,
+        "timestamp": "2026-01-01T00:00:01.000Z"
+    });
+    fs::write(&path, format!("{header}\n{missing_leaf_target}\n"))
+        .expect("write missing leaf target");
+    let err = JsonlSessionStorage::open(&path).expect_err("missing leaf targetId");
+    assert_eq!(err.code, SessionErrorCode::InvalidEntry);
+    assert!(err.message.contains("has invalid targetId"));
 }
 
 fn run_session_suite(storage: impl Into<SessionStorageKind>) {

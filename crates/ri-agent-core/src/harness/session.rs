@@ -1673,19 +1673,52 @@ fn parse_entry_line(
     let parsed: Value = serde_json::from_str(line).map_err(|error| {
         invalid_entry(file_path, line_number, "is not valid JSON").with_cause(error)
     })?;
-    if parsed.get("type").and_then(Value::as_str).is_none() {
+    let entry_type = parsed
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_entry(file_path, line_number, "is missing entry type"))?;
+    if !parsed
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
+    {
+        return Err(invalid_entry(file_path, line_number, "is missing entry id"));
+    }
+    if !parsed
+        .get("parentId")
+        .is_some_and(|parent_id| parent_id.is_null() || parent_id.is_string())
+    {
         return Err(invalid_entry(
             file_path,
             line_number,
-            "is missing entry type",
+            "has invalid parentId",
+        ));
+    }
+    if !parsed
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .is_some_and(|timestamp| !timestamp.is_empty())
+    {
+        return Err(invalid_entry(
+            file_path,
+            line_number,
+            "is missing timestamp",
+        ));
+    }
+    if entry_type == "leaf"
+        && !parsed
+            .get("targetId")
+            .is_some_and(|target_id| target_id.is_null() || target_id.is_string())
+    {
+        return Err(invalid_entry(
+            file_path,
+            line_number,
+            "has invalid targetId",
         ));
     }
     let entry: SessionTreeEntry = serde_json::from_value(parsed).map_err(|error| {
         invalid_entry(file_path, line_number, "is not a valid session entry").with_cause(error)
     })?;
-    if entry.id().is_empty() {
-        return Err(invalid_entry(file_path, line_number, "is missing entry id"));
-    }
     Ok(entry)
 }
 

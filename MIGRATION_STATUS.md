@@ -339,8 +339,9 @@ counterparts that pass.
     leaf movement.
   - In-memory and JSONL session storage/repositories with branching, labels,
     metadata, context building, full-session fork, before-target user-message
-    fork, at-target fork, invalid-target errors, and source-shaped
-    `bashExecution` message entries with LLM-context formatting,
+    fork, at-target fork, invalid-target errors, Pi-style JSONL entry
+    validation for required `parentId`, non-empty `timestamp`, and
+    `leaf.targetId` fields, and source-shaped `bashExecution` message entries with LLM-context formatting,
     `excludeFromContext` filtering, JSONL round trips, token estimates, and
     compaction turn-start handling.
   - Skill and prompt-template invocation formatting plus skill/prompt-template
@@ -423,6 +424,17 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning Pi
+  `JsonlSessionStorage` entry parsing from `harness/session/jsonl-storage.ts`:
+  Rust JSONL loading now rejects missing/invalid `parentId`, missing/empty
+  `timestamp`, and missing/invalid `leaf.targetId` before deserializing the
+  entry, matching the source validation path:
+  `cargo test -p ri-agent-core --test session_storage jsonl_storage_rejects_malformed_headers_and_entries -- --exact`,
+  `cargo fmt`, `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1132 tests.
+- Previous local verification on 2026-05-21 after aligning Pi
   `NodeExecutionEnv` shell invocation from `harness/env/nodejs.ts`: Rust
   `LocalExecutionEnv::exec` now invokes configured shells with `-c` instead of
   login-shell `-lc`, and the existing exec behavior test records the first
