@@ -228,6 +228,12 @@ pub struct AgentToolResultHookResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<AgentToolResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Vec<AgentToolResultContent>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminate: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
 }
 
@@ -235,6 +241,9 @@ impl AgentToolResultHookResult {
     pub fn replace_result(result: AgentToolResult) -> Self {
         Self {
             result: Some(result),
+            content: None,
+            details: None,
+            terminate: None,
             is_error: None,
         }
     }
@@ -242,7 +251,20 @@ impl AgentToolResultHookResult {
     pub fn set_is_error(is_error: bool) -> Self {
         Self {
             result: None,
+            content: None,
+            details: None,
+            terminate: None,
             is_error: Some(is_error),
+        }
+    }
+
+    pub fn patch_terminate(terminate: bool) -> Self {
+        Self {
+            result: None,
+            content: None,
+            details: None,
+            terminate: Some(terminate),
+            is_error: None,
         }
     }
 }

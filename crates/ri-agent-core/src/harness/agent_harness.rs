@@ -2524,6 +2524,9 @@ impl AgentToolResultHook for HarnessToolResultHook {
         Ok(
             (result_patched || is_error_patched.is_some()).then_some(AgentToolResultHookResult {
                 result: result_patched.then_some(result),
+                content: None,
+                details: None,
+                terminate: None,
                 is_error: is_error_patched,
             }),
         )

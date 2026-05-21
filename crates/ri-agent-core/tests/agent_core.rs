@@ -494,9 +494,14 @@ impl AgentToolResultHook for TerminatingToolResultHook {
         &self,
         context: AgentToolResultHookContext,
     ) -> Result<Option<AgentToolResultHookResult>, String> {
-        let mut result = context.result;
-        result.terminate = true;
-        Ok(Some(AgentToolResultHookResult::replace_result(result)))
+        assert_eq!(
+            context.result.content,
+            vec![AgentToolResultContent::Text(TextContent::new(
+                "echoed: hello"
+            ))]
+        );
+        assert_eq!(context.result.details, None);
+        Ok(Some(AgentToolResultHookResult::patch_terminate(true)))
     }
 }
 
@@ -517,6 +522,9 @@ impl AgentToolResultHook for ClearingToolErrorHook {
         );
         Ok(Some(AgentToolResultHookResult {
             result: Some(AgentToolResult::text("recovered")),
+            content: None,
+            details: None,
+            terminate: None,
             is_error: Some(false),
         }))
     }
@@ -3085,7 +3093,7 @@ async fn agent_loop_tool_result_hook_can_terminate_tool_batch() {
         .tool_result_hooks
         .push(Arc::new(TerminatingToolResultHook));
 
-    let (messages, _events) = agent_loop_prompt(context, "run tool", config)
+    let (messages, events) = agent_loop_prompt(context, "run tool", config)
         .await
         .expect("loop");
 
@@ -3096,6 +3104,28 @@ async fn agent_loop_tool_result_hook_can_terminate_tool_batch() {
         vec!["user", "assistant", "toolResult"]
     );
     assert_eq!(text_of(&messages[2]), Some("echoed: hello"));
+    let AgentMessage::ToolResult(tool_result) = &messages[2] else {
+        panic!("expected tool result");
+    };
+    assert_eq!(tool_result.details, None);
+    let tool_end = events.iter().find_map(|event| match event {
+        AgentEvent::ToolExecutionEnd {
+            result, is_error, ..
+        } => Some((result, is_error)),
+        _ => None,
+    });
+    let Some((result, is_error)) = tool_end else {
+        panic!("expected tool execution end");
+    };
+    assert!(!is_error);
+    assert_eq!(result.terminate, true);
+    assert_eq!(
+        result.content,
+        vec![AgentToolResultContent::Text(TextContent::new(
+            "echoed: hello"
+        ))]
+    );
+    assert_eq!(result.details, None);
     registration.unregister();
 }
 

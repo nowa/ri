@@ -246,9 +246,10 @@ counterparts that pass.
     tool-result continuation turns, tool argument preparation, Pi-style
     schema validation/coercion before `beforeToolCall`, tool-call hooks
     with argument replacement and Pi-style pre-execution blocking, tool-result
-    replacement/error-flag hooks, hook-driven tool-result termination, partial
-    tool execution update callbacks/events whose start/update argument payloads
-    preserve the assistant's raw tool-call arguments, tool-result message
+    replacement plus field-level content/details/terminate/is-error patch
+    hooks, hook-driven tool-result termination, partial tool execution update
+    callbacks/events whose start/update argument payloads preserve the
+    assistant's raw tool-call arguments, tool-result message
     lifecycle events, and assistant/tool-call/current-context hook snapshots
     for low-level `beforeToolCall`/`afterToolCall` parity. Transform/convert
     hooks for LLM request context. Prepare-next-turn hooks can
@@ -403,6 +404,21 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning Pi low-level
+  `afterToolCall` field-level patch semantics from `agent-loop.ts`: Rust hook
+  results can now patch only `content`, `details`, `terminate`, or `isError`
+  while preserving omitted fields, so a Pi-style `{ terminate: true }` result
+  can stop the tool batch without replacing the original tool output:
+  `cargo fmt`, `cargo fmt --check`, `git diff --check`,
+  `cargo test -p ri-agent-core --test agent_core agent_loop_tool_result_hook_can_terminate_tool_batch -- --exact`,
+  `cargo test -p ri-agent-core --test agent_core agent_loop_runs_tool_call_and_tool_result_hooks -- --exact`,
+  `cargo test -p ri-agent-core --test agent_core agent_loop_tool_result_hook_can_override_error_flag -- --exact`,
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_runs_tool_call_and_tool_result_hooks_through_direct_loop -- --exact`,
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_tool_result_hook_can_override_error_flag -- --exact`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1120 tests.
+- Previous local verification on 2026-05-21 after aligning Pi low-level
   `validateToolArguments` ordering from `agent-loop.ts`: Rust now validates and
   coerces prepared tool arguments before tool-call hooks or executor calls,
   turns validation failures into error tool results, and preserves the existing

@@ -929,6 +929,18 @@ async fn execute_prepared_tool_call(
                     result = replacement_result;
                     hook_context.result = result.clone();
                 }
+                if let Some(replacement_content) = replacement.content {
+                    result.content = replacement_content;
+                    hook_context.result = result.clone();
+                }
+                if let Some(replacement_details) = replacement.details {
+                    result.details = Some(replacement_details);
+                    hook_context.result = result.clone();
+                }
+                if let Some(replacement_terminate) = replacement.terminate {
+                    result.terminate = replacement_terminate;
+                    hook_context.result = result.clone();
+                }
                 if let Some(replacement_is_error) = replacement.is_error {
                     is_error = replacement_is_error;
                     hook_context.is_error = is_error;
