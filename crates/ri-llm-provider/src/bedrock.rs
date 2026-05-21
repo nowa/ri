@@ -1498,10 +1498,13 @@ fn bedrock_image_block(image: &ImageContent) -> Value {
 }
 
 fn bedrock_image_block_parts(mime_type: &str, data: &str) -> Value {
-    let format = mime_type
-        .strip_prefix("image/")
-        .unwrap_or(mime_type)
-        .to_ascii_lowercase();
+    let format = match mime_type.to_ascii_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" => "jpeg".to_owned(),
+        "image/png" => "png".to_owned(),
+        "image/gif" => "gif".to_owned(),
+        "image/webp" => "webp".to_owned(),
+        other => other.strip_prefix("image/").unwrap_or(other).to_owned(),
+    };
     json!({
         "format": format,
         "source": { "bytes": data },

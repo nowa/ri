@@ -5632,6 +5632,10 @@ fn bedrock_payload_preserves_image_tool_results_in_converse_messages() {
                         data: "base64-image".to_owned(),
                         mime_type: "image/png".to_owned(),
                     }),
+                    ToolResultContent::Image(ImageContent {
+                        data: "jpg-image".to_owned(),
+                        mime_type: "image/jpg".to_owned(),
+                    }),
                 ],
                 details: None,
                 is_error: false,
@@ -5668,6 +5672,12 @@ fn bedrock_payload_preserves_image_tool_results_in_converse_messages() {
                     "image": {
                         "format": "png",
                         "source": { "bytes": "base64-image" },
+                    },
+                },
+                {
+                    "image": {
+                        "format": "jpeg",
+                        "source": { "bytes": "jpg-image" },
                     },
                 },
             ],

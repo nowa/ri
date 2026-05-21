@@ -88,8 +88,9 @@ counterparts that pass.
   - Bedrock endpoint/region config helpers plus Converse payload helpers for
     message conversion, Claude thinking fields, GovCloud display omission, and
     application-inference-profile cache points, including image tool-result
-    content, streamed Converse block aggregation, usage mapping, stop reasons,
-    and SDK exception error events.
+    content with `image/jpg` to `jpeg` format normalization, streamed Converse
+    block aggregation, usage mapping, stop reasons, and SDK exception error
+    events.
   - Azure OpenAI base URL/config normalization, default API version,
     deployment-name map resolution, and Responses payload construction with
     deployment overrides, tools, session cache keys, and reasoning options.
@@ -749,6 +750,12 @@ This migration is not complete.
   `cargo test --workspace -- --test-threads=1`,
   `cargo test --workspace -- --list` (1161 tests enumerated), and
   `cargo fmt --check` and `git diff --check` passed.
+- Latest local verification on 2026-05-22 after aligning
+  `providers/amazon-bedrock.ts` image payload format normalization: Bedrock
+  Converse image blocks now map both `image/jpeg` and `image/jpg` to AWS'
+  `jpeg` format while preserving existing png/gif/webp formatting:
+  `cargo test -p ri-llm-provider --test provider_core bedrock -- --test-threads=1`,
+  `cargo fmt --check`, and `git diff --check` passed.
 - Latest local verification on 2026-05-21 after aligning
   `providers/amazon-bedrock.ts` request-side tool configuration: Bedrock
   Converse payload construction now emits `toolConfig.tools` when `Context`
