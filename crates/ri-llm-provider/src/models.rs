@@ -668,6 +668,9 @@ fn apply_known_model_overrides(model: &mut Model) {
         model
             .headers
             .insert("User-Agent".to_owned(), "KimiCLI/1.5".to_owned());
+        if apply_kimi_coding_generated_metadata(model) {
+            return;
+        }
         model.reasoning = true;
         model.context_window = 262_144;
         model.max_tokens = 32_768;
@@ -675,6 +678,18 @@ fn apply_known_model_overrides(model: &mut Model) {
         if model.id == "kimi-for-coding" {
             ensure_image_input(model);
         }
+    }
+
+    if model.provider == "huggingface" && apply_huggingface_generated_metadata(model) {
+        return;
+    }
+
+    if matches!(
+        model.provider.as_str(),
+        "xiaomi" | "xiaomi-token-plan-cn" | "xiaomi-token-plan-ams" | "xiaomi-token-plan-sgp"
+    ) && apply_xiaomi_generated_metadata(model)
+    {
+        return;
     }
 
     if matches!(model.provider.as_str(), "minimax" | "minimax-cn") {
@@ -853,8 +868,22 @@ fn apply_known_model_overrides(model: &mut Model) {
             model
                 .thinking_level_map
                 .insert(ThinkingLevel::Minimal, None);
+            model.input = vec![crate::types::InputKind::Text];
+            model.context_window = 131_072;
+            model.max_tokens = 131_072;
+            model.cost = ModelCost {
+                input: 0.15,
+                output: 0.6,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            };
             model.compat = Some(json!({
+                "supportsStore": false,
+                "supportsDeveloperRole": false,
                 "supportsReasoningEffort": true,
+                "maxTokensField": "max_tokens",
+                "supportsStrictMode": false,
+                "supportsLongCacheRetention": false,
                 "thinkingFormat": "openai",
             }));
         }
@@ -871,8 +900,22 @@ fn apply_known_model_overrides(model: &mut Model) {
                 .thinking_level_map
                 .insert(ThinkingLevel::High, Some("high".to_owned()));
             model.thinking_level_map.insert(ThinkingLevel::XHigh, None);
+            model.input = vec![crate::types::InputKind::Text];
+            model.context_window = 512_000;
+            model.max_tokens = 384_000;
+            model.cost = ModelCost {
+                input: 2.1,
+                output: 4.4,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            };
             model.compat = Some(json!({
+                "supportsStore": false,
+                "supportsDeveloperRole": false,
                 "supportsReasoningEffort": true,
+                "maxTokensField": "max_tokens",
+                "supportsStrictMode": false,
+                "supportsLongCacheRetention": false,
                 "thinkingFormat": "together",
             }));
         }
@@ -886,8 +929,22 @@ fn apply_known_model_overrides(model: &mut Model) {
                 .insert(ThinkingLevel::Minimal, None);
             model.thinking_level_map.insert(ThinkingLevel::Low, None);
             model.thinking_level_map.insert(ThinkingLevel::Medium, None);
+            model.input = vec![crate::types::InputKind::Text];
+            model.context_window = 202_752;
+            model.max_tokens = 131_072;
+            model.cost = ModelCost {
+                input: 0.3,
+                output: 1.2,
+                cache_read: 0.06,
+                cache_write: 0.0,
+            };
             model.compat = Some(json!({
+                "supportsStore": false,
+                "supportsDeveloperRole": false,
                 "supportsReasoningEffort": false,
+                "maxTokensField": "max_tokens",
+                "supportsStrictMode": false,
+                "supportsLongCacheRetention": false,
             }));
         }
         ("together", _) => {
@@ -1833,6 +1890,75 @@ fn apply_minimax_generated_metadata(model: &mut Model) -> bool {
     model.cost = cost;
     model.context_window = 204_800;
     model.max_tokens = 131_072;
+    true
+}
+
+fn apply_kimi_coding_generated_metadata(model: &mut Model) -> bool {
+    let input = match model.id.as_str() {
+        "kimi-for-coding" => vec![
+            crate::types::InputKind::Text,
+            crate::types::InputKind::Image,
+        ],
+        "kimi-k2-thinking" => vec![crate::types::InputKind::Text],
+        _ => return false,
+    };
+
+    model.api = "anthropic-messages".to_owned();
+    model.base_url = base_url_for_provider("kimi-coding").to_owned();
+    model.reasoning = true;
+    model.thinking_level_map.clear();
+    model.input = input;
+    model.cost = ModelCost::default();
+    model.context_window = 262_144;
+    model.max_tokens = 32_768;
+    model.compat = None;
+    true
+}
+
+fn apply_huggingface_generated_metadata(model: &mut Model) -> bool {
+    if model.id != "moonshotai/Kimi-K2.5" {
+        return false;
+    }
+
+    model.api = "openai-completions".to_owned();
+    model.base_url = base_url_for_provider("huggingface").to_owned();
+    model.reasoning = true;
+    model.thinking_level_map.clear();
+    model.input = vec![
+        crate::types::InputKind::Text,
+        crate::types::InputKind::Image,
+    ];
+    model.cost = ModelCost {
+        input: 0.6,
+        output: 3.0,
+        cache_read: 0.1,
+        cache_write: 0.0,
+    };
+    model.context_window = 262_144;
+    model.max_tokens = 262_144;
+    model.compat = Some(json!({ "supportsDeveloperRole": false }));
+    true
+}
+
+fn apply_xiaomi_generated_metadata(model: &mut Model) -> bool {
+    if model.id != "mimo-v2.5-pro" {
+        return false;
+    }
+
+    model.api = "openai-completions".to_owned();
+    model.base_url = base_url_for_provider(&model.provider).to_owned();
+    model.reasoning = true;
+    model.thinking_level_map.clear();
+    model.input = vec![crate::types::InputKind::Text];
+    model.cost = ModelCost {
+        input: 1.0,
+        output: 3.0,
+        cache_read: 0.2,
+        cache_write: 0.0,
+    };
+    model.context_window = 1_048_576;
+    model.max_tokens = 131_072;
+    model.compat = None;
     true
 }
 

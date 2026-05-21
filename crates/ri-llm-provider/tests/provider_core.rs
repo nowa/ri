@@ -3929,6 +3929,22 @@ fn fireworks_and_together_model_metadata_match_provider_catalog() {
     );
 
     let gpt_oss = get_model("together", "openai/gpt-oss-120b").expect("gpt oss");
+    assert_eq!(gpt_oss.api, "openai-completions");
+    assert_eq!(gpt_oss.provider, "together");
+    assert_eq!(gpt_oss.base_url, "https://api.together.ai/v1");
+    assert!(gpt_oss.reasoning);
+    assert_eq!(gpt_oss.input, vec![InputKind::Text]);
+    assert_eq!(gpt_oss.context_window, 131_072);
+    assert_eq!(gpt_oss.max_tokens, 131_072);
+    assert_eq!(
+        gpt_oss.cost,
+        ModelCost {
+            input: 0.15,
+            output: 0.6,
+            cache_read: 0.0,
+            cache_write: 0.0,
+        }
+    );
     assert_eq!(
         gpt_oss.thinking_level_map,
         BTreeMap::from([(ThinkingLevel::Off, None), (ThinkingLevel::Minimal, None)])
@@ -3936,12 +3952,33 @@ fn fireworks_and_together_model_metadata_match_provider_catalog() {
     assert_eq!(
         gpt_oss.compat,
         Some(json!({
+            "supportsStore": false,
+            "supportsDeveloperRole": false,
             "supportsReasoningEffort": true,
+            "maxTokensField": "max_tokens",
+            "supportsStrictMode": false,
+            "supportsLongCacheRetention": false,
             "thinkingFormat": "openai",
         }))
     );
 
     let deepseek = get_model("together", "deepseek-ai/DeepSeek-V4-Pro").expect("deepseek");
+    assert_eq!(deepseek.api, "openai-completions");
+    assert_eq!(deepseek.provider, "together");
+    assert_eq!(deepseek.base_url, "https://api.together.ai/v1");
+    assert!(deepseek.reasoning);
+    assert_eq!(deepseek.input, vec![InputKind::Text]);
+    assert_eq!(deepseek.context_window, 512_000);
+    assert_eq!(deepseek.max_tokens, 384_000);
+    assert_eq!(
+        deepseek.cost,
+        ModelCost {
+            input: 2.1,
+            output: 4.4,
+            cache_read: 0.2,
+            cache_write: 0.0,
+        }
+    );
     assert_eq!(
         deepseek.thinking_level_map,
         BTreeMap::from([
@@ -3955,12 +3992,33 @@ fn fireworks_and_together_model_metadata_match_provider_catalog() {
     assert_eq!(
         deepseek.compat,
         Some(json!({
+            "supportsStore": false,
+            "supportsDeveloperRole": false,
             "supportsReasoningEffort": true,
+            "maxTokensField": "max_tokens",
+            "supportsStrictMode": false,
+            "supportsLongCacheRetention": false,
             "thinkingFormat": "together",
         }))
     );
 
     let minimax = get_model("together", "MiniMaxAI/MiniMax-M2.7").expect("minimax");
+    assert_eq!(minimax.api, "openai-completions");
+    assert_eq!(minimax.provider, "together");
+    assert_eq!(minimax.base_url, "https://api.together.ai/v1");
+    assert!(minimax.reasoning);
+    assert_eq!(minimax.input, vec![InputKind::Text]);
+    assert_eq!(minimax.context_window, 202_752);
+    assert_eq!(minimax.max_tokens, 131_072);
+    assert_eq!(
+        minimax.cost,
+        ModelCost {
+            input: 0.3,
+            output: 1.2,
+            cache_read: 0.06,
+            cache_write: 0.0,
+        }
+    );
     assert_eq!(
         minimax.thinking_level_map,
         BTreeMap::from([
@@ -3971,19 +4029,15 @@ fn fireworks_and_together_model_metadata_match_provider_catalog() {
         ])
     );
     assert_eq!(
-        minimax
-            .compat
-            .as_ref()
-            .and_then(|compat| compat.get("supportsReasoningEffort"))
-            .and_then(Value::as_bool),
-        Some(false)
-    );
-    assert!(
-        minimax
-            .compat
-            .as_ref()
-            .and_then(|compat| compat.get("thinkingFormat"))
-            .is_none()
+        minimax.compat,
+        Some(json!({
+            "supportsStore": false,
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": false,
+            "maxTokensField": "max_tokens",
+            "supportsStrictMode": false,
+            "supportsLongCacheRetention": false,
+        }))
     );
 }
 
@@ -4405,6 +4459,12 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
         ),
         (
             "kimi-coding",
+            "kimi-for-coding",
+            "anthropic-messages",
+            "https://api.kimi.com/coding",
+        ),
+        (
+            "kimi-coding",
             "kimi-k2-thinking",
             "anthropic-messages",
             "https://api.kimi.com/coding",
@@ -4452,7 +4512,88 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
         );
     }
 
+    let huggingface_kimi =
+        get_model("huggingface", "moonshotai/Kimi-K2.5").expect("huggingface kimi");
+    assert!(huggingface_kimi.reasoning);
+    assert_eq!(
+        huggingface_kimi.input,
+        vec![InputKind::Text, InputKind::Image]
+    );
+    assert_eq!(
+        huggingface_kimi.cost,
+        ModelCost {
+            input: 0.6,
+            output: 3.0,
+            cache_read: 0.1,
+            cache_write: 0.0,
+        }
+    );
+    assert_eq!(huggingface_kimi.context_window, 262_144);
+    assert_eq!(huggingface_kimi.max_tokens, 262_144);
+    assert_eq!(
+        huggingface_kimi.compat,
+        Some(json!({ "supportsDeveloperRole": false }))
+    );
+    assert!(
+        get_supported_thinking_levels(&huggingface_kimi).contains(&ThinkingLevel::Medium),
+        "Hugging Face Kimi-K2.5 source stream tests use medium reasoning effort"
+    );
+
+    for provider in [
+        "xiaomi",
+        "xiaomi-token-plan-cn",
+        "xiaomi-token-plan-ams",
+        "xiaomi-token-plan-sgp",
+    ] {
+        let xiaomi = get_model(provider, "mimo-v2.5-pro").expect(provider);
+        assert!(xiaomi.reasoning, "{provider}");
+        assert_eq!(xiaomi.input, vec![InputKind::Text], "{provider}");
+        assert_eq!(
+            xiaomi.cost,
+            ModelCost {
+                input: 1.0,
+                output: 3.0,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+            "{provider}"
+        );
+        assert_eq!(xiaomi.context_window, 1_048_576, "{provider}");
+        assert_eq!(xiaomi.max_tokens, 131_072, "{provider}");
+    }
+
+    let kimi_model_ids = get_models("kimi-coding")
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kimi_model_ids,
+        vec!["kimi-for-coding".to_owned(), "kimi-k2-thinking".to_owned()]
+    );
+
+    let kimi_for_coding = get_model("kimi-coding", "kimi-for-coding").expect("kimi for coding");
+    assert!(kimi_for_coding.reasoning);
+    assert_eq!(
+        kimi_for_coding.input,
+        vec![InputKind::Text, InputKind::Image]
+    );
+    assert_eq!(kimi_for_coding.cost, ModelCost::default());
+    assert_eq!(kimi_for_coding.context_window, 262_144);
+    assert_eq!(kimi_for_coding.max_tokens, 32_768);
+    assert_eq!(
+        kimi_for_coding
+            .headers
+            .get("User-Agent")
+            .map(String::as_str),
+        Some("KimiCLI/1.5")
+    );
+
     let kimi = get_model("kimi-coding", "kimi-k2-thinking").expect("kimi model");
+    assert!(kimi.reasoning);
+    assert_eq!(kimi.input, vec![InputKind::Text]);
+    assert_eq!(kimi.cost, ModelCost::default());
+    assert_eq!(kimi.context_window, 262_144);
+    assert_eq!(kimi.max_tokens, 32_768);
     assert_eq!(
         kimi.headers.get("User-Agent").map(String::as_str),
         Some("KimiCLI/1.5")

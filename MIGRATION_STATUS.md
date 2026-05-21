@@ -54,12 +54,18 @@ counterparts that pass.
     and Gemma model slice, Google Vertex generated-catalog metadata parity for
     the current Gemini 1.5/2.0/2.5/3.x model slice, Mistral
     generated-catalog metadata parity for the current Codestral, Devstral,
-    Magistral, Ministral, Mistral, and Pixtral model slice, Zai
-    generated-catalog metadata parity for the current GLM coding model slice,
-    Groq generated-catalog metadata parity for the current DeepSeek, Gemma,
-    Compound, Llama, Mistral, Kimi, GPT OSS, and Qwen model slice, plus
-    OpenAI and Azure OpenAI Responses generated-catalog metadata parity for the
-    current GPT-4/GPT-4.1/GPT-4o, GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5,
+    Magistral, Ministral, Mistral, and Pixtral model slice, Kimi Coding
+    generated-catalog metadata parity for the current Kimi For Coding and K2
+    Thinking model slice, Hugging Face generated-catalog metadata parity for the
+    source-tested Kimi K2.5 model, Together generated-catalog metadata parity
+    for the current source-tested Kimi/GPT OSS/DeepSeek/MiniMax model slice,
+    Zai generated-catalog metadata parity for the current GLM coding model
+    slice, Groq generated-catalog metadata parity for the current DeepSeek,
+    Gemma, Compound, Llama, Mistral, Kimi, GPT OSS, and Qwen model slice,
+    Xiaomi generated-catalog metadata parity for the source-tested MiMo V2.5
+    Pro API/token-plan model slice, plus OpenAI and Azure OpenAI Responses
+    generated-catalog metadata parity for the current GPT-4/GPT-4.1/GPT-4o,
+    GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5,
     and o-series model slices, plus OpenAI Codex generated-catalog metadata
     parity for the six current ChatGPT backend models, base URL,
     context/output windows, image-input capability, thinking-level map, and
@@ -929,6 +935,62 @@ This migration is not complete.
   `cargo fmt --check`, `git diff --check`, and
   `cargo test --workspace -- --list` passed; the list command enumerated 1201
   tests.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` / `together-models.test.ts` metadata for the
+  source-tested Together GPT OSS, DeepSeek V4 Pro, and MiniMax M2.7 models:
+  Rust now preserves their generated cost tables, text input shape,
+  context/output windows, thinking-level maps, and full Together compatibility
+  flags alongside the already-covered Kimi K2.6 default model:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core fireworks_and_together_model_metadata_match_provider_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_completions_payload_maps_detected_and_explicit_thinking_formats -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core registered_model_apis_have_builtin_provider_implementations -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed. This extends existing provider
+  metadata behavior coverage, so the enumerated Rust test count remains 1201.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` Kimi Coding catalog metadata and the source live cases
+  that call `getModel("kimi-coding", "kimi-for-coding")`: Rust now exposes
+  `kimi-for-coding` and `kimi-k2-thinking` in the Kimi Coding registry, maps
+  both to the Anthropic Messages API/base URL, preserves the `KimiCLI/1.5`
+  user agent, and gives `kimi-for-coding` text+image input support for the
+  image tool-result source cases:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core openai_compatible_provider_base_urls_match_provider_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core registered_model_apis_have_builtin_provider_implementations -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed. This extends existing provider
+  metadata behavior coverage, so the enumerated Rust test count remains 1201.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` Xiaomi `mimo-v2.5-pro` catalog metadata used by the
+  source API-billing and token-plan live cases: Rust now marks the API, CN,
+  AMS, and SGP variants as reasoning-capable OpenAI-compatible models with the
+  source text input shape, 1,048,576-token context window, 131,072 max output
+  tokens, and 1/3/0.2 cost table:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core openai_compatible_provider_base_urls_match_provider_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_completions_payload_maps_detected_and_explicit_thinking_formats -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core registered_model_apis_have_builtin_provider_implementations -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed. This extends existing provider
+  metadata behavior coverage, so the enumerated Rust test count remains 1201.
+- Latest local verification on 2026-05-22 after aligning the Pi
+  `models.generated.ts` Hugging Face `moonshotai/Kimi-K2.5` catalog metadata
+  used by the source stream/total-token/context-overflow live cases: Rust now
+  marks the model as reasoning-capable, text+image capable, and
+  `supportsDeveloperRole=false`, with the source cost table and 262144-token
+  context/output windows:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core openai_compatible_provider_base_urls_match_provider_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_completions_system_prompt_uses_developer_role_for_standard_reasoning_models -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core registered_model_apis_have_builtin_provider_implementations -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed. This extends existing provider
+  metadata behavior coverage, so the enumerated Rust test count remains 1201.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
   RFC3339 timestamp values, matching Pi's `new Date(createdAt).getTime()`
