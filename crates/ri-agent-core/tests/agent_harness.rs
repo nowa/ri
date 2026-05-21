@@ -5145,6 +5145,64 @@ async fn agent_harness_listener_updates_are_live_before_prepare_next_turn() {
 }
 
 #[tokio::test]
+async fn agent_harness_pending_listener_messages_are_visible_before_next_tool_turn() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    let second_request_text = Arc::new(Mutex::new(Vec::new()));
+    let second_request_text_ref = second_request_text.clone();
+    let mut args = Map::new();
+    args.insert("expression".to_owned(), Value::String("1 + 1".to_owned()));
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call("calculate", args, Some("call-listener".to_owned())),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_response_factory(move |context, _, _, _| {
+            *second_request_text_ref.lock().expect("mutex") = user_texts(&context.messages);
+            faux_assistant_message("done", Default::default())
+        }),
+    ]);
+    let session = Session::new(InMemorySessionStorage::new());
+    let mut options =
+        AgentHarnessOptions::new(test_env(), session.clone(), registration.get_model());
+    options.tools = vec![calculate_tool()];
+    let harness = Arc::new(AgentHarness::new(options));
+    let appended = Arc::new(AtomicBool::new(false));
+    let listener_harness = harness.clone();
+    let appended_ref = appended.clone();
+    harness.subscribe(move |event| {
+        if matches!(
+            event,
+            AgentHarnessEvent::Agent(AgentEvent::MessageEnd {
+                message: AgentMessage::ToolResult(_)
+            })
+        ) && !appended_ref.swap(true, Ordering::SeqCst)
+        {
+            listener_harness
+                .append_message(Message::User(UserMessage::text(
+                    "listener next-turn context",
+                )))
+                .expect("queue listener message");
+        }
+    });
+
+    harness.prompt("hello").await.expect("prompt");
+
+    assert_eq!(
+        *second_request_text.lock().expect("mutex"),
+        vec!["hello".to_owned(), "listener next-turn context".to_owned()]
+    );
+    assert_eq!(
+        session_user_texts(&session),
+        vec!["hello".to_owned(), "listener next-turn context".to_owned()]
+    );
+    registration.unregister();
+}
+
+#[tokio::test]
 async fn agent_harness_drains_steering_one_at_a_time_and_emits_queue_updates() {
     let registration = register_faux_provider(RegisterFauxProviderOptions {
         tokens_per_second: Some(30.0),

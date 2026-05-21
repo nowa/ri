@@ -641,6 +641,7 @@ struct HarnessNextTurnPreparer {
     resources: Arc<Mutex<AgentHarnessResources>>,
     tools: Arc<Mutex<Vec<AgentTool>>>,
     active_tool_names: Arc<Mutex<Vec<String>>>,
+    pending_session_writes: Arc<Mutex<VecDeque<HarnessSessionWrite>>>,
 }
 
 #[async_trait]
@@ -680,10 +681,14 @@ impl AgentNextTurnPreparer for HarnessNextTurnPreparer {
             },
         )
         .map_err(|error| error.message)?;
+        let mut messages = context.context.messages;
+        messages.extend(pending_session_write_context_messages(
+            &self.pending_session_writes,
+        ));
         Ok(Some(AgentLoopTurnUpdate {
             context: Some(AgentContext {
                 system_prompt,
-                messages: context.context.messages,
+                messages,
                 tools: active_tools,
             }),
             model: Some(model),
@@ -1758,6 +1763,7 @@ impl AgentHarness {
                 resources: self.resources.clone(),
                 tools: self.tools.clone(),
                 active_tool_names: self.active_tool_names.clone(),
+                pending_session_writes: self.pending_session_writes.clone(),
             })),
             should_stop_after_turn: None,
             queued_message_provider: Some(Arc::new(HarnessQueuedMessageProvider {
@@ -2368,6 +2374,34 @@ fn flush_pending_session_writes_for(
         }
     }
     Ok(())
+}
+
+fn pending_session_write_context_messages(
+    pending_session_writes: &Mutex<VecDeque<HarnessSessionWrite>>,
+) -> Vec<AgentMessage> {
+    pending_session_writes
+        .lock()
+        .iter()
+        .filter_map(|write| match write {
+            HarnessSessionWrite::Message { message } => Some(AgentMessage::from(message.clone())),
+            HarnessSessionWrite::CustomMessage { content, .. } => {
+                Some(AgentMessage::from(Message::User(UserMessage {
+                    content: match content {
+                        CustomMessageContent::Text(text) => {
+                            UserContentValue::Blocks(vec![UserContent::Text(
+                                ri_llm_provider::TextContent::new(text.clone()),
+                            )])
+                        }
+                        CustomMessageContent::Blocks(blocks) => {
+                            UserContentValue::Blocks(blocks.clone())
+                        }
+                    },
+                    timestamp: now_millis(),
+                })))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn apply_session_write_for(
