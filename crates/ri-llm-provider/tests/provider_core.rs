@@ -16703,7 +16703,7 @@ async fn builtin_openai_codex_provider_auto_falls_back_to_sse_when_websocket_fai
     options.stream.session_id = Some("ws-fallback-session".to_owned());
     options.stream.transport = Some(Transport::Auto);
 
-    let message = complete_simple(&model, user_context("hello"), options)
+    let message = complete_simple(&model, user_context("hello"), options.clone())
         .await
         .expect("complete");
     let request = request_task.await.expect("request task");
@@ -16748,6 +16748,39 @@ async fn builtin_openai_codex_provider_auto_falls_back_to_sse_when_websocket_fai
             .sse_request
             .to_ascii_lowercase()
             .contains("openai-beta: responses=experimental")
+    );
+
+    let second_sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fallback_2\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_fallback_2\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Sticky SSE\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_fallback_2\",\"content\":[{\"type\":\"output_text\",\"text\":\"Sticky SSE\"}]}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fallback_2\",\"status\":\"completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":3,\"total_tokens\":8}}}\n\n",
+    );
+    let (second_base_url, second_request_task) = mock_sse_server(second_sse).await;
+    model.base_url = second_base_url;
+
+    let second_message = complete_simple(&model, user_context("again"), options)
+        .await
+        .expect("complete through sticky SSE fallback");
+    let second_request = second_request_task.await.expect("second request task");
+
+    assert_eq!(text_of(&second_message), Some("Sticky SSE"));
+    assert_eq!(
+        second_message.response_id.as_deref(),
+        Some("resp_fallback_2")
+    );
+    assert_eq!(second_message.usage.total_tokens, 8);
+    assert!(
+        second_message
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic["type"] != "provider_transport_failure"),
+        "sticky fallback should skip websocket without adding a new transport-failure diagnostic"
+    );
+    assert!(
+        second_request.starts_with("POST /codex/responses HTTP/1.1"),
+        "sticky fallback should skip the websocket handshake and send SSE directly; request={second_request:?}"
     );
 }
 

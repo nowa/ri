@@ -454,6 +454,17 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning
+  `providers/openai-codex-responses.ts` session-scoped WebSocket fallback
+  behavior: a Codex WebSocket transport failure now marks the request
+  `session_id` for direct SSE on later non-SSE requests, matching Pi's
+  `websocketSseFallbackSessions` path while preserving the original
+  provider-transport diagnostic only on the failed WebSocket attempt:
+  `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_auto_falls_back_to_sse_when_websocket_fails_before_events -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`,
+  `cargo test --workspace -- --list` (1161 tests enumerated), and
+  `cargo fmt --check` and `git diff --check` passed.
+- Latest local verification on 2026-05-21 after aligning
   `providers/google.ts` and `providers/google-vertex.ts` native `thinking`
   option objects: Google/Gemini and Google Vertex payload construction now lets
   explicit `thinking: { enabled, budgetTokens, level }` extras override generic
