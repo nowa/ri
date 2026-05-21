@@ -20216,6 +20216,9 @@ async fn builtin_mistral_provider_respects_abort_flag_while_streaming() {
             error,
         }) if error.stop_reason == StopReason::Aborted
             && error.error_message.as_deref() == Some("Request was aborted")
+            && error.usage.input == 0
+            && error.usage.output == 0
+            && error.usage.total_tokens == 0
             && text_of(error) == Some("Bon")
     ));
     let _request = request_task.await.expect("request task");
