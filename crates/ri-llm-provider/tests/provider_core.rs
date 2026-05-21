@@ -14311,11 +14311,26 @@ fn node_http_proxy_respects_no_proxy_and_rejects_unsupported_protocols() {
     set_env("NO_PROXY", "bedrock-runtime.us-east-1.amazonaws.com");
     assert_eq!(resolve_http_proxy_url_for_target(target), Ok(None));
 
+    set_env(
+        "NO_PROXY",
+        "unrelated.example\nbedrock-runtime.us-east-1.amazonaws.com",
+    );
+    assert_eq!(resolve_http_proxy_url_for_target(target), Ok(None));
+
     remove_env("NO_PROXY");
     let proxy = resolve_http_proxy_url_for_target(target)
         .expect("proxy resolution")
         .expect("proxy url");
     assert_eq!(proxy.to_string(), "http://proxy.example:8080/");
+
+    assert_eq!(resolve_http_proxy_url_for_target("https:///"), Ok(None));
+
+    set_env("https_proxy", "");
+    set_env("HTTPS_PROXY", "http://uppercase-proxy.example:8080");
+    let proxy = resolve_http_proxy_url_for_target(target)
+        .expect("uppercase fallback proxy resolution")
+        .expect("uppercase fallback proxy url");
+    assert_eq!(proxy.to_string(), "http://uppercase-proxy.example:8080/");
 
     set_env("HTTPS_PROXY", "socks5://proxy.example:1080");
     let error = resolve_http_proxy_url_for_target(target).expect_err("unsupported proxy protocol");

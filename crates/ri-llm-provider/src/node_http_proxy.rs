@@ -77,6 +77,7 @@ pub fn reqwest_client_for_target(target_url: &str) -> Result<reqwest::Client, St
 fn proxy_env(key: &str) -> Option<String> {
     env::var(key.to_ascii_lowercase())
         .ok()
+        .filter(|value| !value.is_empty())
         .or_else(|| env::var(key.to_ascii_uppercase()).ok())
         .filter(|value| !value.is_empty())
 }
@@ -95,24 +96,26 @@ fn should_proxy_hostname(hostname: &str, port: u16) -> bool {
     if no_proxy == "*" {
         return false;
     }
-    no_proxy.split([',', ' ', '\t']).all(|entry| {
-        if entry.is_empty() {
-            return true;
-        }
-        let (mut proxy_hostname, proxy_port) = split_host_port(entry);
-        if let Some(proxy_port) = proxy_port {
-            if proxy_port != port {
+    no_proxy
+        .split(|character: char| character == ',' || character.is_whitespace())
+        .all(|entry| {
+            if entry.is_empty() {
                 return true;
             }
-        }
-        if !proxy_hostname.starts_with(['.', '*']) {
-            return hostname != proxy_hostname;
-        }
-        if proxy_hostname.starts_with('*') {
-            proxy_hostname = &proxy_hostname[1..];
-        }
-        !hostname.ends_with(proxy_hostname)
-    })
+            let (mut proxy_hostname, proxy_port) = split_host_port(entry);
+            if let Some(proxy_port) = proxy_port {
+                if proxy_port != port {
+                    return true;
+                }
+            }
+            if !proxy_hostname.starts_with(['.', '*']) {
+                return hostname != proxy_hostname;
+            }
+            if proxy_hostname.starts_with('*') {
+                proxy_hostname = &proxy_hostname[1..];
+            }
+            !hostname.ends_with(proxy_hostname)
+        })
 }
 
 fn split_host_port(value: &str) -> (&str, Option<u16>) {
@@ -142,8 +145,14 @@ struct ParsedUrl {
 impl ParsedUrl {
     fn parse(value: &str) -> Option<Self> {
         let (protocol, rest) = value.split_once("://")?;
+        if protocol.is_empty() {
+            return None;
+        }
         let authority = rest.split('/').next().unwrap_or(rest);
         let (hostname, explicit_port) = split_host_port(authority);
+        if hostname.is_empty() {
+            return None;
+        }
         let port = explicit_port.unwrap_or_else(|| default_port(protocol));
         Some(Self {
             protocol: protocol.to_ascii_lowercase(),
