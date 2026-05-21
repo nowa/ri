@@ -918,11 +918,17 @@ fn resolve_google_thought_signature(
 }
 
 fn is_valid_google_thought_signature(signature: &str) -> bool {
-    !signature.is_empty()
-        && signature.len() % 4 == 0
-        && signature
+    if signature.is_empty() || signature.len() % 4 != 0 {
+        return false;
+    }
+
+    let unpadded = signature.trim_end_matches('=');
+    let padding_len = signature.len() - unpadded.len();
+    padding_len <= 2
+        && !unpadded.is_empty()
+        && unpadded
             .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '+' || ch == '/' || ch == '=')
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '+' || ch == '/')
 }
 
 fn google_inline_data_part(image: &ImageContent) -> Value {

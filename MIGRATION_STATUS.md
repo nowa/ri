@@ -378,10 +378,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1138 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1139 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 937 tests: 1 library test, 305 `provider_core` tests, and
-  631 `provider_live` tests. This is 216 above the 721 direct simple source
+- `ri-llm-provider`: 938 tests: 1 library test, 306 `provider_core` tests, and
+  631 `provider_live` tests. This is 217 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -416,7 +416,7 @@ Current Rust tests: 1138 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1138-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1139-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -439,7 +439,18 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after completing
+- Latest local verification on 2026-05-21 after tightening
+  `providers/google-shared.ts` thought-signature validation: same-model
+  Google/Vertex history now preserves only source-valid base64
+  `thoughtSignature` values and drops malformed padding/embedded `=` values
+  such as `AA=A`, `AAAA====`, and `====`:
+  `cargo test -p ri-llm-provider --test provider_core google_convert_messages_drops_invalid_same_model_thought_signatures -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core google_convert_messages_preserves_valid_same_model_thought_signature -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core google_ -- --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`, `cargo fmt --check`, and
+  `cargo test --workspace -- --list` (1139 tests enumerated) passed.
+- Previous local verification on 2026-05-21 after completing
   `session-resources.ts` registry parity: Rust now exposes registered
   session-resource cleanup hooks, runs all hooks for a session/all sessions,
   aggregates hook failures in a `Result`, unregisters hooks via a drop guard,
@@ -1014,6 +1025,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1138 Rust tests cover the
+- Test parity is not certified by raw count alone: 1139 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

@@ -6516,6 +6516,37 @@ fn google_convert_messages_preserves_valid_same_model_thought_signature() {
 }
 
 #[test]
+fn google_convert_messages_drops_invalid_same_model_thought_signatures() {
+    let model = google_test_model(
+        "google-generative-ai",
+        "google",
+        "gemini-3-pro-preview",
+        vec![InputKind::Text],
+    );
+    for invalid_signature in ["AA=A", "AAAA====", "===="] {
+        let contents = convert_google_messages(
+            &model,
+            &google_unsigned_tool_context(&model, Some(invalid_signature)),
+        );
+        let model_turn = contents
+            .iter()
+            .find(|content| content["role"] == "model")
+            .expect("model turn");
+        let function_call_part = model_turn["parts"]
+            .as_array()
+            .expect("parts")
+            .iter()
+            .find(|part| part.get("functionCall").is_some())
+            .expect("function call");
+
+        assert!(
+            function_call_part.get("thoughtSignature").is_none(),
+            "{invalid_signature} must be rejected like the source base64 validator"
+        );
+    }
+}
+
+#[test]
 fn google_convert_messages_does_not_add_thought_signature_for_non_gemini_3_models() {
     let model = google_test_model(
         "google-generative-ai",
