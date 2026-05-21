@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, path::PathBuf};
 
 fn api_key_env_vars(provider: &str) -> Option<&'static [&'static str]> {
     match provider {
@@ -40,7 +40,7 @@ pub fn api_key_env_var_names(provider: &str) -> Option<&'static [&'static str]> 
 pub fn find_env_keys(provider: &str) -> Option<Vec<String>> {
     let keys: Vec<String> = api_key_env_vars(provider)?
         .iter()
-        .filter(|name| env::var_os(name).is_some())
+        .filter(|name| env_string_nonempty(name).is_some())
         .map(|name| (*name).to_owned())
         .collect();
     (!keys.is_empty()).then_some(keys)
@@ -48,7 +48,7 @@ pub fn find_env_keys(provider: &str) -> Option<Vec<String>> {
 
 pub fn get_env_api_key(provider: &str) -> Option<String> {
     if let Some(first_key) = find_env_keys(provider).and_then(|keys| keys.into_iter().next()) {
-        return env::var(first_key).ok();
+        return env_string_nonempty(&first_key);
     }
 
     if provider == "amazon-bedrock" && has_bedrock_credentials() {
@@ -62,22 +62,61 @@ pub fn get_env_api_key(provider: &str) -> Option<String> {
     None
 }
 
+fn env_string_nonempty(key: &str) -> Option<String> {
+    env::var(key).ok().filter(|value| !value.is_empty())
+}
+
+fn env_os_nonempty(key: &str) -> bool {
+    env::var_os(key).is_some_and(|value| !value.as_os_str().is_empty())
+}
+
+fn env_path_nonempty(key: &str) -> Option<PathBuf> {
+    env::var_os(key)
+        .filter(|value| !value.as_os_str().is_empty())
+        .map(PathBuf::from)
+}
+
 fn has_bedrock_credentials() -> bool {
-    env::var_os("AWS_PROFILE").is_some()
-        || (env::var_os("AWS_ACCESS_KEY_ID").is_some()
-            && env::var_os("AWS_SECRET_ACCESS_KEY").is_some())
-        || env::var_os("AWS_BEARER_TOKEN_BEDROCK").is_some()
-        || (env::var_os("AWS_WEB_IDENTITY_TOKEN_FILE").is_some()
-            && env::var_os("AWS_ROLE_ARN").is_some())
-        || env::var_os("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").is_some()
-        || env::var_os("AWS_CONTAINER_CREDENTIALS_FULL_URI").is_some()
+    env_os_nonempty("AWS_PROFILE")
+        || (env_os_nonempty("AWS_ACCESS_KEY_ID") && env_os_nonempty("AWS_SECRET_ACCESS_KEY"))
+        || env_os_nonempty("AWS_BEARER_TOKEN_BEDROCK")
+        || (env_os_nonempty("AWS_WEB_IDENTITY_TOKEN_FILE") && env_os_nonempty("AWS_ROLE_ARN"))
+        || env_os_nonempty("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+        || env_os_nonempty("AWS_CONTAINER_CREDENTIALS_FULL_URI")
 }
 
 fn has_vertex_credentials() -> bool {
-    let has_project =
-        env::var_os("GOOGLE_CLOUD_PROJECT").is_some() || env::var_os("GCLOUD_PROJECT").is_some();
-    let has_location = env::var_os("GOOGLE_CLOUD_LOCATION").is_some();
-    let has_key = env::var_os("GOOGLE_CLOUD_API_KEY").is_some();
-    let has_adc_path = env::var_os("GOOGLE_APPLICATION_CREDENTIALS").is_some();
-    (has_key || has_adc_path) && has_project && has_location
+    let has_project = env_string_nonempty("GOOGLE_CLOUD_PROJECT").is_some()
+        || env_string_nonempty("GCLOUD_PROJECT").is_some();
+    let has_location = env_string_nonempty("GOOGLE_CLOUD_LOCATION").is_some();
+    google_adc_credentials_exists() && has_project && has_location
+}
+
+fn google_adc_credentials_exists() -> bool {
+    if let Some(path) = env_path_nonempty("GOOGLE_APPLICATION_CREDENTIALS") {
+        return path.exists();
+    }
+
+    default_google_adc_paths()
+        .into_iter()
+        .any(|path| path.exists())
+}
+
+fn default_google_adc_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(config_dir) = env_path_nonempty("APPDATA") {
+        paths.push(
+            config_dir
+                .join("gcloud")
+                .join("application_default_credentials.json"),
+        );
+    }
+    if let Some(home) = env_path_nonempty("HOME").or_else(|| env_path_nonempty("USERPROFILE")) {
+        paths.push(
+            home.join(".config")
+                .join("gcloud")
+                .join("application_default_credentials.json"),
+        );
+    }
+    paths
 }

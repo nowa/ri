@@ -4639,6 +4639,30 @@ fn bedrock_env_api_key_marker_matches_supported_http_auth_sources() {
         "AWS_ROLE_SESSION_NAME",
     ]);
 
+    set_env("AWS_PROFILE", "");
+    assert_eq!(get_env_api_key("amazon-bedrock"), None);
+    remove_env("AWS_PROFILE");
+
+    set_env("AWS_ACCESS_KEY_ID", "AKID");
+    set_env("AWS_SECRET_ACCESS_KEY", "");
+    assert_eq!(get_env_api_key("amazon-bedrock"), None);
+    remove_env("AWS_ACCESS_KEY_ID");
+    remove_env("AWS_SECRET_ACCESS_KEY");
+
+    set_env("AWS_BEARER_TOKEN_BEDROCK", "");
+    assert_eq!(get_env_api_key("amazon-bedrock"), None);
+    remove_env("AWS_BEARER_TOKEN_BEDROCK");
+
+    set_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "");
+    assert_eq!(get_env_api_key("amazon-bedrock"), None);
+    remove_env("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI");
+
+    set_env("AWS_WEB_IDENTITY_TOKEN_FILE", "");
+    set_env("AWS_ROLE_ARN", "arn:aws:iam::123456789012:role/test");
+    assert_eq!(get_env_api_key("amazon-bedrock"), None);
+    remove_env("AWS_WEB_IDENTITY_TOKEN_FILE");
+    remove_env("AWS_ROLE_ARN");
+
     set_env("AWS_WEB_IDENTITY_TOKEN_FILE", "/var/run/secrets/token");
     assert_eq!(get_env_api_key("amazon-bedrock"), None);
     set_env("AWS_ROLE_ARN", "arn:aws:iam::123456789012:role/test");
@@ -4691,6 +4715,41 @@ fn bedrock_env_api_key_marker_matches_supported_http_auth_sources() {
         get_env_api_key("amazon-bedrock"),
         Some("<authenticated>".to_owned())
     );
+}
+
+#[test]
+fn env_api_keys_ignore_empty_values_and_preserve_provider_precedence() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(&[
+        "OPENAI_API_KEY",
+        "ANTHROPIC_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+    ]);
+
+    set_env("OPENAI_API_KEY", "");
+    assert_eq!(find_env_keys("openai"), None);
+    assert_eq!(get_env_api_key("openai"), None);
+
+    set_env("ANTHROPIC_OAUTH_TOKEN", "");
+    set_env("ANTHROPIC_API_KEY", "anthropic-key");
+    assert_eq!(
+        find_env_keys("anthropic"),
+        Some(vec!["ANTHROPIC_API_KEY".to_owned()])
+    );
+    assert_eq!(
+        get_env_api_key("anthropic"),
+        Some("anthropic-key".to_owned())
+    );
+
+    set_env("ANTHROPIC_OAUTH_TOKEN", "oauth-token");
+    assert_eq!(
+        find_env_keys("anthropic"),
+        Some(vec![
+            "ANTHROPIC_OAUTH_TOKEN".to_owned(),
+            "ANTHROPIC_API_KEY".to_owned()
+        ])
+    );
+    assert_eq!(get_env_api_key("anthropic"), Some("oauth-token".to_owned()));
 }
 
 #[test]
@@ -5624,6 +5683,65 @@ fn google_vertex_client_config_forwards_custom_base_url_to_api_key_client() {
     assert_eq!(http_options.base_url, "https://proxy.example.com");
     assert_eq!(http_options.base_url_resource_scope, "COLLECTION");
     assert_eq!(http_options.api_version, None);
+}
+
+#[test]
+fn google_vertex_env_api_key_marker_requires_existing_adc_project_and_location() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(&[
+        "GOOGLE_CLOUD_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "APPDATA",
+        "HOME",
+        "USERPROFILE",
+    ]);
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("ri-google-vertex-env-{unique}"));
+    std::fs::create_dir_all(&dir).expect("create vertex env temp dir");
+    let explicit_adc_path = dir.join("adc.json");
+
+    set_env(
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        explicit_adc_path.to_str().expect("adc path"),
+    );
+    set_env("GOOGLE_CLOUD_PROJECT", "test-project");
+    set_env("GOOGLE_CLOUD_LOCATION", "us-central1");
+    assert_eq!(get_env_api_key("google-vertex"), None);
+
+    std::fs::write(&explicit_adc_path, "{}").expect("write explicit adc");
+    assert_eq!(
+        get_env_api_key("google-vertex"),
+        Some("<authenticated>".to_owned())
+    );
+
+    remove_env("GOOGLE_APPLICATION_CREDENTIALS");
+    set_env("GOOGLE_CLOUD_PROJECT", "");
+    assert_eq!(get_env_api_key("google-vertex"), None);
+
+    set_env("GCLOUD_PROJECT", "fallback-project");
+    let default_adc_path = dir
+        .join(".config")
+        .join("gcloud")
+        .join("application_default_credentials.json");
+    std::fs::create_dir_all(default_adc_path.parent().expect("adc parent"))
+        .expect("create default adc parent");
+    std::fs::write(&default_adc_path, "{}").expect("write default adc");
+    set_env("HOME", dir.to_str().expect("home path"));
+    assert_eq!(
+        get_env_api_key("google-vertex"),
+        Some("<authenticated>".to_owned())
+    );
+
+    set_env("GOOGLE_CLOUD_LOCATION", "");
+    assert_eq!(get_env_api_key("google-vertex"), None);
+
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 fn google_tool(parameters: Value) -> Tool {

@@ -63,7 +63,9 @@ counterparts that pass.
     bounds used by TypeBox/plain JSON-schema tool parameters.
   - Context-overflow detection with provider-specific error-shape corpus and
     silent/length-stop overflow signals.
-  - Environment API key lookup.
+  - Environment API key lookup with ordered provider fallback, source-style
+    empty-env filtering, Google Vertex ADC file/default-path detection, and
+    Rust-runtime-aligned Bedrock credential markers.
   - GitHub Copilot dynamic request headers from `providers/github-copilot-headers.ts`:
     user-vs-agent `X-Initiator`, `Openai-Intent`, vision-request detection for
     user/tool-result images, and caller header overrides across Anthropic,
@@ -367,10 +369,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1133 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1135 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 932 tests: 1 library test, 300 `provider_core` tests, and
-  631 `provider_live` tests. This is 211 above the 721 direct simple source
+- `ri-llm-provider`: 934 tests: 1 library test, 302 `provider_core` tests, and
+  631 `provider_live` tests. This is 213 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -405,7 +407,7 @@ Current Rust tests: 1133 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1132-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1135-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -428,7 +430,22 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning Pi
+- Latest local verification on 2026-05-21 after aligning Pi `env-api-keys.ts`
+  behavior where it is a runtime credential marker rather than SDK internals:
+  empty API-key environment variables are ignored like falsy source env values,
+  Anthropic OAuth/API-key fallback order is preserved, Google Vertex ADC
+  markers require a real credentials file plus non-empty project/location and
+  support the default ADC path, and Bedrock marker checks continue to match the
+  Rust runtime credential sources that can actually authenticate:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core env_api_keys_ignore_empty_values_and_preserve_provider_precedence -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core google_vertex_env_api_key_marker_requires_existing_adc_project_and_location -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core bedrock_env_api_key_marker_matches_supported_http_auth_sources -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` (1135 tests enumerated), and
+  `cargo test --workspace -- --test-threads=1` passed.
+- Previous local verification on 2026-05-21 after aligning Pi
   `agent-loop.ts` queued-message turn ordering: delayed steering messages and
   follow-up messages are now emitted after the next turn's `turn_start`, rather
   than between the previous `turn_end` and the next `turn_start`:
@@ -901,6 +918,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1132 Rust tests cover the
+- Test parity is not certified by raw count alone: 1135 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
