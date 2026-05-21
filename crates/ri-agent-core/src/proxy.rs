@@ -311,8 +311,7 @@ fn process_proxy_event(
             content_index,
             delta,
         } => {
-            let content = content_mut(partial, content_index)?;
-            let AssistantContent::Text(text) = content else {
+            let Some(AssistantContent::Text(text)) = partial.content.get_mut(content_index) else {
                 return Err("Received text_delta for non-text content".to_owned());
             };
             text.text.push_str(&delta);
@@ -327,8 +326,7 @@ fn process_proxy_event(
             content_index,
             content_signature,
         } => {
-            let content = content_mut(partial, content_index)?;
-            let AssistantContent::Text(text) = content else {
+            let Some(AssistantContent::Text(text)) = partial.content.get_mut(content_index) else {
                 return Err("Received text_end for non-text content".to_owned());
             };
             text.text_signature = content_signature.map(Value::String);
@@ -352,8 +350,8 @@ fn process_proxy_event(
             content_index,
             delta,
         } => {
-            let content = content_mut(partial, content_index)?;
-            let AssistantContent::Thinking(thinking) = content else {
+            let Some(AssistantContent::Thinking(thinking)) = partial.content.get_mut(content_index)
+            else {
                 return Err("Received thinking_delta for non-thinking content".to_owned());
             };
             thinking.thinking.push_str(&delta);
@@ -368,8 +366,8 @@ fn process_proxy_event(
             content_index,
             content_signature,
         } => {
-            let content = content_mut(partial, content_index)?;
-            let AssistantContent::Thinking(thinking) = content else {
+            let Some(AssistantContent::Thinking(thinking)) = partial.content.get_mut(content_index)
+            else {
                 return Err("Received thinking_end for non-thinking content".to_owned());
             };
             thinking.thinking_signature = content_signature;
@@ -407,12 +405,13 @@ fn process_proxy_event(
             content_index,
             delta,
         } => {
-            let scratch = tool_partial_json.entry(content_index).or_default();
-            scratch.push_str(&delta);
-            let content = content_mut(partial, content_index)?;
-            let AssistantContent::ToolCall(tool_call) = content else {
+            let Some(AssistantContent::ToolCall(tool_call)) =
+                partial.content.get_mut(content_index)
+            else {
                 return Err("Received toolcall_delta for non-toolCall content".to_owned());
             };
+            let scratch = tool_partial_json.entry(content_index).or_default();
+            scratch.push_str(&delta);
             tool_call.arguments = parse_streaming_json(Some(scratch))
                 .as_object()
                 .cloned()
@@ -426,8 +425,9 @@ fn process_proxy_event(
         }
         ProxyAssistantMessageEvent::ToolcallEnd { content_index } => {
             tool_partial_json.remove(&content_index);
-            let content = content_mut(partial, content_index)?;
-            let AssistantContent::ToolCall(tool_call) = content else {
+            let Some(AssistantContent::ToolCall(tool_call)) =
+                partial.content.get_mut(content_index)
+            else {
                 return Ok(false);
             };
             sender.push(AssistantMessageEvent::ToolcallEnd {
@@ -493,16 +493,6 @@ fn ensure_content_slot(
         }));
     }
     partial.content[content_index] = content;
-}
-
-fn content_mut(
-    partial: &mut AssistantMessage,
-    content_index: usize,
-) -> Result<&mut AssistantContent, String> {
-    partial
-        .content
-        .get_mut(content_index)
-        .ok_or_else(|| format!("Received proxy event for missing content index {content_index}"))
 }
 
 fn check_abort(abort_flag: Option<&Arc<AtomicBool>>) -> Result<(), String> {

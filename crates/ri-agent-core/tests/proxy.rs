@@ -22,6 +22,7 @@ async fn stream_proxy_posts_serializable_options_and_rebuilds_partial_events() {
         json!({ "type": "toolcall_delta", "contentIndex": 2, "delta": "{\"x\":" }),
         json!({ "type": "toolcall_delta", "contentIndex": 2, "delta": "2}" }),
         json!({ "type": "toolcall_end", "contentIndex": 2 }),
+        json!({ "type": "toolcall_end", "contentIndex": 9 }),
         json!({ "type": "done", "reason": "toolUse", "usage": usage_json(5, 3) }),
     ];
     let (proxy_url, request_task) = mock_proxy_sse_server(events, 200, None).await;
@@ -90,6 +91,29 @@ async fn stream_proxy_posts_serializable_options_and_rebuilds_partial_events() {
             assert_eq!(thinking.thinking_signature.as_deref(), Some("sig_think"));
         }
         other => panic!("expected thinking, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn stream_proxy_maps_proxy_event_reconstruction_errors_to_error_events() {
+    let events = vec![json!({ "type": "text_delta", "contentIndex": 0, "delta": "orphan" })];
+    let (proxy_url, request_task) = mock_proxy_sse_server(events, 200, None).await;
+    let model = Model::faux("proxy-test-api", "proxy-provider", "proxy-model");
+    let options = ProxyStreamOptions::new(proxy_url, "proxy-token");
+
+    let events = collect_events(stream_proxy(model, Context::default(), options)).await;
+    request_task.await.expect("request task");
+
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        AssistantMessageEvent::Error { reason, error } => {
+            assert_eq!(*reason, StopReason::Error);
+            assert_eq!(
+                error.error_message.as_deref(),
+                Some("Received text_delta for non-text content")
+            );
+        }
+        event => panic!("expected proxy reconstruction error, got {event:?}"),
     }
 }
 

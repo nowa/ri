@@ -292,8 +292,9 @@ counterparts that pass.
     dynamic per-request API key providers for low-level LLM calls with static
     key fallback, including a Rust-native `agent/src/proxy.ts` counterpart that
     posts model, context, and proxy-safe stream options to `/api/stream`,
-    reconstructs SSE assistant events, preserves abort behavior, and keeps API
-    keys and retry policy out of the proxy payload.
+    reconstructs SSE assistant events, preserves Pi-style orphaned
+    `toolcall_end` no-op and typed reconstruction errors, preserves abort
+    behavior, and keeps API keys and retry policy out of the proxy payload.
   - Harness basics: system prompt helper, system skill formatting, UTF-8/line
     truncation, token/usage estimate, compaction predicates, cut-point
     selection, compaction preparation, file-operation metadata extraction, and
@@ -363,16 +364,16 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1132 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1133 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 932 tests: 1 library test, 300 `provider_core` tests, and
   631 `provider_live` tests. This is 211 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 200 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 201 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 50 above the 150 direct simple
+  `resources`, and `session_storage`. This is 51 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -425,6 +426,15 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning Pi
+  `agent/src/proxy.ts` proxy event reconstruction: Rust now ignores orphaned
+  `toolcall_end` events like the source and maps missing/wrong content slots to
+  the source's typed reconstruction error messages:
+  `cargo test -p ri-agent-core --test proxy -- --test-threads=1`,
+  `cargo fmt`, `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo test --workspace -- --list` (1133 tests enumerated), and
+  `cargo test --workspace -- --test-threads=1` passed.
+- Previous local verification on 2026-05-21 after aligning Pi
   `JsonlSessionRepo.list` filtering from `harness/session/jsonl-repo.ts`:
   Rust repo listing now skips directory entries even when their name ends in
   `.jsonl`, matching the source `file.kind !== "directory"` filter:
