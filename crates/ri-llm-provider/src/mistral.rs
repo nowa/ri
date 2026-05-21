@@ -48,12 +48,36 @@ pub fn build_mistral_simple_payload(
     let mut payload_options = MistralPayloadOptions {
         temperature: options.stream.temperature,
         max_tokens: options.stream.max_tokens,
+        tool_choice: options
+            .stream
+            .extra
+            .get("toolChoice")
+            .and_then(parse_mistral_tool_choice),
+        prompt_mode: options
+            .stream
+            .extra
+            .get("promptMode")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        reasoning_effort: options
+            .stream
+            .extra
+            .get("reasoningEffort")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
         ..Default::default()
     };
 
-    if should_use_reasoning && uses_prompt_mode_reasoning(model) {
+    let has_explicit_reasoning_control =
+        payload_options.prompt_mode.is_some() || payload_options.reasoning_effort.is_some();
+    if !has_explicit_reasoning_control && should_use_reasoning && uses_prompt_mode_reasoning(model)
+    {
         payload_options.prompt_mode = Some("reasoning".to_owned());
-    } else if let Some(reasoning) = reasoning.filter(|_| should_use_reasoning) {
+    } else if !has_explicit_reasoning_control
+        && let Some(reasoning) = reasoning.filter(|_| should_use_reasoning)
+    {
         if uses_reasoning_effort(model) {
             payload_options.reasoning_effort = Some(map_reasoning_effort(model, reasoning));
         }
@@ -785,6 +809,28 @@ fn format_tool_choice(choice: MistralToolChoice) -> Value {
             "type": "function",
             "function": { "name": name },
         }),
+    }
+}
+
+fn parse_mistral_tool_choice(value: &Value) -> Option<MistralToolChoice> {
+    match value.as_str() {
+        Some("auto") => Some(MistralToolChoice::Auto),
+        Some("none") => Some(MistralToolChoice::None),
+        Some("any") => Some(MistralToolChoice::Any),
+        Some("required") => Some(MistralToolChoice::Required),
+        Some(_) => None,
+        None => {
+            let object = value.as_object()?;
+            if object.get("type").and_then(Value::as_str) != Some("function") {
+                return None;
+            }
+            let name = object
+                .get("function")?
+                .get("name")?
+                .as_str()
+                .map(str::to_owned)?;
+            Some(MistralToolChoice::Function { name })
+        }
     }
 }
 

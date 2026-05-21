@@ -4395,6 +4395,41 @@ fn mistral_simple_payload_selects_prompt_or_effort_reasoning_controls() {
     assert!(payload.get("reasoningEffort").is_none());
     assert!(payload.get("promptMode").is_none());
 
+    let mut provider_options = SimpleStreamOptions::default();
+    provider_options
+        .stream
+        .extra
+        .insert("toolChoice".to_owned(), json!("required"));
+    let payload = build_mistral_simple_payload(&small, &context, provider_options);
+    assert_eq!(payload["toolChoice"], json!("required"));
+
+    let mut provider_options = SimpleStreamOptions::default();
+    provider_options.stream.extra.insert(
+        "toolChoice".to_owned(),
+        json!({ "type": "function", "function": { "name": "lookup" } }),
+    );
+    provider_options
+        .stream
+        .extra
+        .insert("promptMode".to_owned(), json!("reasoning"));
+    provider_options
+        .stream
+        .extra
+        .insert("reasoningEffort".to_owned(), json!("none"));
+    let payload = build_mistral_simple_payload(&small, &context, provider_options);
+    assert_eq!(
+        payload["toolChoice"],
+        json!({ "type": "function", "function": { "name": "lookup" } })
+    );
+    assert_eq!(
+        payload.get("promptMode").and_then(Value::as_str),
+        Some("reasoning")
+    );
+    assert_eq!(
+        payload.get("reasoningEffort").and_then(Value::as_str),
+        Some("none")
+    );
+
     let magistral = get_model("mistral", "magistral-medium-latest").expect("magistral");
     let payload = build_mistral_simple_payload(
         &magistral,
@@ -4409,6 +4444,21 @@ fn mistral_simple_payload_selects_prompt_or_effort_reasoning_controls() {
         Some("reasoning")
     );
     assert!(payload.get("reasoningEffort").is_none());
+
+    let mut provider_options = SimpleStreamOptions {
+        reasoning: Some(ThinkingLevel::High),
+        ..Default::default()
+    };
+    provider_options
+        .stream
+        .extra
+        .insert("reasoningEffort".to_owned(), json!("high"));
+    let payload = build_mistral_simple_payload(&magistral, &context, provider_options);
+    assert_eq!(
+        payload.get("reasoningEffort").and_then(Value::as_str),
+        Some("high")
+    );
+    assert!(payload.get("promptMode").is_none());
 
     let medium = get_model("mistral", "mistral-medium-3.5").expect("mistral medium");
     let payload = build_mistral_simple_payload(
@@ -14996,8 +15046,30 @@ async fn builtin_mistral_provider_posts_json_and_parses_sse() {
     let mut options = SimpleStreamOptions::default();
     options.stream.api_key = Some("test-key".to_owned());
     options.stream.session_id = Some("session-mistral".to_owned());
+    options.stream.extra.insert(
+        "toolChoice".to_owned(),
+        json!({ "type": "function", "function": { "name": "lookup" } }),
+    );
+    options
+        .stream
+        .extra
+        .insert("promptMode".to_owned(), json!("reasoning"));
+    options
+        .stream
+        .extra
+        .insert("reasoningEffort".to_owned(), json!("none"));
 
-    let message = complete_simple(&model, user_context("hello"), options)
+    let context = Context {
+        messages: vec![Message::User(UserMessage::text("hello"))],
+        tools: vec![Tool {
+            name: "lookup".to_owned(),
+            description: "Lookup tool".to_owned(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        }],
+        ..Default::default()
+    };
+
+    let message = complete_simple(&model, context, options)
         .await
         .expect("complete");
     let request = request_task.await.expect("request task");
@@ -15018,6 +15090,15 @@ async fn builtin_mistral_provider_posts_json_and_parses_sse() {
             .contains("x-affinity: session-mistral")
     );
     assert!(request.contains("\"stream\":true"));
+    let request_body = request.split("\r\n\r\n").nth(1).expect("request body");
+    let request_json: Value = serde_json::from_str(request_body).expect("request json");
+    assert_eq!(
+        request_json["toolChoice"],
+        json!({ "type": "function", "function": { "name": "lookup" } })
+    );
+    assert_eq!(request_json["promptMode"], json!("reasoning"));
+    assert_eq!(request_json["reasoningEffort"], json!("none"));
+    assert_eq!(request_json["tools"].as_array().map(Vec::len), Some(1));
 }
 
 #[tokio::test]

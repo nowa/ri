@@ -453,6 +453,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-21 after aligning
+  `providers/mistral.ts` provider-specific stream options: Mistral simple and
+  built-in HTTP request construction now forwards `toolChoice`, `promptMode`,
+  and explicit `reasoningEffort` extras into the chat-completions payload, and
+  explicit provider reasoning controls take precedence over generic reasoning
+  mapping when ordinary `stream` options are routed through the Rust
+  `stream_simple` implementation:
+  `cargo test -p ri-llm-provider --test provider_core mistral_simple_payload_selects_prompt_or_effort_reasoning_controls -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_mistral_provider_posts_json_and_parses_sse -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`,
+  `cargo test --workspace -- --list` (1161 tests enumerated), and
+  `cargo fmt --check` and `git diff --check` passed.
 - Previous local verification on 2026-05-21 after aligning `stream.ts`
   provider-option reasoning behavior: ordinary Rust `stream`/`complete` now
   parse source provider extras such as `reasoningEffort` and Bedrock-style
