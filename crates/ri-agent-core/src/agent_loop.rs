@@ -60,6 +60,7 @@ struct TurnOutcome {
     messages: Vec<AgentMessage>,
     tool_results: Vec<ToolResultMessage>,
     terminate: bool,
+    terminal_assistant: bool,
 }
 
 struct PreparedToolCall {
@@ -332,6 +333,9 @@ async fn run_until_done(
         let should_continue = !outcome.terminate && !outcome.tool_results.is_empty();
         hook_new_messages.extend(outcome.messages.clone());
         all_messages.extend(outcome.messages.clone());
+        if outcome.terminal_assistant {
+            return Ok(all_messages);
+        }
         prepare_next_turn(context, &mut active_config, &outcome, &hook_new_messages).await?;
         if should_stop_after_turn(context, &active_config, &outcome, &hook_new_messages).await? {
             return Ok(all_messages);
@@ -650,6 +654,10 @@ async fn run_one_turn(
         messages: new_messages,
         tool_results,
         terminate,
+        terminal_assistant: matches!(
+            assistant.stop_reason,
+            StopReason::Error | StopReason::Aborted
+        ),
     })
 }
 

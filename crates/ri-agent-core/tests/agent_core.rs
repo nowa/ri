@@ -716,6 +716,45 @@ impl AgentQueuedMessageProvider for OneShotMessageProvider {
     }
 }
 
+struct EmptyCountingMessageProvider {
+    polls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl AgentQueuedMessageProvider for EmptyCountingMessageProvider {
+    async fn get_queued_messages(&self) -> Result<Vec<AgentMessage>, String> {
+        self.polls.fetch_add(1, Ordering::SeqCst);
+        Ok(Vec::new())
+    }
+}
+
+struct CountingNextTurnPreparer {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl AgentNextTurnPreparer for CountingNextTurnPreparer {
+    async fn prepare_next_turn(
+        &self,
+        _context: AgentNextTurnContext,
+    ) -> Result<Option<AgentLoopTurnUpdate>, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(None)
+    }
+}
+
+struct CountingShouldStopAfterTurn {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl AgentShouldStopAfterTurn for CountingShouldStopAfterTurn {
+    async fn should_stop_after_turn(&self, _context: AgentNextTurnContext) -> Result<bool, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(false)
+    }
+}
+
 struct SecondPromptNextTurnPreparer {
     prepared: AtomicBool,
     seen: Arc<Mutex<Vec<(String, usize, usize)>>>,
@@ -1563,6 +1602,103 @@ async fn agent_loop_should_stop_after_current_turn_when_hook_returns_true() {
     );
     assert_eq!(follow_up_polls.load(Ordering::SeqCst), 0);
     registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_loop_terminal_assistant_error_or_abort_skips_next_turn_hooks_and_queues() {
+    for (stop_reason, error_message) in [
+        (StopReason::Error, "provider failed"),
+        (StopReason::Aborted, "Request was aborted"),
+    ] {
+        let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+        registration.set_responses(vec![
+            faux_assistant_message(
+                "terminal",
+                FauxAssistantOptions {
+                    stop_reason: Some(stop_reason.clone()),
+                    error_message: Some(error_message.to_owned()),
+                    ..Default::default()
+                },
+            )
+            .into(),
+            faux_assistant_message("should not run", Default::default()).into(),
+        ]);
+
+        let prepare_calls = Arc::new(AtomicUsize::new(0));
+        let should_stop_calls = Arc::new(AtomicUsize::new(0));
+        let steering_polls = Arc::new(AtomicUsize::new(0));
+        let follow_up_polls = Arc::new(AtomicUsize::new(0));
+        let mut config = AgentLoopConfig::new(registration.get_model());
+        config.prepare_next_turn = Some(Arc::new(CountingNextTurnPreparer {
+            calls: prepare_calls.clone(),
+        }));
+        config.should_stop_after_turn = Some(Arc::new(CountingShouldStopAfterTurn {
+            calls: should_stop_calls.clone(),
+        }));
+        config.queued_message_provider = Some(Arc::new(EmptyCountingMessageProvider {
+            polls: steering_polls.clone(),
+        }));
+        config.follow_up_message_provider = Some(Arc::new(OneShotMessageProvider {
+            message: AgentMessage::User(UserMessage::text("follow up should stay queued")),
+            delivered: AtomicBool::new(false),
+            polls: follow_up_polls.clone(),
+        }));
+
+        let (messages, events) = agent_loop_prompt(
+            context_with_model(&registration.get_model()),
+            "Initial",
+            config,
+        )
+        .await
+        .expect("loop");
+
+        assert_eq!(registration.state().call_count(), 1);
+        assert_eq!(
+            messages.iter().map(role_of).collect::<Vec<_>>(),
+            vec!["user", "assistant"]
+        );
+        let AgentMessage::Assistant(assistant) = messages.last().expect("assistant") else {
+            panic!("assistant");
+        };
+        assert_eq!(assistant.stop_reason, stop_reason);
+        assert_eq!(assistant.error_message.as_deref(), Some(error_message));
+        let event_names = events.iter().map(event_name).collect::<Vec<_>>();
+        assert_eq!(event_names.first(), Some(&"agent_start"));
+        assert_eq!(event_names.last(), Some(&"agent_end"));
+        assert_eq!(
+            event_names
+                .iter()
+                .filter(|name| **name == "turn_start")
+                .count(),
+            1
+        );
+        assert_eq!(
+            event_names
+                .iter()
+                .filter(|name| **name == "turn_end")
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    AgentEvent::MessageStart { message } => Some(role_of(message)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec!["user", "assistant"]
+        );
+        assert_eq!(prepare_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(should_stop_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            steering_polls.load(Ordering::SeqCst),
+            1,
+            "initial steering poll still happens before the terminal assistant response"
+        );
+        assert_eq!(follow_up_polls.load(Ordering::SeqCst), 0);
+        registration.unregister();
+    }
 }
 
 #[tokio::test]
