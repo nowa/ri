@@ -4074,6 +4074,7 @@ async fn agent_stateful_wrapper_persists_provider_start_failures_as_error_messag
         panic!("assistant");
     };
     assert_eq!(assistant.stop_reason, StopReason::Error);
+    assert_eq!(text_of(messages.last().expect("assistant")), Some(""));
     assert_eq!(
         assistant.error_message.as_deref(),
         Some("No API provider registered for api: missing-agent-test-api")

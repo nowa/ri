@@ -8,8 +8,9 @@ use crate::types::{
 };
 use futures::{StreamExt, stream::FuturesUnordered};
 use ri_llm_provider::{
-    AssistantMessage, Model, SimpleStreamOptions, StopReason, ToolCall, ToolResultContent,
-    ToolResultMessage, Usage, now_millis, stream_simple, validate_tool_arguments_value,
+    AssistantContent, AssistantMessage, Model, SimpleStreamOptions, StopReason, ToolCall,
+    ToolResultContent, ToolResultMessage, Usage, now_millis, stream_simple,
+    validate_tool_arguments_value,
 };
 use std::sync::{Arc, Mutex};
 
@@ -266,7 +267,7 @@ async fn finish_agent_loop_with_error(
     error: String,
 ) -> Vec<AgentMessage> {
     let assistant = AssistantMessage {
-        content: Vec::new(),
+        content: vec![AssistantContent::text("")],
         api: config.model.api.clone(),
         provider: config.model.provider.clone(),
         model: config.model.id.clone(),

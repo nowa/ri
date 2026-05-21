@@ -287,7 +287,8 @@ counterparts that pass.
     run already in progress while clearing public transcript/runtime state,
     abort handles that cancel active provider streams without clearing
     low-level `Agent` queues, and provider start failures persisted as
-    assistant error messages with lifecycle events.
+    assistant error messages with Pi-shaped empty text content and lifecycle
+    events.
   - Custom stream-provider hooks for the low-level loop and `Agent` wrapper,
     dynamic per-request API key providers for low-level LLM calls with static
     key fallback, including a Rust-native `agent/src/proxy.ts` counterpart that
@@ -426,6 +427,16 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning Pi
+  stateful `Agent` executor-failure handling from `agent.ts`: Rust provider
+  start failures now persist an assistant error message with the source-shaped
+  empty text content block in addition to stop reason, error message, state, and
+  lifecycle events:
+  `cargo test -p ri-agent-core --test agent_core agent_stateful_wrapper_persists_provider_start_failures_as_error_messages -- --exact`,
+  `cargo fmt`, `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo test --workspace -- --list` (1133 tests enumerated), and
+  `cargo test --workspace -- --test-threads=1` passed.
+- Previous local verification on 2026-05-21 after aligning Pi
   `agent/src/proxy.ts` proxy event reconstruction: Rust now ignores orphaned
   `toolcall_end` events like the source and maps missing/wrong content slots to
   the source's typed reconstruction error messages:
