@@ -403,11 +403,34 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("xai", "grok-beta"),
     ("xai", "grok-code-fast-1"),
     ("xai", "grok-vision-beta"),
+    ("mistral", "codestral-latest"),
+    ("mistral", "devstral-2512"),
+    ("mistral", "devstral-medium-2507"),
     ("mistral", "devstral-medium-latest"),
+    ("mistral", "devstral-small-2505"),
+    ("mistral", "devstral-small-2507"),
+    ("mistral", "labs-devstral-small-2512"),
     ("mistral", "magistral-medium-latest"),
+    ("mistral", "magistral-small"),
+    ("mistral", "ministral-3b-latest"),
+    ("mistral", "ministral-8b-latest"),
+    ("mistral", "mistral-large-2411"),
+    ("mistral", "mistral-large-2512"),
+    ("mistral", "mistral-large-latest"),
+    ("mistral", "mistral-medium-2505"),
+    ("mistral", "mistral-medium-2508"),
+    ("mistral", "mistral-medium-2604"),
     ("mistral", "mistral-medium-3.5"),
+    ("mistral", "mistral-medium-latest"),
+    ("mistral", "mistral-nemo"),
+    ("mistral", "mistral-small-2506"),
     ("mistral", "mistral-small-2603"),
+    ("mistral", "mistral-small-latest"),
+    ("mistral", "open-mistral-7b"),
+    ("mistral", "open-mixtral-8x22b"),
+    ("mistral", "open-mixtral-8x7b"),
     ("mistral", "pixtral-12b"),
+    ("mistral", "pixtral-large-latest"),
     ("minimax", "MiniMax-M2.7"),
     ("minimax", "MiniMax-M2.7-highspeed"),
     ("minimax-cn", "MiniMax-M2.7"),
@@ -647,6 +670,10 @@ fn apply_known_model_overrides(model: &mut Model) {
         model.reasoning = true;
         model.context_window = 204_800;
         model.max_tokens = 131_072;
+    }
+
+    if model.provider == "mistral" && apply_mistral_generated_metadata(model) {
+        return;
     }
 
     if model.provider == "vercel-ai-gateway" {
@@ -1788,6 +1815,282 @@ fn apply_minimax_generated_metadata(model: &mut Model) -> bool {
     model.cost = cost;
     model.context_window = 204_800;
     model.max_tokens = 131_072;
+    true
+}
+
+fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
+    let metadata = match model.id.as_str() {
+        "codestral-latest" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 0.3,
+                output: 0.9,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            256_000,
+            4_096,
+        )),
+        "devstral-2512" | "devstral-medium-latest" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 0.4,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        )),
+        "devstral-medium-2507" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 0.4,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        )),
+        "devstral-small-2505" | "devstral-small-2507" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 0.1,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        )),
+        "labs-devstral-small-2512" => Some((false, true, ModelCost::default(), 256_000, 256_000)),
+        "magistral-medium-latest" => Some((
+            true,
+            false,
+            ModelCost {
+                input: 2.0,
+                output: 5.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            16_384,
+        )),
+        "magistral-small" => Some((
+            true,
+            false,
+            ModelCost {
+                input: 0.5,
+                output: 1.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        )),
+        "ministral-3b-latest" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 0.04,
+                output: 0.04,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        )),
+        "ministral-8b-latest" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 0.1,
+                output: 0.1,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        )),
+        "mistral-large-2411" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 2.0,
+                output: 6.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            16_384,
+        )),
+        "mistral-large-2512" | "mistral-large-latest" => Some((
+            false,
+            true,
+            ModelCost {
+                input: 0.5,
+                output: 1.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        )),
+        "mistral-medium-2505" => Some((
+            false,
+            true,
+            ModelCost {
+                input: 0.4,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            131_072,
+        )),
+        "mistral-medium-2508" => Some((
+            false,
+            true,
+            ModelCost {
+                input: 0.4,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        )),
+        "mistral-medium-2604" | "mistral-medium-3.5" | "mistral-medium-latest" => Some((
+            true,
+            true,
+            ModelCost {
+                input: 1.5,
+                output: 7.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        )),
+        "mistral-nemo" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 0.15,
+                output: 0.15,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        )),
+        "mistral-small-2506" => Some((
+            false,
+            true,
+            ModelCost {
+                input: 0.1,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            16_384,
+        )),
+        "mistral-small-2603" | "mistral-small-latest" => Some((
+            true,
+            true,
+            ModelCost {
+                input: 0.15,
+                output: 0.6,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            256_000,
+            256_000,
+        )),
+        "open-mistral-7b" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 0.25,
+                output: 0.25,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            8_000,
+            8_000,
+        )),
+        "open-mixtral-8x22b" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 2.0,
+                output: 6.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            64_000,
+            64_000,
+        )),
+        "open-mixtral-8x7b" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 0.7,
+                output: 0.7,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            32_000,
+            32_000,
+        )),
+        "pixtral-12b" => Some((
+            false,
+            true,
+            ModelCost {
+                input: 0.15,
+                output: 0.15,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        )),
+        "pixtral-large-latest" => Some((
+            false,
+            true,
+            ModelCost {
+                input: 2.0,
+                output: 6.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        )),
+        _ => None,
+    };
+    let Some((reasoning, image_input, cost, context_window, max_tokens)) = metadata else {
+        return false;
+    };
+
+    model.api = "mistral-conversations".to_owned();
+    model.base_url = base_url_for_provider("mistral").to_owned();
+    model.reasoning = reasoning;
+    model.thinking_level_map.clear();
+    model.input = vec![crate::types::InputKind::Text];
+    if image_input {
+        ensure_image_input(model);
+    }
+    model.cost = cost;
+    model.context_window = context_window;
+    model.max_tokens = max_tokens;
+    model.compat = None;
     true
 }
 

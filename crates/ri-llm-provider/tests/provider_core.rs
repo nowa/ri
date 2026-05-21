@@ -970,6 +970,429 @@ fn minimax_model_metadata_matches_generated_catalog() {
 }
 
 #[test]
+fn mistral_model_metadata_matches_generated_catalog() {
+    let models = get_models("mistral");
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "codestral-latest",
+            "devstral-2512",
+            "devstral-medium-2507",
+            "devstral-medium-latest",
+            "devstral-small-2505",
+            "devstral-small-2507",
+            "labs-devstral-small-2512",
+            "magistral-medium-latest",
+            "magistral-small",
+            "ministral-3b-latest",
+            "ministral-8b-latest",
+            "mistral-large-2411",
+            "mistral-large-2512",
+            "mistral-large-latest",
+            "mistral-medium-2505",
+            "mistral-medium-2508",
+            "mistral-medium-2604",
+            "mistral-medium-3.5",
+            "mistral-medium-latest",
+            "mistral-nemo",
+            "mistral-small-2506",
+            "mistral-small-2603",
+            "mistral-small-latest",
+            "open-mistral-7b",
+            "open-mixtral-8x22b",
+            "open-mixtral-8x7b",
+            "pixtral-12b",
+            "pixtral-large-latest",
+        ]
+    );
+
+    for (model_id, reasoning, image_input, cost, context_window, max_tokens) in [
+        (
+            "codestral-latest",
+            false,
+            false,
+            ModelCost {
+                input: 0.3,
+                output: 0.9,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            256_000,
+            4_096,
+        ),
+        (
+            "devstral-2512",
+            false,
+            false,
+            ModelCost {
+                input: 0.4,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        ),
+        (
+            "devstral-medium-2507",
+            false,
+            false,
+            ModelCost {
+                input: 0.4,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        ),
+        (
+            "devstral-medium-latest",
+            false,
+            false,
+            ModelCost {
+                input: 0.4,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        ),
+        (
+            "devstral-small-2505",
+            false,
+            false,
+            ModelCost {
+                input: 0.1,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        ),
+        (
+            "devstral-small-2507",
+            false,
+            false,
+            ModelCost {
+                input: 0.1,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        ),
+        (
+            "labs-devstral-small-2512",
+            false,
+            true,
+            ModelCost::default(),
+            256_000,
+            256_000,
+        ),
+        (
+            "magistral-medium-latest",
+            true,
+            false,
+            ModelCost {
+                input: 2.0,
+                output: 5.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            16_384,
+        ),
+        (
+            "magistral-small",
+            true,
+            false,
+            ModelCost {
+                input: 0.5,
+                output: 1.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        ),
+        (
+            "ministral-3b-latest",
+            false,
+            false,
+            ModelCost {
+                input: 0.04,
+                output: 0.04,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        ),
+        (
+            "ministral-8b-latest",
+            false,
+            false,
+            ModelCost {
+                input: 0.1,
+                output: 0.1,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        ),
+        (
+            "mistral-large-2411",
+            false,
+            false,
+            ModelCost {
+                input: 2.0,
+                output: 6.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            16_384,
+        ),
+        (
+            "mistral-large-2512",
+            false,
+            true,
+            ModelCost {
+                input: 0.5,
+                output: 1.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        ),
+        (
+            "mistral-large-latest",
+            false,
+            true,
+            ModelCost {
+                input: 0.5,
+                output: 1.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        ),
+        (
+            "mistral-medium-2505",
+            false,
+            true,
+            ModelCost {
+                input: 0.4,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            131_072,
+        ),
+        (
+            "mistral-medium-2508",
+            false,
+            true,
+            ModelCost {
+                input: 0.4,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        ),
+        (
+            "mistral-medium-2604",
+            true,
+            true,
+            ModelCost {
+                input: 1.5,
+                output: 7.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        ),
+        (
+            "mistral-medium-3.5",
+            true,
+            true,
+            ModelCost {
+                input: 1.5,
+                output: 7.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        ),
+        (
+            "mistral-medium-latest",
+            true,
+            true,
+            ModelCost {
+                input: 1.5,
+                output: 7.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            262_144,
+            262_144,
+        ),
+        (
+            "mistral-nemo",
+            false,
+            false,
+            ModelCost {
+                input: 0.15,
+                output: 0.15,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        ),
+        (
+            "mistral-small-2506",
+            false,
+            true,
+            ModelCost {
+                input: 0.1,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            16_384,
+        ),
+        (
+            "mistral-small-2603",
+            true,
+            true,
+            ModelCost {
+                input: 0.15,
+                output: 0.6,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            256_000,
+            256_000,
+        ),
+        (
+            "mistral-small-latest",
+            true,
+            true,
+            ModelCost {
+                input: 0.15,
+                output: 0.6,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            256_000,
+            256_000,
+        ),
+        (
+            "open-mistral-7b",
+            false,
+            false,
+            ModelCost {
+                input: 0.25,
+                output: 0.25,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            8_000,
+            8_000,
+        ),
+        (
+            "open-mixtral-8x22b",
+            false,
+            false,
+            ModelCost {
+                input: 2.0,
+                output: 6.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            64_000,
+            64_000,
+        ),
+        (
+            "open-mixtral-8x7b",
+            false,
+            false,
+            ModelCost {
+                input: 0.7,
+                output: 0.7,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            32_000,
+            32_000,
+        ),
+        (
+            "pixtral-12b",
+            false,
+            true,
+            ModelCost {
+                input: 0.15,
+                output: 0.15,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        ),
+        (
+            "pixtral-large-latest",
+            false,
+            true,
+            ModelCost {
+                input: 2.0,
+                output: 6.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            128_000,
+        ),
+    ] {
+        let model = get_model("mistral", model_id).expect(model_id);
+        assert_eq!(model.api, "mistral-conversations", "{model_id} api");
+        assert_eq!(model.provider, "mistral", "{model_id} provider");
+        assert_eq!(
+            model.base_url, "https://api.mistral.ai",
+            "{model_id} base URL"
+        );
+        assert_eq!(model.reasoning, reasoning, "{model_id} reasoning");
+        assert!(model.thinking_level_map.is_empty(), "{model_id} thinking");
+        let expected_input = if image_input {
+            vec![InputKind::Text, InputKind::Image]
+        } else {
+            vec![InputKind::Text]
+        };
+        assert_eq!(model.input, expected_input, "{model_id} input");
+        assert_eq!(model.cost, cost, "{model_id} cost");
+        assert_eq!(model.context_window, context_window, "{model_id} context");
+        assert_eq!(model.max_tokens, max_tokens, "{model_id} max tokens");
+        assert!(model.compat.is_none(), "{model_id} compat");
+    }
+}
+
+#[test]
 fn xai_model_metadata_matches_generated_catalog() {
     let models = get_models("xai");
     assert_eq!(
