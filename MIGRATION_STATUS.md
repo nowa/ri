@@ -465,6 +465,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-22 after aligning session repo helpers:
+  Rust fork options now treat an empty `entry_id` like an omitted target,
+  matching Pi's `if (!options.entryId)` full-fork path, and
+  `JsonlSessionRepo::encoded_cwd` now removes only one leading slash or
+  backslash before replacing path separators, matching Pi's
+  `cwd.replace(/^[/\\]/, "")` behavior for double-slash/UNC-like paths:
+  `cargo test -p ri-agent-core --test session_storage in_memory_repo_opens_deletes_and_forks_by_metadata -- --exact --test-threads=1`,
+  `cargo test -p ri-agent-core --test session_storage jsonl_repo_stores_lists_opens_deletes_and_forks_by_metadata -- --exact --test-threads=1`,
+  `cargo fmt`,
+  `cargo test -p ri-agent-core --test session_storage -- --test-threads=1`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --test-threads=1` passed.
 - Latest local verification on 2026-05-22 after aligning
   `session/memory-storage.ts` initial-entry validation:
   `InMemorySessionStorage::with_options` now returns a typed

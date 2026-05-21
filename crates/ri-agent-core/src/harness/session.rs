@@ -1224,11 +1224,11 @@ impl JsonlSessionRepo {
     }
 
     pub fn encoded_cwd(cwd: &str) -> String {
-        format!(
-            "--{}--",
-            cwd.trim_start_matches(['/', '\\'])
-                .replace(['/', '\\', ':'], "-")
-        )
+        let cwd = cwd
+            .strip_prefix('/')
+            .or_else(|| cwd.strip_prefix('\\'))
+            .unwrap_or(cwd);
+        format!("--{}--", cwd.replace(['/', '\\', ':'], "-"))
     }
 
     fn session_dir(&self, cwd: &str) -> PathBuf {
@@ -1275,7 +1275,11 @@ fn entries_to_fork(
     storage: &SessionStorageKind,
     options: &SessionForkOptions,
 ) -> Result<Vec<SessionTreeEntry>, SessionError> {
-    let Some(entry_id) = &options.entry_id else {
+    let Some(entry_id) = options
+        .entry_id
+        .as_deref()
+        .filter(|entry_id| !entry_id.is_empty())
+    else {
         return Ok(storage.entries());
     };
     let target = storage.get_entry(entry_id).ok_or_else(|| {

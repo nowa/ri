@@ -970,6 +970,25 @@ fn in_memory_repo_opens_deletes_and_forks_by_metadata() {
         vec![user1.as_str(), assistant1.as_str(), user2.as_str()]
     );
 
+    let empty_target_fork = repo
+        .fork(
+            &metadata,
+            SessionForkOptions {
+                entry_id: Some(String::new()),
+                id: Some("session-empty-target".to_owned()),
+                ..Default::default()
+            },
+        )
+        .expect("empty target full fork");
+    assert_eq!(
+        empty_target_fork
+            .entries()
+            .iter()
+            .map(SessionTreeEntry::id)
+            .collect::<Vec<_>>(),
+        vec![user1.as_str(), assistant1.as_str(), user2.as_str()]
+    );
+
     repo.delete(&metadata);
     assert!(
         repo.open(&metadata)
@@ -996,6 +1015,14 @@ fn jsonl_repo_stores_lists_opens_deletes_and_forks_by_metadata() {
     let other_metadata = other.jsonl_metadata().expect("metadata").clone();
     assert!(source_metadata.path.contains("--tmp-my-project--"));
     assert!(other_metadata.path.contains("--tmp-other-project--"));
+    assert_eq!(
+        JsonlSessionRepo::encoded_cwd("//server/share"),
+        "---server-share--"
+    );
+    assert_eq!(
+        JsonlSessionRepo::encoded_cwd("\\\\server\\share"),
+        "---server-share--"
+    );
     assert!(PathBuf::from(&source_metadata.path).exists());
     fs::create_dir_all(
         root.join(JsonlSessionRepo::encoded_cwd(cwd))
