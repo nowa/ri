@@ -102,7 +102,8 @@ credentials, local model services where applicable, and manual OAuth flows.
 
 - Stateful `Agent` and lower-level `agent_loop` APIs.
 - Event streaming for agent, turn, message, and tool execution events, including
-  partial tool execution updates.
+  partial tool execution updates with Pi-style raw tool-call arguments in
+  start/update events.
 - Parallel and sequential tool execution.
 - Tool call and tool result hooks, including pre-execution blocking with error
   tool results, tool-result error-flag overrides, and assistant/context
@@ -230,6 +231,8 @@ Agent runs emit events for:
 - `MessageStart` / `MessageUpdate` / `MessageEnd`
 - `ToolExecutionStart` / `ToolExecutionUpdate` / `ToolExecutionEnd`
 
+Tool execution start/update events expose the assistant's raw tool-call
+arguments, while tool executors and hooks receive validated/prepared arguments.
 The `Agent` updates its state from these events and notifies sync or async
 subscribers.
 

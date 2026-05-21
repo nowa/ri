@@ -890,7 +890,7 @@ async fn agent_loop_emits_tool_execution_update_from_tool_callbacks() {
         faux_assistant_message(
             faux_tool_call(
                 "progress",
-                json!({ "value": "abc" })
+                json!({ "value": "original" })
                     .as_object()
                     .cloned()
                     .unwrap_or_else(Map::new),
@@ -926,16 +926,14 @@ async fn agent_loop_emits_tool_execution_update_from_tool_callbacks() {
 
     let mut context = context_with_model(&registration.get_model());
     context.tools.push(tool);
-    let (messages, events) = agent_loop_prompt(
-        context,
-        "run progress tool",
-        AgentLoopConfig::new(registration.get_model()),
-    )
-    .await
-    .expect("loop");
+    let mut config = AgentLoopConfig::new(registration.get_model());
+    config.tool_call_hooks.push(Arc::new(ReplacingToolCallHook));
+    let (messages, events) = agent_loop_prompt(context, "run progress tool", config)
+        .await
+        .expect("loop");
 
     assert!(update_observed_before_return.load(Ordering::SeqCst));
-    assert_eq!(text_of(&messages[2]), Some("final: abc"));
+    assert_eq!(text_of(&messages[2]), Some("final: hooked"));
     assert_eq!(text_of(&messages[3]), Some("done"));
 
     let tool_events = events
@@ -973,11 +971,11 @@ async fn agent_loop_emits_tool_execution_update_from_tool_callbacks() {
     };
     assert_eq!(tool_call_id, "tool-1");
     assert_eq!(tool_name, "progress");
-    assert_eq!(args.get("value").and_then(Value::as_str), Some("abc"));
+    assert_eq!(args.get("value").and_then(Value::as_str), Some("original"));
     assert_eq!(
         partial_result.content,
         vec![AgentToolResultContent::Text(TextContent::new(
-            "partial: abc"
+            "partial: hooked"
         ))]
     );
     registration.unregister();
@@ -1772,11 +1770,11 @@ async fn agent_loop_prepares_tool_arguments_before_execution() {
     });
     assert_eq!(
         tool_start_args
-            .and_then(|args| args.get("edits"))
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(1)
+            .and_then(|args| args.get("oldText"))
+            .and_then(Value::as_str),
+        Some("before")
     );
+    assert!(tool_start_args.and_then(|args| args.get("edits")).is_none());
     registration.unregister();
 }
 
@@ -1839,7 +1837,7 @@ async fn agent_loop_tool_call_hook_can_replace_arguments_before_execution() {
         tool_start_args
             .and_then(|args| args.get("value"))
             .and_then(Value::as_str),
-        Some("hooked")
+        Some("original")
     );
     registration.unregister();
 }
@@ -1977,8 +1975,10 @@ async fn agent_loop_executes_hook_replaced_args_without_schema_revalidation() {
         _ => None,
     });
     assert_eq!(
-        tool_start_args.and_then(|args| args.get("value")),
-        Some(&json!(123))
+        tool_start_args
+            .and_then(|args| args.get("value"))
+            .and_then(Value::as_str),
+        Some("original")
     );
     registration.unregister();
 }

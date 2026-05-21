@@ -246,10 +246,11 @@ counterparts that pass.
     tool-result continuation turns, tool argument preparation, tool-call hooks
     with argument replacement and Pi-style pre-execution blocking, tool-result
     replacement/error-flag hooks, hook-driven tool-result termination, partial
-    tool execution update callbacks/events, tool-result message lifecycle events, and
-    assistant/tool-call/current-context hook snapshots for low-level
-    `beforeToolCall`/`afterToolCall` parity. Transform/convert hooks for LLM
-    request context. Prepare-next-turn hooks can
+    tool execution update callbacks/events whose start/update argument payloads
+    preserve the assistant's raw tool-call arguments, tool-result message
+    lifecycle events, and assistant/tool-call/current-context hook snapshots
+    for low-level `beforeToolCall`/`afterToolCall` parity. Transform/convert
+    hooks for LLM request context. Prepare-next-turn hooks can
     replace the next-turn context/model/thinking state after `turn_end`, and
     should-stop-after-turn hooks can stop before the next provider request.
     Queued messages can be injected before the initial provider request or
@@ -394,7 +395,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning low-level Pi
+- Latest local verification on 2026-05-21 after aligning Pi
+  `tool_execution_start` / `tool_execution_update` event argument semantics
+  from `agent-loop.ts`: Rust now emits tool start before argument preparation
+  or `beforeToolCall`, exposes the assistant's raw tool-call arguments in
+  start/update events, and still executes tools with validated/prepared or
+  hook-replaced arguments:
+  `cargo fmt`, `cargo fmt --check`, `git diff --check`,
+  `cargo test -p ri-agent-core --test agent_core -- --test-threads=1`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1116 tests.
+- Previous local verification on 2026-05-21 after aligning low-level Pi
   `beforeToolCall` / `afterToolCall` hook context snapshots from
   `agent-loop.ts` and `types.ts`: Rust tool-call and tool-result hooks now
   receive the assistant message, raw tool-call block, validated/current input,

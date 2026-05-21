@@ -64,6 +64,7 @@ struct PreparedToolCall {
     tool_call_id: String,
     tool_name: String,
     args: serde_json::Value,
+    event_args: serde_json::Value,
     assistant_message: AssistantMessage,
     tool_call: ToolCall,
     context: AgentContext,
@@ -551,22 +552,23 @@ async fn run_one_turn(
         let mut prepared_calls = Vec::new();
         let mut execution_outcomes = Vec::new();
         'tool_calls: for (index, tool_call) in assistant_tool_calls(&assistant).enumerate() {
+            let event_args = serde_json::Value::Object(tool_call.arguments.clone());
+            record_event(
+                events,
+                config,
+                AgentEvent::ToolExecutionStart {
+                    tool_call_id: tool_call.id.clone(),
+                    tool_name: tool_call.name.clone(),
+                    args: event_args.clone(),
+                },
+            )
+            .await;
             let mut args = serde_json::Value::Object(tool_call.arguments.clone());
             let Some(tool) = context
                 .tools
                 .iter()
                 .find(|tool| tool.definition.name == tool_call.name)
             else {
-                record_event(
-                    events,
-                    config,
-                    AgentEvent::ToolExecutionStart {
-                        tool_call_id: tool_call.id.clone(),
-                        tool_name: tool_call.name.clone(),
-                        args,
-                    },
-                )
-                .await;
                 execution_outcomes.push(error_tool_execution_outcome(
                     index,
                     tool_call.id.clone(),
@@ -579,16 +581,6 @@ async fn run_one_turn(
                 match preparer.prepare_arguments(args.clone()) {
                     Ok(prepared_args) => args = prepared_args,
                     Err(error) => {
-                        record_event(
-                            events,
-                            config,
-                            AgentEvent::ToolExecutionStart {
-                                tool_call_id: tool_call.id.clone(),
-                                tool_name: tool_call.name.clone(),
-                                args,
-                            },
-                        )
-                        .await;
                         execution_outcomes.push(error_tool_execution_outcome(
                             index,
                             tool_call.id.clone(),
@@ -615,16 +607,6 @@ async fn run_one_turn(
                             hook_context.input = args.clone();
                         }
                         if result.block {
-                            record_event(
-                                events,
-                                config,
-                                AgentEvent::ToolExecutionStart {
-                                    tool_call_id: tool_call.id.clone(),
-                                    tool_name: tool_call.name.clone(),
-                                    args,
-                                },
-                            )
-                            .await;
                             execution_outcomes.push(error_tool_execution_outcome(
                                 index,
                                 tool_call.id.clone(),
@@ -638,16 +620,6 @@ async fn run_one_turn(
                     }
                     Ok(None) => {}
                     Err(error) => {
-                        record_event(
-                            events,
-                            config,
-                            AgentEvent::ToolExecutionStart {
-                                tool_call_id: tool_call.id.clone(),
-                                tool_name: tool_call.name.clone(),
-                                args,
-                            },
-                        )
-                        .await;
                         execution_outcomes.push(error_tool_execution_outcome(
                             index,
                             tool_call.id.clone(),
@@ -663,24 +635,12 @@ async fn run_one_turn(
                 tool_call_id: tool_call.id.clone(),
                 tool_name: tool_call.name.clone(),
                 args,
+                event_args,
                 assistant_message: assistant.clone(),
                 tool_call: tool_call.clone(),
                 context: context.clone(),
                 tool: tool.clone(),
             });
-        }
-
-        for call in &prepared_calls {
-            record_event(
-                events,
-                config,
-                AgentEvent::ToolExecutionStart {
-                    tool_call_id: call.tool_call_id.clone(),
-                    tool_name: call.tool_name.clone(),
-                    args: call.args.clone(),
-                },
-            )
-            .await;
         }
 
         execution_outcomes.extend(execute_tool_calls(prepared_calls, config, events).await?);
@@ -789,7 +749,7 @@ async fn execute_prepared_tool_call(
     event_sink: Option<Arc<dyn AgentEventSink>>,
 ) -> Result<ToolExecutionOutcome, String> {
     let result_input = call.args.clone();
-    let update_args = call.args.clone();
+    let update_args = call.event_args.clone();
     let update_tool_call_id = call.tool_call_id.clone();
     let update_tool_name = call.tool_name.clone();
     let update_events = Arc::new(Mutex::new(Vec::new()));
