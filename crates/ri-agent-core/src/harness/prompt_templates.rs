@@ -212,11 +212,7 @@ pub fn parse_command_args(args: &str) -> Vec<String> {
 }
 
 pub fn substitute_args(content: &str, args: &[String]) -> String {
-    let mut result = content.to_owned();
-    for index in 1..=args.len().max(9) {
-        let value = args.get(index - 1).cloned().unwrap_or_default();
-        result = result.replace(&format!("${index}"), &value);
-    }
+    let mut result = substitute_number_placeholders(content, args);
     result = substitute_slice_placeholders(&result, args);
     let all_args = args.join(" ");
     result
@@ -226,6 +222,34 @@ pub fn substitute_args(content: &str, args: &[String]) -> String {
 
 pub fn format_prompt_template_invocation(template: &PromptTemplate, args: &[String]) -> String {
     substitute_args(&template.content, args)
+}
+
+fn substitute_number_placeholders(input: &str, args: &[String]) -> String {
+    let mut output = String::new();
+    let mut chars = input.char_indices().peekable();
+    while let Some((_, ch)) = chars.next() {
+        if ch != '$' {
+            output.push(ch);
+            continue;
+        }
+        let mut digits = String::new();
+        while let Some((_, next)) = chars.peek() {
+            if !next.is_ascii_digit() {
+                break;
+            }
+            digits.push(*next);
+            chars.next();
+        }
+        if digits.is_empty() {
+            output.push('$');
+            continue;
+        }
+        let index = digits.parse::<usize>().unwrap_or_default();
+        if let Some(value) = index.checked_sub(1).and_then(|index| args.get(index)) {
+            output.push_str(value);
+        }
+    }
+    output
 }
 
 fn substitute_slice_placeholders(input: &str, args: &[String]) -> String {

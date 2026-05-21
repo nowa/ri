@@ -31,7 +31,7 @@ SSE and eventstream behavior, abort handling, response IDs, usage accounting,
 message transforms, simple stream option defaults, tool calling,
 reasoning/thinking controls, agent loop control flow, stateful agents, custom
 stream providers, proxy streaming, tool execution, compaction, resources,
-session storage, and harness utilities.
+session storage, local execution environment behavior, and harness utilities.
 
 Live provider E2E tests are not run by default. Provider behavior is covered
 locally through mock HTTP servers, payload assertions, parser tests, and stream
@@ -101,6 +101,10 @@ credentials, local model services where applicable, and manual OAuth flows.
 - Custom stream providers, including proxy streaming through `/api/stream`.
 - Prompt templates, skills/resources loading, session storage, compaction, and
   local execution environment utilities.
+- Harness prompt context conversion for LLM messages, custom session messages,
+  branch summaries, and compaction summaries.
+- Pi-style skill metadata validation diagnostics and prompt-template argument
+  substitution.
 
 `ri_agent_core::harness` includes:
 
@@ -232,6 +236,12 @@ coding agent or UI needs around the raw agent loop.
 - provider payload patching before network dispatch.
 - message queues for steering, follow-up, and next-turn work.
 - save-point and settlement events for durable app state.
+
+Session context built by the harness preserves pi-style custom messages,
+branch summaries, and compaction summaries as LLM user context. The local
+execution environment supports per-command working directories, shell
+environment overrides, stdout/stderr streaming callbacks, timeout/abort
+termination, and shell capture with truncated output logs.
 
 This keeps crate boundaries simple while still making the harness API visible as
 a first-class Rust surface.

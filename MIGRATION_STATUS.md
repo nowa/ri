@@ -287,6 +287,8 @@ counterparts that pass.
     active-tool filtering, running-turn steering/follow-up queues, abort queue
     clearing that preserves next-turn messages, source-parity
     `abort_and_wait` idle/event-listener settlement, idle waiting, and
+    session prompt-context conversion that preserves LLM messages,
+    custom messages, branch summaries, and compaction summaries,
     high-level session compaction that persists generated summaries through the session
     with `session_before_compact` cancellation/provided-summary hooks and
     hook success/error and generation-error pending-write flushes, session
@@ -295,28 +297,34 @@ counterparts that pass.
     `session_before_branch_summary` supplied-summary/skip hooks,
     hook success/error and generation-error pending-write flushes, and
     branch-summary events.
-  - In-memory and JSONL session storage/repositories with branching, labels, metadata, and context building.
+  - In-memory and JSONL session storage/repositories with branching, labels,
+    metadata, context building, full-session fork, before-target user-message
+    fork, at-target fork, and invalid-target errors.
   - Skill and prompt-template invocation formatting plus skill/prompt-template
-    loading, argument substitution, and skill ignore-file handling.
+    loading, pi-style numeric/slice/all-argument substitution including
+    multi-digit numeric placeholders, skill ignore-file handling, and
+    pi-style skill metadata validation diagnostics for name/description rules.
   - Local execution environment foundation for filesystem operations, shell
-    execution, stdout/stderr callbacks, callback error propagation, command
-    timeout/abort handling, pre-aborted file-operation cancellation, symlink
-    directory entries, text-line read limits, shell spawn error mapping,
-    best-effort cleanup, and shell-output capture/truncation with full-output
-    log files.
+    execution with per-command working-directory overrides and shell
+    environment overrides, stdout/stderr callbacks, callback error propagation
+    that terminates running commands, command timeout/abort handling,
+    pre-aborted file-operation cancellation, symlink directory entries,
+    text-line read limits, stable file error mapping, shell spawn error
+    mapping, best-effort cleanup, and streaming shell-output capture/truncation
+    with cancellation results and full-output log files.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1095 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1098 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 921 tests: 1 library test, 289 `provider_core` tests, and
   631 `provider_live` tests. This is 200 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 174 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 177 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 24 above the 150 direct simple
+  `resources`, and `session_storage`. This is 27 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -345,7 +353,7 @@ Current Rust tests: 1095 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1095-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1098-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -369,6 +377,21 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after adding Rust-native
+  `harness/env/nodejs.ts` parity for per-command cwd, shell env, file error
+  mapping, callback-error termination, and streaming shell capture cancellation
+  behavior, plus `harness/session/repo-utils.ts` fork-position/error case
+  coverage and session custom/summary prompt-context conversion:
+  `cargo fmt --check`,
+  `cargo test -p ri-agent-core --test execution_env -- --test-threads=1`,
+  `cargo test -p ri-agent-core --test session_storage in_memory_repo_opens_deletes_and_forks_by_metadata -- --exact`,
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_includes_session_summaries_and_custom_messages_in_prompt_context -- --exact`,
+  `cargo test -p ri-agent-core --test resources prompt_template_argument_substitution_matches_pi_placeholders -- --exact`,
+  `cargo test -p ri-agent-core --test resources load_skills_reports_pi_metadata_validation_warnings_without_dropping_skill -- --exact`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1098 tests.
+- Previous full local verification on 2026-05-21 after adding Rust-native
   `session-resources.ts` parity for OpenAI Codex WebSocket cache cleanup and
   `utils/diagnostics.ts` parity for Codex transport fallback diagnostics, plus
   `agent/src/proxy.ts` stream-provider/proxy parity and
@@ -412,6 +435,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1095 Rust tests cover the
+- Test parity is not certified by raw count alone: 1098 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

@@ -250,6 +250,7 @@ fn sourced_skills_preserve_source_and_attach_diagnostics() {
     assert!(skills.is_empty());
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].source, "user");
+    assert_eq!(diagnostics[0].diagnostic.diagnostic_type, "warning");
     assert_eq!(
         diagnostics[0].diagnostic.path,
         root.join("broken/broken/SKILL.md").to_string_lossy()
@@ -259,6 +260,51 @@ fn sourced_skills_preserve_source_and_attach_diagnostics() {
         SkillDiagnosticCode::InvalidMetadata
     );
     assert_eq!(diagnostics[0].diagnostic.message, "description is required");
+}
+
+#[test]
+fn load_skills_reports_pi_metadata_validation_warnings_without_dropping_skill() {
+    let root = temp_dir();
+    fs::create_dir_all(root.join("skills/bad_name")).expect("skill dir");
+    let long_description = "d".repeat(1025);
+    fs::write(
+        root.join("skills/bad_name/SKILL.md"),
+        format!("---\nname: Bad_Name\ndescription: {long_description}\n---\nUse it."),
+    )
+    .expect("skill");
+
+    let (skills, diagnostics) = load_skills([root.join("skills")]);
+
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].name, "Bad_Name");
+    assert_eq!(skills[0].description, long_description);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| (
+                diagnostic.diagnostic_type.as_str(),
+                &diagnostic.code,
+                diagnostic.message.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "warning",
+                &SkillDiagnosticCode::InvalidMetadata,
+                "description exceeds 1024 characters (1025)"
+            ),
+            (
+                "warning",
+                &SkillDiagnosticCode::InvalidMetadata,
+                "name \"Bad_Name\" does not match parent directory \"bad_name\""
+            ),
+            (
+                "warning",
+                &SkillDiagnosticCode::InvalidMetadata,
+                "name contains invalid characters (must be lowercase a-z, 0-9, hyphens only)"
+            ),
+        ]
+    );
 }
 
 #[test]
@@ -369,20 +415,30 @@ fn sourced_prompt_templates_preserve_source_and_attach_diagnostics() {
 
 #[test]
 fn prompt_template_argument_substitution_matches_pi_placeholders() {
-    let content = "$1 ${@:2} $ARGUMENTS";
+    let content = "$1 ${@:2} $ARGUMENTS $10";
     let template = PromptTemplate {
         name: "one".to_owned(),
         description: String::new(),
         content: content.to_owned(),
         source: None,
     };
+    let args = [
+        "hello world".to_owned(),
+        "test".to_owned(),
+        "three".to_owned(),
+        "four".to_owned(),
+        "five".to_owned(),
+        "six".to_owned(),
+        "seven".to_owned(),
+        "eight".to_owned(),
+        "nine".to_owned(),
+        "ten".to_owned(),
+    ];
     assert_eq!(
-        format_prompt_template_invocation(
-            &template,
-            &["hello world".to_owned(), "test".to_owned()]
-        ),
-        "hello world test hello world test"
+        format_prompt_template_invocation(&template, &args),
+        "hello world test three four five six seven eight nine ten hello world test three four five six seven eight nine ten ten"
     );
+    assert_eq!(substitute_args("$10 $2 $99", &args), "ten test ");
     assert_eq!(
         parse_command_args("one 'two words' \"three words\""),
         vec!["one", "two words", "three words"]

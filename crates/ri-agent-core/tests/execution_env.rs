@@ -176,6 +176,11 @@ fn local_execution_env_returns_file_errors_for_missing_and_wrong_kinds() {
     let not_dir = env.list_dir("file.txt").expect_err("not dir");
     assert_eq!(not_dir.code, FileErrorCode::NotDirectory);
 
+    env.create_dir("dir", CreateDirOptions::default())
+        .expect("dir");
+    let is_dir = env.read_text_file("dir").expect_err("is dir");
+    assert_eq!(is_dir.code, FileErrorCode::IsDirectory);
+
     let create = env
         .create_dir("missing/child", CreateDirOptions { recursive: false })
         .expect_err("missing parent");
@@ -236,8 +241,20 @@ fn local_execution_env_appends_creates_temps_and_removes_recursively() {
         .code,
         FileErrorCode::NotFound
     );
-    env.remove("missing", RemoveOptions::default())
-        .expect("force remove");
+    assert_eq!(
+        env.remove("missing", RemoveOptions::default())
+            .expect_err("default remove is not forced")
+            .code,
+        FileErrorCode::NotFound
+    );
+    env.remove(
+        "missing",
+        RemoveOptions {
+            recursive: false,
+            force: true,
+        },
+    )
+    .expect("force remove");
 }
 
 #[test]
@@ -295,19 +312,38 @@ fn local_execution_env_honors_create_dir_recursive_false_and_remove_options() {
 #[test]
 fn local_execution_env_executes_shell_commands_in_cwd_with_env() {
     let root = temp_dir();
-    let env = LocalExecutionEnv::new(&root);
+    fs::create_dir_all(root.join("child")).expect("child cwd");
+    let env = LocalExecutionEnv::new(&root).with_shell_env(vec![
+        ("BASE_ENV_TEST".to_owned(), "base".to_owned()),
+        ("OVERRIDE_ENV_TEST".to_owned(), "base".to_owned()),
+    ]);
     let output = env
         .exec(
-            "printf '%s:%s' \"$PWD\" \"$NODE_ENV_TEST\"",
+            "printf '%s:%s:%s:%s' \"$PWD\" \"$NODE_ENV_TEST\" \"$BASE_ENV_TEST\" \"$OVERRIDE_ENV_TEST\"",
             ExecOptions {
+                cwd: Some(PathBuf::from("child")),
                 env: vec![("NODE_ENV_TEST".to_owned(), "ok".to_owned())],
                 ..Default::default()
             },
         )
         .expect("exec");
-    assert_eq!(output.stdout, format!("{}:ok", root.to_string_lossy()));
+    assert_eq!(
+        output.stdout,
+        format!("{}:ok:base:base", root.join("child").to_string_lossy())
+    );
     assert_eq!(output.stderr, "");
     assert_eq!(output.exit_code, 0);
+
+    let output = env
+        .exec(
+            "printf '%s' \"$OVERRIDE_ENV_TEST\"",
+            ExecOptions {
+                env: vec![("OVERRIDE_ENV_TEST".to_owned(), "extra".to_owned())],
+                ..Default::default()
+            },
+        )
+        .expect("env override");
+    assert_eq!(output.stdout, "extra");
 
     let non_zero = env.exec("exit 7", ExecOptions::default()).expect("exit");
     assert_eq!(non_zero.exit_code, 7);
@@ -397,7 +433,7 @@ fn local_execution_env_returns_callback_errors_from_exec_handlers() {
     let env = LocalExecutionEnv::new(&root);
     let error = env
         .exec(
-            "printf out",
+            "printf out; sleep 5",
             ExecOptions {
                 on_stdout: Some(Arc::new(|_| Err("callback failed".to_owned()))),
                 ..Default::default()
@@ -505,4 +541,31 @@ fn shell_capture_sanitizes_and_writes_large_output_file() {
     let full_output = env.read_text_file(&full_output_path).expect("full output");
     assert!(full_output.split('\n').count() > 10_000);
     assert!(result.output.len() < full_output.len());
+}
+
+#[test]
+fn shell_capture_returns_cancelled_result_with_partial_output_on_abort() {
+    let root = temp_dir();
+    let env = LocalExecutionEnv::new(&root);
+    let abort_flag = Arc::new(AtomicBool::new(false));
+    let callback_abort_flag = abort_flag.clone();
+
+    let result = execute_shell_with_capture(
+        &env,
+        "printf tick; sleep 5",
+        ExecOptions {
+            abort_flag: Some(abort_flag),
+            on_stdout: Some(Arc::new(move |_| {
+                callback_abort_flag.store(true, Ordering::SeqCst);
+                Ok(())
+            })),
+            ..Default::default()
+        },
+    )
+    .expect("cancelled capture");
+
+    assert!(result.cancelled);
+    assert_eq!(result.exit_code, None);
+    assert_eq!(result.output, "tick");
+    assert!(!result.truncated);
 }

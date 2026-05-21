@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const MAX_NAME_LENGTH: usize = 64;
+const MAX_DESCRIPTION_LENGTH: usize = 1024;
 const IGNORE_FILE_NAMES: &[&str] = &[".gitignore", ".ignore", ".fdignore"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +28,7 @@ pub enum SkillDiagnosticCode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillDiagnostic {
+    pub diagnostic_type: String,
     pub code: SkillDiagnosticCode,
     pub message: String,
     pub path: String,
@@ -77,11 +80,11 @@ where
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => diagnostics.push(SkillDiagnostic {
-                code: SkillDiagnosticCode::FileInfoFailed,
-                message: error.to_string(),
-                path: display_path(dir),
-            }),
+            Err(error) => diagnostics.push(diagnostic(
+                SkillDiagnosticCode::FileInfoFailed,
+                error.to_string(),
+                dir,
+            )),
         }
     }
     (skills, diagnostics)
@@ -148,11 +151,11 @@ fn load_skills_from_dir(
     let mut entries = match sorted_entries(dir) {
         Ok(entries) => entries,
         Err(error) => {
-            diagnostics.push(SkillDiagnostic {
-                code: SkillDiagnosticCode::ListFailed,
-                message: error.to_string(),
-                path: display_path(dir),
-            });
+            diagnostics.push(diagnostic(
+                SkillDiagnosticCode::ListFailed,
+                error.to_string(),
+                dir,
+            ));
             return (skills, diagnostics);
         }
     };
@@ -238,11 +241,11 @@ fn add_ignore_rules(
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
-                diagnostics.push(SkillDiagnostic {
-                    code: SkillDiagnosticCode::FileInfoFailed,
-                    message: error.to_string(),
-                    path: display_path(&path),
-                });
+                diagnostics.push(diagnostic(
+                    SkillDiagnosticCode::FileInfoFailed,
+                    error.to_string(),
+                    &path,
+                ));
                 continue;
             }
         };
@@ -252,11 +255,11 @@ fn add_ignore_rules(
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
             Err(error) => {
-                diagnostics.push(SkillDiagnostic {
-                    code: SkillDiagnosticCode::ReadFailed,
-                    message: error.to_string(),
-                    path: display_path(&path),
-                });
+                diagnostics.push(diagnostic(
+                    SkillDiagnosticCode::ReadFailed,
+                    error.to_string(),
+                    &path,
+                ));
                 continue;
             }
         };
@@ -388,11 +391,11 @@ fn load_skill_from_file(path: &Path) -> (Option<Skill>, Vec<SkillDiagnostic>) {
     let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(error) => {
-            diagnostics.push(SkillDiagnostic {
-                code: SkillDiagnosticCode::ReadFailed,
-                message: error.to_string(),
-                path: display_path(path),
-            });
+            diagnostics.push(diagnostic(
+                SkillDiagnosticCode::ReadFailed,
+                error.to_string(),
+                path,
+            ));
             return (None, diagnostics);
         }
     };
@@ -400,11 +403,7 @@ fn load_skill_from_file(path: &Path) -> (Option<Skill>, Vec<SkillDiagnostic>) {
     let parsed = match parse_skill_frontmatter(&raw) {
         Ok(parsed) => parsed,
         Err(message) => {
-            diagnostics.push(SkillDiagnostic {
-                code: SkillDiagnosticCode::ParseFailed,
-                message,
-                path: display_path(path),
-            });
+            diagnostics.push(diagnostic(SkillDiagnosticCode::ParseFailed, message, path));
             return (None, diagnostics);
         }
     };
@@ -412,16 +411,25 @@ fn load_skill_from_file(path: &Path) -> (Option<Skill>, Vec<SkillDiagnostic>) {
     let file_path = display_path(path);
     let skill_dir = dirname_env_path(&file_path);
     let parent_dir_name = basename_env_path(Path::new(&skill_dir));
-    let name = parsed.name.unwrap_or(parent_dir_name);
-    let Some(description) = parsed
-        .description
-        .filter(|description| !description.trim().is_empty())
-    else {
-        diagnostics.push(SkillDiagnostic {
-            code: SkillDiagnosticCode::InvalidMetadata,
-            message: "description is required".to_owned(),
-            path: file_path,
-        });
+    let name = parsed.name.unwrap_or_else(|| parent_dir_name.clone());
+    let description = parsed.description;
+
+    for message in validate_description(description.as_deref()) {
+        diagnostics.push(diagnostic(
+            SkillDiagnosticCode::InvalidMetadata,
+            message,
+            path,
+        ));
+    }
+    for message in validate_name(&name, &parent_dir_name) {
+        diagnostics.push(diagnostic(
+            SkillDiagnosticCode::InvalidMetadata,
+            message,
+            path,
+        ));
+    }
+
+    let Some(description) = description.filter(|description| !description.trim().is_empty()) else {
         return (None, diagnostics);
     };
 
@@ -436,6 +444,53 @@ fn load_skill_from_file(path: &Path) -> (Option<Skill>, Vec<SkillDiagnostic>) {
         }),
         diagnostics,
     )
+}
+
+fn validate_name(name: &str, parent_dir_name: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    if name != parent_dir_name {
+        errors.push(format!(
+            "name \"{name}\" does not match parent directory \"{parent_dir_name}\""
+        ));
+    }
+    if name.chars().count() > MAX_NAME_LENGTH {
+        errors.push(format!(
+            "name exceeds {MAX_NAME_LENGTH} characters ({})",
+            name.chars().count()
+        ));
+    }
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+    {
+        errors.push(
+            "name contains invalid characters (must be lowercase a-z, 0-9, hyphens only)"
+                .to_owned(),
+        );
+    }
+    if name.starts_with('-') || name.ends_with('-') {
+        errors.push("name must not start or end with a hyphen".to_owned());
+    }
+    if name.contains("--") {
+        errors.push("name must not contain consecutive hyphens".to_owned());
+    }
+    errors
+}
+
+fn validate_description(description: Option<&str>) -> Vec<String> {
+    let mut errors = Vec::new();
+    match description {
+        Some(description) if !description.trim().is_empty() => {
+            if description.chars().count() > MAX_DESCRIPTION_LENGTH {
+                errors.push(format!(
+                    "description exceeds {MAX_DESCRIPTION_LENGTH} characters ({})",
+                    description.chars().count()
+                ));
+            }
+        }
+        _ => errors.push("description is required".to_owned()),
+    }
+    errors
 }
 
 #[derive(Debug)]
@@ -496,6 +551,19 @@ fn parse_skill_frontmatter(content: &str) -> Result<ParsedSkill, String> {
 
 fn display_path(path: &Path) -> String {
     path_to_unix(path)
+}
+
+fn diagnostic(
+    code: SkillDiagnosticCode,
+    message: impl Into<String>,
+    path: &Path,
+) -> SkillDiagnostic {
+    SkillDiagnostic {
+        diagnostic_type: "warning".to_owned(),
+        code,
+        message: message.into(),
+        path: display_path(path),
+    }
 }
 
 fn relative_env_path(root: &Path, path: &Path) -> String {

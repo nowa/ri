@@ -280,6 +280,66 @@ fn agent_harness_appends_custom_messages_labels_and_session_name() {
 }
 
 #[tokio::test]
+async fn agent_harness_includes_session_summaries_and_custom_messages_in_prompt_context() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    let requests = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+    let requests_ref = requests.clone();
+    registration.set_responses(vec![faux_response_factory(move |context, _, _, _| {
+        requests_ref
+            .lock()
+            .expect("requests")
+            .push(user_texts(&context.messages));
+        faux_assistant_message("ok", Default::default())
+    })]);
+
+    let mut session = Session::new(InMemorySessionStorage::new());
+    let user_id = session
+        .append_message(Message::User(UserMessage::text("base user")))
+        .expect("base user");
+    session
+        .move_to(
+            Some(user_id.clone()),
+            Some(BranchMoveSummary {
+                summary: "branch context".to_owned(),
+                details: None,
+                from_hook: None,
+            }),
+        )
+        .expect("branch summary");
+    session
+        .append_custom_message_entry(
+            "note",
+            CustomMessageContent::Text("custom context".to_owned()),
+            true,
+            None,
+        )
+        .expect("custom context");
+    session
+        .append_compaction("compact context", user_id, 123)
+        .expect("compaction");
+
+    let harness = AgentHarness::new(AgentHarnessOptions::new(
+        test_env(),
+        session,
+        registration.get_model(),
+    ));
+    harness.prompt("latest prompt").await.expect("prompt");
+
+    let requests = requests.lock().expect("requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].len(), 5);
+    assert!(requests[0][0].contains(COMPACTION_SUMMARY_PREFIX));
+    assert!(requests[0][0].contains("compact context"));
+    assert_eq!(requests[0][1], "base user");
+    assert!(requests[0][2].contains(BRANCH_SUMMARY_PREFIX));
+    assert!(requests[0][2].contains("branch context"));
+    assert_eq!(requests[0][3], "custom context");
+    assert_eq!(requests[0][4], "latest prompt");
+
+    registration.unregister();
+}
+
+#[tokio::test]
 async fn agent_harness_runs_skills_and_prompt_templates_from_resources() {
     let registration = register_faux_provider(RegisterFauxProviderOptions::default());
     let requests = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));

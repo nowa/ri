@@ -3,10 +3,10 @@ use crate::{
     harness::{
         BranchMoveSummary, BranchSummaryResult, CollectEntriesResult, CompactionDetails,
         CompactionPreparation, CompactionResult, CompactionThresholdSettings, CustomMessageContent,
-        LocalExecutionEnv, PromptTemplate, Session, SessionMessage, SessionTreeEntry, Skill,
+        LocalExecutionEnv, PromptTemplate, Session, SessionTreeEntry, Skill,
         collect_entries_for_branch_summary, compact as compact_prepared_session,
-        format_prompt_template_invocation, format_skill_invocation, generate_branch_summary,
-        prepare_compaction,
+        convert_session_messages_to_llm, format_prompt_template_invocation,
+        format_skill_invocation, generate_branch_summary, prepare_compaction,
     },
     types::{
         AgentContext, AgentEvent, AgentEventSink, AgentLoopTurnUpdate, AgentMessage,
@@ -1418,10 +1418,8 @@ impl AgentHarness {
             .session
             .build_context()
             .map_err(AgentHarnessError::session)?;
-        let context_messages = session_context
-            .messages
+        let context_messages = convert_session_messages_to_llm(&session_context.messages)
             .into_iter()
-            .filter_map(llm_session_message)
             .map(AgentMessage::from)
             .collect();
         let mut prompt_messages = self.next_turn_queue.drain_all();
@@ -2242,11 +2240,4 @@ fn user_message_with_images(text: String, images: Vec<ImageContent>) -> Message 
         content: UserContentValue::Blocks(content),
         timestamp: now_millis(),
     })
-}
-
-fn llm_session_message(message: SessionMessage) -> Option<Message> {
-    match message {
-        SessionMessage::Llm { message } => Some(message),
-        _ => None,
-    }
 }

@@ -725,6 +725,49 @@ fn in_memory_repo_opens_deletes_and_forks_by_metadata() {
         vec![user1.as_str(), assistant1.as_str()]
     );
 
+    let at_fork = repo
+        .fork(
+            &metadata,
+            SessionForkOptions {
+                entry_id: Some(user2.clone()),
+                position: ForkPosition::At,
+                id: Some("session-at".to_owned()),
+            },
+        )
+        .expect("fork at target");
+    assert_eq!(
+        at_fork
+            .entries()
+            .iter()
+            .map(SessionTreeEntry::id)
+            .collect::<Vec<_>>(),
+        vec![user1.as_str(), assistant1.as_str(), user2.as_str()]
+    );
+
+    let non_user_target = repo
+        .fork(
+            &metadata,
+            SessionForkOptions {
+                entry_id: Some(assistant1.clone()),
+                id: Some("session-invalid".to_owned()),
+                ..Default::default()
+            },
+        )
+        .expect_err("before fork target must be a user message");
+    assert_eq!(non_user_target.code, SessionErrorCode::InvalidForkTarget);
+
+    let missing_target = repo
+        .fork(
+            &metadata,
+            SessionForkOptions {
+                entry_id: Some("missing-entry".to_owned()),
+                id: Some("session-missing".to_owned()),
+                ..Default::default()
+            },
+        )
+        .expect_err("missing fork target");
+    assert_eq!(missing_target.code, SessionErrorCode::InvalidForkTarget);
+
     let full_fork = repo
         .fork(
             &metadata,

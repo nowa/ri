@@ -1,14 +1,25 @@
 use std::{
     fs,
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+#[cfg(unix)]
+const SIGKILL: i32 = 9;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +27,6 @@ pub enum FileKind {
     File,
     Directory,
     Symlink,
-    Other,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,8 +41,13 @@ pub struct FileInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileErrorCode {
     NotFound,
+    PermissionDenied,
     NotDirectory,
+    IsDirectory,
+    Invalid,
+    NotSupported,
     Io,
+    Unknown,
     ShellUnavailable,
     Spawn,
     Timeout,
@@ -69,7 +84,7 @@ impl Default for RemoveOptions {
     fn default() -> Self {
         Self {
             recursive: false,
-            force: true,
+            force: false,
         }
     }
 }
@@ -78,6 +93,7 @@ pub type ExecCallback = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync + '
 
 #[derive(Clone, Default)]
 pub struct ExecOptions {
+    pub cwd: Option<PathBuf>,
     pub env: Vec<(String, String)>,
     pub timeout_ms: Option<u64>,
     pub abort_flag: Option<Arc<AtomicBool>>,
@@ -96,20 +112,25 @@ pub struct ExecOutput {
 pub struct LocalExecutionEnv {
     cwd: PathBuf,
     shell_path: PathBuf,
+    shell_env: Vec<(String, String)>,
 }
 
 impl LocalExecutionEnv {
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         Self {
             cwd: cwd.into(),
-            shell_path: PathBuf::from(
-                std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned()),
-            ),
+            shell_path: default_shell_path(),
+            shell_env: Vec::new(),
         }
     }
 
     pub fn with_shell(mut self, shell_path: impl Into<PathBuf>) -> Self {
         self.shell_path = shell_path.into();
+        self
+    }
+
+    pub fn with_shell_env(mut self, shell_env: Vec<(String, String)>) -> Self {
+        self.shell_env = shell_env;
         self
     }
 
@@ -168,6 +189,7 @@ impl LocalExecutionEnv {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| file_error_from_io(error, parent))?;
         }
+        check_file_abort(abort_flag, path)?;
         fs::write(path, content).map_err(|error| file_error_from_io(error, path))
     }
 
@@ -222,12 +244,22 @@ impl LocalExecutionEnv {
         max_lines: usize,
         abort_flag: Option<&AtomicBool>,
     ) -> Result<Vec<String>, FileError> {
-        Ok(self
-            .read_text_file_with_abort(path, abort_flag)?
-            .lines()
-            .take(max_lines)
-            .map(ToOwned::to_owned)
-            .collect())
+        let path = self.resolve(path);
+        check_file_abort(abort_flag, &path)?;
+        if max_lines == 0 {
+            return Ok(Vec::new());
+        }
+        let file = fs::File::open(&path).map_err(|error| file_error_from_io(error, &path))?;
+        let mut lines = Vec::new();
+        for line in BufReader::new(file).lines() {
+            check_file_abort(abort_flag, &path)?;
+            lines.push(line.map_err(|error| file_error_from_io(error, &path))?);
+            if lines.len() >= max_lines {
+                break;
+            }
+        }
+        check_file_abort(abort_flag, &path)?;
+        Ok(lines)
     }
 
     pub fn read_binary_file(&self, path: impl AsRef<Path>) -> Result<Vec<u8>, FileError> {
@@ -287,6 +319,7 @@ impl LocalExecutionEnv {
         let mut entries = fs::read_dir(&path)
             .map_err(|error| file_error_from_io(error, &path))?
             .map(|entry| {
+                check_file_abort(abort_flag, &path)?;
                 let entry = entry.map_err(|error| file_error_from_io(error, &path))?;
                 self.file_info(entry.path())
             })
@@ -299,6 +332,9 @@ impl LocalExecutionEnv {
         let path = self.resolve(path);
         let metadata =
             fs::symlink_metadata(&path).map_err(|error| file_error_from_io(error, &path))?;
+        let kind = file_kind(&metadata).ok_or_else(|| {
+            file_error(FileErrorCode::NotSupported, "Unsupported file type", &path)
+        })?;
         Ok(FileInfo {
             name: path
                 .file_name()
@@ -306,7 +342,7 @@ impl LocalExecutionEnv {
                 .unwrap_or_default()
                 .to_owned(),
             path: display_path(&path),
-            kind: file_kind(&metadata),
+            kind,
             size: metadata.len(),
             mtime_ms: metadata
                 .modified()
@@ -387,6 +423,7 @@ impl LocalExecutionEnv {
 
     pub fn exec(&self, command: &str, options: ExecOptions) -> Result<ExecOutput, FileError> {
         let ExecOptions {
+            cwd,
             env,
             timeout_ms,
             abort_flag,
@@ -403,35 +440,46 @@ impl LocalExecutionEnv {
                 &self.shell_path,
             ));
         }
-        if !self.shell_path.exists() {
+        if !shell_path_is_available(&self.shell_path) {
             return Err(file_error(
                 FileErrorCode::ShellUnavailable,
                 "Shell is unavailable",
                 &self.shell_path,
             ));
         }
-        let mut child = Command::new(&self.shell_path)
+        let cwd = cwd
+            .map(|path| self.resolve(path))
+            .unwrap_or_else(|| self.cwd.clone());
+        let mut command_builder = Command::new(&self.shell_path);
+        command_builder
             .arg("-lc")
             .arg(command)
-            .current_dir(&self.cwd)
+            .current_dir(cwd)
+            .envs(self.shell_env.iter().cloned())
             .envs(env)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| FileError {
-                code: FileErrorCode::Spawn,
-                message: error.to_string(),
-                path: display_path(&self.shell_path),
-            })?;
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        command_builder.process_group(0);
+        let mut child = command_builder.spawn().map_err(|error| FileError {
+            code: FileErrorCode::Spawn,
+            message: error.to_string(),
+            path: display_path(&self.shell_path),
+        })?;
 
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let stdout_shell_path = self.shell_path.clone();
         let stderr_shell_path = self.shell_path.clone();
-        let stdout_reader =
-            std::thread::spawn(move || read_pipe(stdout, on_stdout, stdout_shell_path));
-        let stderr_reader =
-            std::thread::spawn(move || read_pipe(stderr, on_stderr, stderr_shell_path));
+        let callback_error = Arc::new(Mutex::new(None));
+        let stdout_callback_error = callback_error.clone();
+        let stderr_callback_error = callback_error.clone();
+        let stdout_reader = std::thread::spawn(move || {
+            read_pipe(stdout, on_stdout, stdout_shell_path, stdout_callback_error)
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            read_pipe(stderr, on_stderr, stderr_shell_path, stderr_callback_error)
+        });
 
         let started = Instant::now();
         let timeout = timeout_ms.map(Duration::from_millis);
@@ -443,7 +491,7 @@ impl LocalExecutionEnv {
                         .as_ref()
                         .is_some_and(|abort_flag| abort_flag.load(Ordering::SeqCst))
                     {
-                        let _ = child.kill();
+                        kill_process_tree(&mut child);
                         let _ = child.wait();
                         let _ = stdout_reader.join();
                         let _ = stderr_reader.join();
@@ -453,10 +501,21 @@ impl LocalExecutionEnv {
                             &self.shell_path,
                         ));
                     }
+                    if let Some(message) = callback_error.lock().expect("callback lock").clone() {
+                        kill_process_tree(&mut child);
+                        let _ = child.wait();
+                        let _ = stdout_reader.join();
+                        let _ = stderr_reader.join();
+                        return Err(file_error(
+                            FileErrorCode::CallbackError,
+                            &message,
+                            &self.shell_path,
+                        ));
+                    }
                     if let Some(timeout) = timeout
                         && started.elapsed() >= timeout
                     {
-                        let _ = child.kill();
+                        kill_process_tree(&mut child);
                         let _ = child.wait();
                         let _ = stdout_reader.join();
                         let _ = stderr_reader.join();
@@ -469,7 +528,7 @@ impl LocalExecutionEnv {
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 Err(error) => {
-                    let _ = child.kill();
+                    kill_process_tree(&mut child);
                     let _ = child.wait();
                     let _ = stdout_reader.join();
                     let _ = stderr_reader.join();
@@ -520,6 +579,7 @@ fn read_pipe(
     pipe: Option<impl Read>,
     callback: Option<ExecCallback>,
     shell_path: PathBuf,
+    callback_error: Arc<Mutex<Option<String>>>,
 ) -> Result<Vec<u8>, FileError> {
     let mut output = Vec::new();
     if let Some(mut pipe) = pipe {
@@ -535,6 +595,7 @@ fn read_pipe(
             if let Some(callback) = &callback {
                 let chunk = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
                 callback(&chunk).map_err(|message| {
+                    *callback_error.lock().expect("callback lock") = Some(message.clone());
                     file_error(FileErrorCode::CallbackError, &message, &shell_path)
                 })?;
             }
@@ -555,23 +616,30 @@ fn check_file_abort(abort_flag: Option<&AtomicBool>, path: &Path) -> Result<(), 
     }
 }
 
-fn file_kind(metadata: &fs::Metadata) -> FileKind {
+fn file_kind(metadata: &fs::Metadata) -> Option<FileKind> {
     let file_type = metadata.file_type();
     if file_type.is_symlink() {
-        FileKind::Symlink
+        Some(FileKind::Symlink)
     } else if file_type.is_file() {
-        FileKind::File
+        Some(FileKind::File)
     } else if file_type.is_dir() {
-        FileKind::Directory
+        Some(FileKind::Directory)
     } else {
-        FileKind::Other
+        None
     }
 }
 
 fn file_error_from_io(error: std::io::Error, path: &Path) -> FileError {
     let code = match error.kind() {
         std::io::ErrorKind::NotFound => FileErrorCode::NotFound,
-        _ => FileErrorCode::Io,
+        std::io::ErrorKind::PermissionDenied => FileErrorCode::PermissionDenied,
+        std::io::ErrorKind::NotADirectory => FileErrorCode::NotDirectory,
+        std::io::ErrorKind::IsADirectory => FileErrorCode::IsDirectory,
+        std::io::ErrorKind::InvalidInput | std::io::ErrorKind::InvalidData => {
+            FileErrorCode::Invalid
+        }
+        std::io::ErrorKind::Unsupported => FileErrorCode::NotSupported,
+        _ => FileErrorCode::Unknown,
     };
     FileError {
         code,
@@ -590,6 +658,39 @@ fn file_error(code: FileErrorCode, message: &str, path: &Path) -> FileError {
 
 fn display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn default_shell_path() -> PathBuf {
+    if Path::new("/bin/bash").exists() {
+        return PathBuf::from("/bin/bash");
+    }
+    if let Some(path) = std::env::var_os("PATH").and_then(find_bash_on_path) {
+        return path;
+    }
+    PathBuf::from("sh")
+}
+
+fn find_bash_on_path(path_var: std::ffi::OsString) -> Option<PathBuf> {
+    std::env::split_paths(&path_var)
+        .map(|path| path.join(if cfg!(windows) { "bash.exe" } else { "bash" }))
+        .find(|path| path.exists())
+}
+
+fn shell_path_is_available(path: &Path) -> bool {
+    path.exists() || (!path.is_absolute() && path.components().count() == 1)
+}
+
+fn kill_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        // The child is started in a fresh process group so background grandchildren
+        // follow the shell timeout/abort behavior instead of leaking after the shell dies.
+        unsafe {
+            let _ = kill(-pid, SIGKILL);
+        }
+    }
+    let _ = child.kill();
 }
 
 fn unique_suffix() -> String {
