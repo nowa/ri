@@ -459,10 +459,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1207 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1208 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 1000 tests: 2 library tests, 362 `provider_core` tests, and
-  636 `provider_live` tests. This is 279 above the 721 direct simple source
+- `ri-llm-provider`: 1001 tests: 2 library tests, 362 `provider_core` tests, and
+  637 `provider_live` tests. This is 280 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -497,7 +497,7 @@ Current Rust tests: 1207 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1207-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1208-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -520,6 +520,18 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `total-tokens.test.ts` live usage parity: Rust total-usage live tests now use
+  the Pi source model/route choices for OpenAI Responses (`openai-responses`
+  with `gpt-4o`) and Google (`gemini-2.0-flash`), require Anthropic API-key and
+  OAuth repeated-prompt cache activity on `claude-sonnet-4-5` and
+  `claude-sonnet-4-6`, and add the GitHub Copilot Anthropic total-usage path on
+  `claude-sonnet-4.6` without source/Markdown scanner tests:
+  `cargo fmt --check`,
+  `cargo test -p ri-llm-provider --test provider_live reports_total_usage_components -- --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_live -- --list`, and
+  `cargo test --workspace -- --list` passed; the workspace list enumerated
+  1208 tests.
 - Latest local verification on 2026-05-22 after aligning Pi `abort.test.ts`,
   `tokens.test.ts`, and `responseid.test.ts` live-provider abort semantics:
   Rust now proves mid-stream abort preserves partial assistant content, can be
@@ -1978,6 +1990,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1207 Rust tests cover the
+- Test parity is not certified by raw count alone: 1208 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

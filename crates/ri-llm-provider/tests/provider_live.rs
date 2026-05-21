@@ -4632,18 +4632,43 @@ async fn run_live_multiturn_smoke(
     run_live_multiturn_with_options(test, &model, live_text_options(Some(api_key))).await
 }
 
+async fn run_live_total_usage_pair_with_options(
+    test: &str,
+    model: &Model,
+    options: SimpleStreamOptions,
+) -> Result<(Usage, Usage), Box<dyn Error>> {
+    let first = complete_simple(model, live_usage_first_context(), options.clone()).await?;
+    assert_live_text_response(test, &first);
+    assert_live_usage_total_matches_components(test, &first.usage);
+    let first_usage = first.usage.clone();
+
+    let second = complete_simple(model, live_usage_second_context(first), options).await?;
+    assert_live_text_response(test, &second);
+    assert_live_usage_total_matches_components(test, &second.usage);
+    let second_usage = second.usage.clone();
+    Ok((first_usage, second_usage))
+}
+
 async fn run_live_total_usage_with_options(
     test: &str,
     model: &Model,
     options: SimpleStreamOptions,
 ) -> Result<(), Box<dyn Error>> {
-    let first = complete_simple(model, live_usage_first_context(), options.clone()).await?;
-    assert_live_text_response(test, &first);
-    assert_live_usage_total_matches_components(test, &first.usage);
+    run_live_total_usage_pair_with_options(test, model, options)
+        .await
+        .map(|_| ())
+}
 
-    let second = complete_simple(model, live_usage_second_context(first), options).await?;
-    assert_live_text_response(test, &second);
-    assert_live_usage_total_matches_components(test, &second.usage);
+async fn run_live_total_usage_with_cache_with_options(
+    test: &str,
+    model: &Model,
+    options: SimpleStreamOptions,
+) -> Result<(), Box<dyn Error>> {
+    let (first, second) = run_live_total_usage_pair_with_options(test, model, options).await?;
+    assert!(
+        second.cache_read > 0 || second.cache_write > 0 || first.cache_write > 0,
+        "{test} expected cache activity on repeated long prompt: first={first:?} second={second:?}"
+    );
     Ok(())
 }
 
@@ -8779,13 +8804,13 @@ async fn live_openai_responses_handles_tool_call() -> Result<(), Box<dyn Error>>
 
 #[tokio::test]
 async fn live_openai_responses_reports_total_usage_components() -> Result<(), Box<dyn Error>> {
-    run_live_total_usage_smoke(
-        "live_openai_responses_reports_total_usage_components",
-        "openai",
-        "gpt-5-mini",
-        "OPENAI_API_KEY",
-    )
-    .await
+    let test = "live_openai_responses_reports_total_usage_components";
+    let Some(api_key) = live_api_key(test, "OPENAI_API_KEY") else {
+        return Ok(());
+    };
+    let mut model = get_model("openai", "gpt-4o").ok_or_else(|| "missing openai/gpt-4o")?;
+    model.api = "openai-responses".to_owned();
+    run_live_total_usage_with_options(test, &model, live_text_options(Some(api_key))).await
 }
 
 live_stream_reasoning_api_key_tests!(
@@ -8971,13 +8996,14 @@ async fn live_anthropic_messages_handles_tool_call() -> Result<(), Box<dyn Error
 
 #[tokio::test]
 async fn live_anthropic_messages_reports_total_usage_components() -> Result<(), Box<dyn Error>> {
-    run_live_total_usage_smoke(
-        "live_anthropic_messages_reports_total_usage_components",
-        "anthropic",
-        "claude-haiku-4-5",
-        "ANTHROPIC_API_KEY",
-    )
-    .await
+    let test = "live_anthropic_messages_reports_total_usage_components";
+    let Some(api_key) = live_api_key(test, "ANTHROPIC_API_KEY") else {
+        return Ok(());
+    };
+    let model = get_model("anthropic", "claude-sonnet-4-5")
+        .ok_or_else(|| "missing anthropic/claude-sonnet-4-5")?;
+    run_live_total_usage_with_cache_with_options(test, &model, live_text_options(Some(api_key)))
+        .await
 }
 
 #[tokio::test]
@@ -9316,10 +9342,15 @@ async fn live_anthropic_oauth_auth_storage_abort_reports_source_usage_shape()
 #[tokio::test]
 async fn live_anthropic_oauth_auth_storage_reports_total_usage_components()
 -> Result<(), Box<dyn Error>> {
-    run_live_oauth_total_usage_smoke(
-        "live_anthropic_oauth_auth_storage_reports_total_usage_components",
-        "anthropic",
-        "claude-haiku-4-5",
+    let test = "live_anthropic_oauth_auth_storage_reports_total_usage_components";
+    let Some(resolution) = live_oauth_resolution(test, "anthropic").await else {
+        return Ok(());
+    };
+    let model = live_oauth_model("anthropic", "claude-sonnet-4-6", &resolution)?;
+    run_live_total_usage_with_cache_with_options(
+        test,
+        &model,
+        live_text_options(Some(resolution.api_key)),
     )
     .await
 }
@@ -9376,6 +9407,17 @@ async fn live_github_copilot_oauth_auth_storage_reports_total_usage_components()
         "live_github_copilot_oauth_auth_storage_reports_total_usage_components",
         "github-copilot",
         "gpt-4o",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn live_github_copilot_oauth_anthropic_reports_total_usage_components()
+-> Result<(), Box<dyn Error>> {
+    run_live_oauth_total_usage_smoke(
+        "live_github_copilot_oauth_anthropic_reports_total_usage_components",
+        "github-copilot",
+        "claude-sonnet-4.6",
     )
     .await
 }
@@ -9658,7 +9700,7 @@ async fn live_google_generative_ai_reports_total_usage_components() -> Result<()
     run_live_total_usage_smoke(
         "live_google_generative_ai_reports_total_usage_components",
         "google",
-        "gemini-2.5-flash",
+        "gemini-2.0-flash",
         "GEMINI_API_KEY",
     )
     .await
