@@ -82,7 +82,9 @@ credentials, local model services where applicable, and manual OAuth flows.
   related compatibility layers.
 - Tool calling with streamed partial arguments.
 - Text, image, thinking, and tool-result content blocks.
-- Conservative parsing for common incomplete streamed tool-argument JSON.
+- Conservative parsing for common incomplete streamed tool-argument JSON,
+  including recovery of completed object/array prefixes when the trailing
+  field or value is still incomplete.
 - Tool-call argument validation with pi-style JSON-schema coercion for plain
   serialized schemas and TypeBox-like object/array/combinator constraints.
 - Reasoning levels including `off`, `minimal`, `low`, `medium`, `high`, and

@@ -152,6 +152,13 @@ pub fn parse_streaming_json(partial_json: Option<&str>) -> Value {
     {
         return value;
     }
+    for candidate in truncation_candidates(partial_json).into_iter().rev() {
+        if let Some(candidate) = complete_partial_json(&candidate)
+            && let Ok(value) = parse_json_with_repair(&candidate)
+        {
+            return value;
+        }
+    }
     Value::Object(Default::default())
 }
 
@@ -216,6 +223,47 @@ fn trim_trailing_json_whitespace(value: &mut String) {
     while value.ends_with(char::is_whitespace) {
         value.pop();
     }
+}
+
+fn truncation_candidates(partial_json: &str) -> Vec<String> {
+    let repaired = repair_json(partial_json);
+    let mut candidates = Vec::new();
+    let mut last = None;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, ch) in repaired.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' | '[' => {
+                let end = index + ch.len_utf8();
+                if last != Some(end) {
+                    candidates.push(repaired[..end].to_owned());
+                    last = Some(end);
+                }
+            }
+            ',' => {
+                if last != Some(index) {
+                    candidates.push(repaired[..index].to_owned());
+                    last = Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    candidates
 }
 
 pub fn short_hash(input: &str) -> String {

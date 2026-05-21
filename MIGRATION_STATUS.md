@@ -52,9 +52,10 @@ counterparts that pass.
     reasoning models.
   - JSON repair/hash helpers, including malformed control-character repair,
     invalid escape repair, conservative partial streamed tool-argument parsing
-    for common incomplete object/array/string cases, exact `shortHash` output
-    fixtures used for foreign OpenAI Responses item IDs, and unpaired UTF-16
-    surrogate escape replacement.
+    for common incomplete object/array/string cases, completed-prefix recovery
+    when the trailing object field or array element is incomplete, exact
+    `shortHash` output fixtures used for foreign OpenAI Responses item IDs,
+    and unpaired UTF-16 surrogate escape replacement.
   - Assistant-message diagnostics helpers mirroring `utils/diagnostics.ts`,
     represented as typed Rust structs that serialize to the pi
     `{ type, timestamp, error, details }` diagnostic shape.
@@ -428,15 +429,25 @@ This migration is not complete.
   device OAuth flows.
 - Remaining provider risk is case-by-case semantic parity for provider-specific
   payload transforms, streaming edge cases, OAuth refresh/writeback behavior,
-  image API networking, proxy behavior, and live E2E flows that cannot be
-  certified by default-off gated tests alone.
+  image API networking, proxy behavior, the Pi `pi-ai` CLI binary surface, and
+  live E2E flows that cannot be certified by default-off gated tests alone.
 - Remaining agent risk is case-by-case semantic parity for advanced abort/error
   termination paths, async listener settlement, lifecycle hook ordering, and
   session/harness integration edge cases even where Rust behavior tests now
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning Pi
+- Latest local verification on 2026-05-21 after tightening
+  `utils/json-parse.ts` `parseStreamingJson` parity: incomplete trailing
+  object fields/values and array elements now preserve already-complete
+  prefixes like the source `partial-json` fallback instead of dropping the
+  whole value to `{}`:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core parse_streaming_json_recovers_common_partial_tool_arguments -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --test-threads=1` passed.
+- Previous local verification on 2026-05-21 after aligning Pi
   `utils/oauth/index.ts` and `utils/oauth/openai-codex.ts` behavior:
   built-in OAuth provider display names now match the source registry,
   OpenAI Codex OAuth token responses must contain a valid ChatGPT account

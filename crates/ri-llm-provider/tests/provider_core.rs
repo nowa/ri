@@ -13007,6 +13007,15 @@ fn parse_streaming_json_recovers_common_partial_tool_arguments() {
         json!({ "items": [1, 2] })
     );
     assert_eq!(
+        parse_streaming_json(Some(r#"{"path":"src/main.rs","content":"#)),
+        json!({ "path": "src/main.rs" })
+    );
+    assert_eq!(
+        parse_streaming_json(Some(r#"{"outer":{"complete":1,"pending":tru"#)),
+        json!({ "outer": { "complete": 1 } })
+    );
+    assert_eq!(parse_streaming_json(Some(r#"[1,2,tr"#)), json!([1, 2]));
+    assert_eq!(
         parse_streaming_json(Some(r#"{"unfinished":"value"#)),
         json!({ "unfinished": "value" })
     );
