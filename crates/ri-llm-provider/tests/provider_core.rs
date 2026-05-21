@@ -5295,18 +5295,30 @@ fn bedrock_payload_injects_cache_points_when_application_profile_name_supports_c
 }
 
 #[test]
-fn bedrock_payload_forwards_request_metadata_only_when_provided() {
+fn bedrock_payload_forwards_request_metadata_and_tool_config() {
     let model = get_model(
         "amazon-bedrock",
         "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
     )
     .expect("model");
+    let tool_context = Context {
+        messages: vec![Message::User(UserMessage::text("Hello"))],
+        tools: vec![Tool {
+            name: "lookup".to_owned(),
+            description: "Lookup tool".to_owned(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        }],
+        ..Default::default()
+    };
 
     let payload = build_bedrock_payload(
         &model,
-        &bedrock_context(),
+        &tool_context,
         BedrockPayloadOptions {
             request_metadata: Some(json!({ "app": "pi-test", "env": "ci" })),
+            tool_choice: Some(BedrockToolChoice::Tool {
+                name: "lookup".to_owned(),
+            }),
             ..Default::default()
         },
     );
@@ -5315,6 +5327,68 @@ fn bedrock_payload_forwards_request_metadata_only_when_provided() {
         payload["requestMetadata"],
         json!({ "app": "pi-test", "env": "ci" })
     );
+    assert_eq!(
+        payload["toolConfig"]["tools"][0]["toolSpec"],
+        json!({
+            "name": "lookup",
+            "description": "Lookup tool",
+            "inputSchema": { "json": { "type": "object", "properties": {} } },
+        })
+    );
+    assert_eq!(
+        payload["toolConfig"]["toolChoice"],
+        json!({ "tool": { "name": "lookup" } })
+    );
+
+    let any_payload = build_bedrock_payload(
+        &model,
+        &tool_context,
+        BedrockPayloadOptions {
+            tool_choice: Some(BedrockToolChoice::Any),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        any_payload["toolConfig"]["toolChoice"],
+        json!({ "any": {} })
+    );
+
+    let auto_payload = build_bedrock_payload(
+        &model,
+        &tool_context,
+        BedrockPayloadOptions {
+            tool_choice: Some(BedrockToolChoice::Auto),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        auto_payload["toolConfig"]["toolChoice"],
+        json!({ "auto": {} })
+    );
+
+    let default_choice_payload =
+        build_bedrock_payload(&model, &tool_context, BedrockPayloadOptions::default());
+    assert_eq!(
+        default_choice_payload["toolConfig"]["tools"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert!(
+        default_choice_payload["toolConfig"]
+            .get("toolChoice")
+            .is_none()
+    );
+
+    let none_payload = build_bedrock_payload(
+        &model,
+        &tool_context,
+        BedrockPayloadOptions {
+            tool_choice: Some(BedrockToolChoice::None),
+            ..Default::default()
+        },
+    );
+    assert!(none_payload.get("toolConfig").is_none());
 
     let default_payload =
         build_bedrock_payload(&model, &bedrock_context(), BedrockPayloadOptions::default());
@@ -16842,8 +16916,22 @@ async fn builtin_bedrock_provider_posts_json_and_parses_eventstream() {
         .stream
         .extra
         .insert("requestMetadata".to_owned(), json!({ "app": "pi-test" }));
+    options.stream.extra.insert(
+        "toolChoice".to_owned(),
+        json!({ "type": "tool", "name": "lookup" }),
+    );
 
-    let message = complete_simple(&model, user_context("hello"), options)
+    let context = Context {
+        messages: vec![Message::User(UserMessage::text("hello"))],
+        tools: vec![Tool {
+            name: "lookup".to_owned(),
+            description: "Lookup tool".to_owned(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        }],
+        ..Default::default()
+    };
+
+    let message = complete_simple(&model, context, options)
         .await
         .expect("complete");
     let request = request_task.await.expect("request task");
@@ -16861,6 +16949,16 @@ async fn builtin_bedrock_provider_posts_json_and_parses_eventstream() {
     );
     assert!(request.contains("\"modelId\":\"anthropic.claude-test-v1:0\""));
     assert!(request.contains("\"requestMetadata\":{\"app\":\"pi-test\"}"));
+    let request_body = request.split("\r\n\r\n").nth(1).expect("request body");
+    let request_json: Value = serde_json::from_str(request_body).expect("request json");
+    assert_eq!(
+        request_json["toolConfig"]["toolChoice"],
+        json!({ "tool": { "name": "lookup" } })
+    );
+    assert_eq!(
+        request_json["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"],
+        json!({ "json": { "type": "object", "properties": {} } })
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -453,6 +453,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-21 after aligning
+  `providers/amazon-bedrock.ts` request-side tool configuration: Bedrock
+  Converse payload construction now emits `toolConfig.tools` when `Context`
+  includes tools, maps `toolChoice` `auto`, `any`, `none`, and named
+  `{ type: "tool" }` choices to the AWS Converse shape, and the built-in HTTP
+  provider preserves `toolChoice` extras from ordinary `stream` options while
+  keeping `toolChoice: "none"` as the source-compatible "omit toolConfig" gate:
+  `cargo test -p ri-llm-provider --test provider_core bedrock_payload_forwards_request_metadata_and_tool_config -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_bedrock_provider_posts_json_and_parses_eventstream -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`,
+  `cargo test --workspace -- --list` (1161 tests enumerated), and
+  `cargo fmt --check` and `git diff --check` passed.
 - Latest local verification on 2026-05-21 after aligning `providers/google.ts`
   and `providers/google-vertex.ts` provider-specific `toolChoice` forwarding:
   Google/Gemini and Google Vertex simple payload and built-in HTTP request

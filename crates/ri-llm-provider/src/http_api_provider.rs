@@ -13,9 +13,9 @@ use crate::{
     },
     bedrock::{
         BedrockClientConfig, BedrockClientOptions, BedrockConverseStreamProcessor,
-        BedrockPayloadOptions, build_bedrock_payload, resolve_aws_credentials_with_runtime,
-        resolve_aws_profile_region, resolve_bedrock_client_config, sign_aws_sigv4_headers,
-        standard_bedrock_endpoint_region,
+        BedrockPayloadOptions, build_bedrock_payload, parse_bedrock_tool_choice,
+        resolve_aws_credentials_with_runtime, resolve_aws_profile_region,
+        resolve_bedrock_client_config, sign_aws_sigv4_headers, standard_bedrock_endpoint_region,
     },
     diagnostics::{
         AssistantMessageDiagnostic, append_assistant_message_diagnostic,
@@ -770,6 +770,11 @@ impl ApiProvider for BedrockConverseStreamHttpProvider {
                 cache_retention: options.stream.cache_retention,
                 max_tokens: options.stream.max_tokens,
                 temperature: options.stream.temperature,
+                tool_choice: options
+                    .stream
+                    .extra
+                    .get("toolChoice")
+                    .and_then(parse_bedrock_tool_choice),
                 reasoning: options.reasoning,
                 region: config.region.clone(),
                 thinking_budgets: options.thinking_budgets.clone(),

@@ -1,7 +1,7 @@
 use crate::{
     AssistantContent, AssistantMessage, AssistantMessageEvent, AssistantMessageEventSender,
     CacheRetention, Context, ImageContent, Message, Model, StopReason, TextContent,
-    ThinkingBudgets, ThinkingContent, ThinkingLevel, ToolCall, ToolResultContent, Usage,
+    ThinkingBudgets, ThinkingContent, ThinkingLevel, Tool, ToolCall, ToolResultContent, Usage,
     UserContent, UserContentValue, json_repair::parse_streaming_json,
     message_transform::transform_messages, models::calculate_cost,
     node_http_proxy::reqwest_client_for_target,
@@ -23,6 +23,14 @@ pub struct BedrockClientConfig {
     pub region: Option<String>,
     pub endpoint: Option<String>,
     pub profile: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BedrockToolChoice {
+    Auto,
+    Any,
+    None,
+    Tool { name: String },
 }
 
 pub fn resolve_bedrock_client_config(
@@ -663,6 +671,7 @@ pub struct BedrockPayloadOptions {
     pub cache_retention: Option<CacheRetention>,
     pub max_tokens: Option<u64>,
     pub temperature: Option<f64>,
+    pub tool_choice: Option<BedrockToolChoice>,
     pub reasoning: Option<ThinkingLevel>,
     pub region: Option<String>,
     pub thinking_budgets: Option<ThinkingBudgets>,
@@ -699,10 +708,68 @@ pub fn build_bedrock_payload(
     if let Some(fields) = build_bedrock_additional_model_request_fields(model, &options) {
         payload["additionalModelRequestFields"] = fields;
     }
+    if let Some(tool_config) = build_bedrock_tool_config(&context.tools, options.tool_choice) {
+        payload["toolConfig"] = tool_config;
+    }
     if let Some(request_metadata) = options.request_metadata {
         payload["requestMetadata"] = request_metadata;
     }
     payload
+}
+
+pub fn parse_bedrock_tool_choice(value: &Value) -> Option<BedrockToolChoice> {
+    match value.as_str() {
+        Some("auto") => Some(BedrockToolChoice::Auto),
+        Some("any") => Some(BedrockToolChoice::Any),
+        Some("none") => Some(BedrockToolChoice::None),
+        Some(_) => None,
+        None => {
+            let object = value.as_object()?;
+            if object.get("type").and_then(Value::as_str) != Some("tool") {
+                return None;
+            }
+            let name = object.get("name")?.as_str().map(str::to_owned)?;
+            Some(BedrockToolChoice::Tool { name })
+        }
+    }
+}
+
+fn build_bedrock_tool_config(
+    tools: &[Tool],
+    tool_choice: Option<BedrockToolChoice>,
+) -> Option<Value> {
+    if tools.is_empty() || matches!(tool_choice, Some(BedrockToolChoice::None)) {
+        return None;
+    }
+
+    let mut config = Map::new();
+    config.insert(
+        "tools".to_owned(),
+        Value::Array(tools.iter().map(format_bedrock_tool).collect()),
+    );
+    if let Some(tool_choice) = tool_choice.and_then(format_bedrock_tool_choice) {
+        config.insert("toolChoice".to_owned(), tool_choice);
+    }
+    Some(Value::Object(config))
+}
+
+fn format_bedrock_tool(tool: &Tool) -> Value {
+    json!({
+        "toolSpec": {
+            "name": &tool.name,
+            "description": &tool.description,
+            "inputSchema": { "json": &tool.parameters },
+        },
+    })
+}
+
+fn format_bedrock_tool_choice(choice: BedrockToolChoice) -> Option<Value> {
+    match choice {
+        BedrockToolChoice::Auto => Some(json!({ "auto": {} })),
+        BedrockToolChoice::Any => Some(json!({ "any": {} })),
+        BedrockToolChoice::Tool { name } => Some(json!({ "tool": { "name": name } })),
+        BedrockToolChoice::None => None,
+    }
 }
 
 pub fn process_bedrock_converse_stream_events<I>(
