@@ -470,6 +470,242 @@ fn supports_xhigh_model_metadata_port() {
 }
 
 #[test]
+fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
+    let text = [InputKind::Text];
+    let text_image = [InputKind::Text, InputKind::Image];
+
+    for (model_id, reasoning, input, cost, context_window, max_tokens) in [
+        (
+            "anthropic/claude-opus-4.6",
+            true,
+            text_image.as_slice(),
+            ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+            1_000_000,
+            128_000,
+        ),
+        (
+            "anthropic/claude-sonnet-4",
+            true,
+            text_image.as_slice(),
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+            1_000_000,
+            64_000,
+        ),
+        (
+            "deepseek/deepseek-chat",
+            false,
+            text.as_slice(),
+            ModelCost {
+                input: 0.32,
+                output: 0.8899999999999999,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            163_840,
+            16_384,
+        ),
+        (
+            "deepseek/deepseek-r1",
+            true,
+            text.as_slice(),
+            ModelCost {
+                input: 0.7,
+                output: 2.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            163_840,
+            16_000,
+        ),
+        (
+            "deepseek/deepseek-v3.2",
+            true,
+            text.as_slice(),
+            ModelCost {
+                input: 0.252,
+                output: 0.378,
+                cache_read: 0.0252,
+                cache_write: 0.0,
+            },
+            131_072,
+            65_536,
+        ),
+        (
+            "deepseek/deepseek-v4-flash",
+            true,
+            text.as_slice(),
+            ModelCost {
+                input: 0.112,
+                output: 0.224,
+                cache_read: 0.022,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            4_096,
+        ),
+        (
+            "google/gemini-2.0-flash-001",
+            false,
+            text_image.as_slice(),
+            ModelCost {
+                input: 0.09999999999999999,
+                output: 0.39999999999999997,
+                cache_read: 0.024999999999999998,
+                cache_write: 0.08333333333333334,
+            },
+            1_048_576,
+            8_192,
+        ),
+        (
+            "google/gemini-2.5-flash",
+            true,
+            text_image.as_slice(),
+            ModelCost {
+                input: 0.3,
+                output: 2.5,
+                cache_read: 0.03,
+                cache_write: 0.08333333333333334,
+            },
+            1_048_576,
+            65_535,
+        ),
+        (
+            "meta-llama/llama-4-scout",
+            false,
+            text_image.as_slice(),
+            ModelCost {
+                input: 0.08,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            10_000_000,
+            16_384,
+        ),
+        (
+            "mistralai/mistral-large-2512",
+            false,
+            text_image.as_slice(),
+            ModelCost {
+                input: 0.5,
+                output: 1.5,
+                cache_read: 0.049999999999999996,
+                cache_write: 0.0,
+            },
+            262_144,
+            4_096,
+        ),
+        (
+            "mistralai/mistral-small-3.2-24b-instruct",
+            false,
+            text_image.as_slice(),
+            ModelCost {
+                input: 0.075,
+                output: 0.19999999999999998,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            16_384,
+        ),
+        (
+            "openai/gpt-5.2-codex",
+            true,
+            text_image.as_slice(),
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+            400_000,
+            128_000,
+        ),
+        (
+            "qwen/qwen3.5-plus-02-15",
+            true,
+            text_image.as_slice(),
+            ModelCost {
+                input: 0.26,
+                output: 1.56,
+                cache_read: 0.0,
+                cache_write: 0.325,
+            },
+            1_000_000,
+            65_536,
+        ),
+        (
+            "z-ai/glm-4.5v",
+            true,
+            text_image.as_slice(),
+            ModelCost {
+                input: 0.6,
+                output: 1.7999999999999998,
+                cache_read: 0.11,
+                cache_write: 0.0,
+            },
+            65_536,
+            16_384,
+        ),
+    ] {
+        let model = get_model("openrouter", model_id).expect(model_id);
+        assert_eq!(model.api, "openai-completions", "{model_id}");
+        assert_eq!(model.provider, "openrouter", "{model_id}");
+        assert_eq!(model.base_url, "https://openrouter.ai/api/v1", "{model_id}");
+        assert_eq!(model.reasoning, reasoning, "{model_id}");
+        assert_eq!(model.input.as_slice(), input, "{model_id}");
+        assert_eq!(model.cost, cost, "{model_id}");
+        assert_eq!(model.context_window, context_window, "{model_id}");
+        assert_eq!(model.max_tokens, max_tokens, "{model_id}");
+
+        if model_id != "deepseek/deepseek-v4-flash" {
+            assert_eq!(model.compat, None, "{model_id}");
+        }
+    }
+
+    let deepseek_v4 = get_model("openrouter", "deepseek/deepseek-v4-flash").expect("deepseek v4");
+    assert_eq!(
+        deepseek_v4.thinking_level_map,
+        BTreeMap::from([
+            (ThinkingLevel::Minimal, None),
+            (ThinkingLevel::Low, None),
+            (ThinkingLevel::Medium, None),
+            (ThinkingLevel::High, Some("high".to_owned())),
+            (ThinkingLevel::XHigh, Some("max".to_owned())),
+        ])
+    );
+    assert_eq!(
+        deepseek_v4.compat,
+        Some(json!({
+            "requiresReasoningContentOnAssistantMessages": true,
+            "thinkingFormat": "deepseek",
+        }))
+    );
+
+    let opus = get_model("openrouter", "anthropic/claude-opus-4.6").expect("opus");
+    assert_eq!(
+        opus.thinking_level_map.get(&ThinkingLevel::XHigh),
+        Some(&Some("max".to_owned()))
+    );
+
+    let codex = get_model("openrouter", "openai/gpt-5.2-codex").expect("codex");
+    assert_eq!(
+        codex.thinking_level_map.get(&ThinkingLevel::XHigh),
+        Some(&Some("xhigh".to_owned()))
+    );
+}
+
+#[test]
 fn anthropic_model_metadata_matches_generated_catalog() {
     let model_ids = get_models("anthropic")
         .into_iter()

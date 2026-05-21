@@ -709,6 +709,10 @@ fn apply_known_model_overrides(model: &mut Model) {
         return;
     }
 
+    if model.provider == "openrouter" && apply_openrouter_generated_metadata(model) {
+        return;
+    }
+
     if model.provider == "vercel-ai-gateway" {
         if apply_vercel_ai_gateway_generated_metadata(model) {
             return;
@@ -830,10 +834,6 @@ fn apply_known_model_overrides(model: &mut Model) {
             model
                 .thinking_level_map
                 .insert(ThinkingLevel::High, Some("default".to_owned()));
-        }
-        ("openrouter", "qwen/qwen3.5-plus-02-15") => {
-            model.reasoning = true;
-            ensure_image_input(model);
         }
         ("together", "moonshotai/Kimi-K2.6") => {
             model.base_url = "https://api.together.ai/v1".to_owned();
@@ -1893,6 +1893,230 @@ fn apply_minimax_generated_metadata(model: &mut Model) -> bool {
     model.cost = cost;
     model.context_window = 204_800;
     model.max_tokens = 131_072;
+    true
+}
+
+fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
+    let metadata = match model.id.as_str() {
+        "anthropic/claude-opus-4.6" => Some((
+            true,
+            true,
+            ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+            1_000_000,
+            128_000,
+        )),
+        "anthropic/claude-sonnet-4" => Some((
+            true,
+            true,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+            1_000_000,
+            64_000,
+        )),
+        "deepseek/deepseek-chat" => Some((
+            false,
+            false,
+            ModelCost {
+                input: 0.32,
+                output: 0.8899999999999999,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            163_840,
+            16_384,
+        )),
+        "deepseek/deepseek-r1" => Some((
+            true,
+            false,
+            ModelCost {
+                input: 0.7,
+                output: 2.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            163_840,
+            16_000,
+        )),
+        "deepseek/deepseek-v3.2" => Some((
+            true,
+            false,
+            ModelCost {
+                input: 0.252,
+                output: 0.378,
+                cache_read: 0.0252,
+                cache_write: 0.0,
+            },
+            131_072,
+            65_536,
+        )),
+        "deepseek/deepseek-v4-flash" => Some((
+            true,
+            false,
+            ModelCost {
+                input: 0.112,
+                output: 0.224,
+                cache_read: 0.022,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            4_096,
+        )),
+        "google/gemini-2.0-flash-001" => Some((
+            false,
+            true,
+            ModelCost {
+                input: 0.09999999999999999,
+                output: 0.39999999999999997,
+                cache_read: 0.024999999999999998,
+                cache_write: 0.08333333333333334,
+            },
+            1_048_576,
+            8_192,
+        )),
+        "google/gemini-2.5-flash" => Some((
+            true,
+            true,
+            ModelCost {
+                input: 0.3,
+                output: 2.5,
+                cache_read: 0.03,
+                cache_write: 0.08333333333333334,
+            },
+            1_048_576,
+            65_535,
+        )),
+        "meta-llama/llama-4-scout" => Some((
+            false,
+            true,
+            ModelCost {
+                input: 0.08,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            10_000_000,
+            16_384,
+        )),
+        "mistralai/mistral-large-2512" => Some((
+            false,
+            true,
+            ModelCost {
+                input: 0.5,
+                output: 1.5,
+                cache_read: 0.049999999999999996,
+                cache_write: 0.0,
+            },
+            262_144,
+            4_096,
+        )),
+        "mistralai/mistral-small-3.2-24b-instruct" => Some((
+            false,
+            true,
+            ModelCost {
+                input: 0.075,
+                output: 0.19999999999999998,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            16_384,
+        )),
+        "openai/gpt-5.2-codex" => Some((
+            true,
+            true,
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+            400_000,
+            128_000,
+        )),
+        "qwen/qwen3.5-plus-02-15" => Some((
+            true,
+            true,
+            ModelCost {
+                input: 0.26,
+                output: 1.56,
+                cache_read: 0.0,
+                cache_write: 0.325,
+            },
+            1_000_000,
+            65_536,
+        )),
+        "z-ai/glm-4.5v" => Some((
+            true,
+            true,
+            ModelCost {
+                input: 0.6,
+                output: 1.7999999999999998,
+                cache_read: 0.11,
+                cache_write: 0.0,
+            },
+            65_536,
+            16_384,
+        )),
+        _ => None,
+    };
+
+    let Some((reasoning, image_input, cost, context_window, max_tokens)) = metadata else {
+        return false;
+    };
+
+    model.api = "openai-completions".to_owned();
+    model.base_url = base_url_for_provider("openrouter").to_owned();
+    model.reasoning = reasoning;
+    model.thinking_level_map.clear();
+    model.input = vec![crate::types::InputKind::Text];
+    if image_input {
+        model.input.push(crate::types::InputKind::Image);
+    }
+    model.cost = cost;
+    model.context_window = context_window;
+    model.max_tokens = max_tokens;
+    model.compat = None;
+
+    match model.id.as_str() {
+        "anthropic/claude-opus-4.6" => {
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::XHigh, Some("max".to_owned()));
+        }
+        "deepseek/deepseek-v4-flash" => {
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Minimal, None);
+            model.thinking_level_map.insert(ThinkingLevel::Low, None);
+            model.thinking_level_map.insert(ThinkingLevel::Medium, None);
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::High, Some("high".to_owned()));
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::XHigh, Some("max".to_owned()));
+            model.compat = Some(json!({
+                "requiresReasoningContentOnAssistantMessages": true,
+                "thinkingFormat": "deepseek",
+            }));
+        }
+        "openai/gpt-5.2-codex" => {
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+        }
+        _ => {}
+    }
+
     true
 }
 
