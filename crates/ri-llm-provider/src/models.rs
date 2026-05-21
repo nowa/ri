@@ -161,13 +161,29 @@ fn seed_models() -> BTreeMap<String, BTreeMap<String, Model>> {
 }
 
 const COMMON_MODELS: &[(&str, &str)] = &[
+    ("anthropic", "claude-3-5-haiku-20241022"),
+    ("anthropic", "claude-3-5-haiku-latest"),
+    ("anthropic", "claude-3-5-sonnet-20240620"),
+    ("anthropic", "claude-3-5-sonnet-20241022"),
+    ("anthropic", "claude-3-7-sonnet-20250219"),
+    ("anthropic", "claude-3-haiku-20240307"),
+    ("anthropic", "claude-3-opus-20240229"),
+    ("anthropic", "claude-3-sonnet-20240229"),
     ("anthropic", "claude-haiku-4-5"),
-    ("anthropic", "claude-sonnet-4-5"),
-    ("anthropic", "claude-sonnet-4-6"),
+    ("anthropic", "claude-haiku-4-5-20251001"),
+    ("anthropic", "claude-opus-4-0"),
+    ("anthropic", "claude-opus-4-1"),
     ("anthropic", "claude-opus-4-1-20250805"),
+    ("anthropic", "claude-opus-4-20250514"),
     ("anthropic", "claude-opus-4-5"),
+    ("anthropic", "claude-opus-4-5-20251101"),
     ("anthropic", "claude-opus-4-6"),
     ("anthropic", "claude-opus-4-7"),
+    ("anthropic", "claude-sonnet-4-0"),
+    ("anthropic", "claude-sonnet-4-20250514"),
+    ("anthropic", "claude-sonnet-4-5"),
+    ("anthropic", "claude-sonnet-4-5-20250929"),
+    ("anthropic", "claude-sonnet-4-6"),
     (
         "amazon-bedrock",
         "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -568,6 +584,9 @@ fn apply_known_model_overrides(model: &mut Model) {
         ensure_image_input(model);
     }
 
+    if model.provider == "anthropic" && apply_anthropic_generated_metadata(model) {
+        return;
+    }
     if model.provider == "openai" && apply_openai_gpt4_generated_metadata(model) {
         return;
     }
@@ -793,6 +812,186 @@ fn apply_known_model_overrides(model: &mut Model) {
             }
         }
         _ => {}
+    }
+}
+
+struct AnthropicGeneratedMetadata {
+    reasoning: bool,
+    xhigh_effort: Option<&'static str>,
+    context_window: u64,
+    max_tokens: u64,
+    cost: ModelCost,
+}
+
+fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMetadata> {
+    match model_id {
+        "claude-3-haiku-20240307" => Some(AnthropicGeneratedMetadata {
+            reasoning: false,
+            xhigh_effort: None,
+            context_window: 200_000,
+            max_tokens: 4_096,
+            cost: ModelCost {
+                input: 0.25,
+                output: 1.25,
+                cache_read: 0.03,
+                cache_write: 0.3,
+            },
+        }),
+        "claude-3-opus-20240229" => Some(AnthropicGeneratedMetadata {
+            reasoning: false,
+            xhigh_effort: None,
+            context_window: 200_000,
+            max_tokens: 4_096,
+            cost: ModelCost {
+                input: 15.0,
+                output: 75.0,
+                cache_read: 1.5,
+                cache_write: 18.75,
+            },
+        }),
+        "claude-3-sonnet-20240229" => Some(AnthropicGeneratedMetadata {
+            reasoning: false,
+            xhigh_effort: None,
+            context_window: 200_000,
+            max_tokens: 4_096,
+            cost: ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 0.3,
+            },
+        }),
+        "claude-3-5-haiku-20241022" | "claude-3-5-haiku-latest" => {
+            Some(AnthropicGeneratedMetadata {
+                reasoning: false,
+                xhigh_effort: None,
+                context_window: 200_000,
+                max_tokens: 8_192,
+                cost: ModelCost {
+                    input: 0.8,
+                    output: 4.0,
+                    cache_read: 0.08,
+                    cache_write: 1.0,
+                },
+            })
+        }
+        "claude-3-5-sonnet-20240620" | "claude-3-5-sonnet-20241022" => {
+            Some(AnthropicGeneratedMetadata {
+                reasoning: false,
+                xhigh_effort: None,
+                context_window: 200_000,
+                max_tokens: 8_192,
+                cost: ModelCost {
+                    input: 3.0,
+                    output: 15.0,
+                    cache_read: 0.3,
+                    cache_write: 3.75,
+                },
+            })
+        }
+        "claude-3-7-sonnet-20250219" => Some(AnthropicGeneratedMetadata {
+            reasoning: true,
+            xhigh_effort: None,
+            context_window: 200_000,
+            max_tokens: 64_000,
+            cost: ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        }),
+        "claude-haiku-4-5" | "claude-haiku-4-5-20251001" => Some(AnthropicGeneratedMetadata {
+            reasoning: true,
+            xhigh_effort: None,
+            context_window: 200_000,
+            max_tokens: 64_000,
+            cost: ModelCost {
+                input: 1.0,
+                output: 5.0,
+                cache_read: 0.1,
+                cache_write: 1.25,
+            },
+        }),
+        "claude-opus-4-0"
+        | "claude-opus-4-1"
+        | "claude-opus-4-1-20250805"
+        | "claude-opus-4-20250514" => Some(AnthropicGeneratedMetadata {
+            reasoning: true,
+            xhigh_effort: None,
+            context_window: 200_000,
+            max_tokens: 32_000,
+            cost: ModelCost {
+                input: 15.0,
+                output: 75.0,
+                cache_read: 1.5,
+                cache_write: 18.75,
+            },
+        }),
+        "claude-opus-4-5" | "claude-opus-4-5-20251101" => Some(AnthropicGeneratedMetadata {
+            reasoning: true,
+            xhigh_effort: None,
+            context_window: 200_000,
+            max_tokens: 64_000,
+            cost: ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+        }),
+        "claude-opus-4-6" => Some(AnthropicGeneratedMetadata {
+            reasoning: true,
+            xhigh_effort: Some("max"),
+            context_window: 1_000_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+        }),
+        "claude-opus-4-7" => Some(AnthropicGeneratedMetadata {
+            reasoning: true,
+            xhigh_effort: Some("xhigh"),
+            context_window: 1_000_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+        }),
+        "claude-sonnet-4-0"
+        | "claude-sonnet-4-20250514"
+        | "claude-sonnet-4-5"
+        | "claude-sonnet-4-5-20250929" => Some(AnthropicGeneratedMetadata {
+            reasoning: true,
+            xhigh_effort: None,
+            context_window: 200_000,
+            max_tokens: 64_000,
+            cost: ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        }),
+        "claude-sonnet-4-6" => Some(AnthropicGeneratedMetadata {
+            reasoning: true,
+            xhigh_effort: None,
+            context_window: 1_000_000,
+            max_tokens: 64_000,
+            cost: ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        }),
+        _ => None,
     }
 }
 
@@ -1229,6 +1428,27 @@ fn o_series_generated_metadata(model_id: &str) -> Option<OSeriesGeneratedMetadat
         }),
         _ => None,
     }
+}
+
+fn apply_anthropic_generated_metadata(model: &mut Model) -> bool {
+    let Some(metadata) = anthropic_generated_metadata(model.id.as_str()) else {
+        return false;
+    };
+    model.api = "anthropic-messages".to_owned();
+    model.base_url = "https://api.anthropic.com".to_owned();
+    model.reasoning = metadata.reasoning;
+    model.thinking_level_map.clear();
+    if let Some(effort) = metadata.xhigh_effort {
+        model
+            .thinking_level_map
+            .insert(ThinkingLevel::XHigh, Some(effort.to_owned()));
+    }
+    model.input = vec![crate::types::InputKind::Text];
+    ensure_image_input(model);
+    model.context_window = metadata.context_window;
+    model.max_tokens = metadata.max_tokens;
+    model.cost = metadata.cost;
+    true
 }
 
 fn apply_openai_gpt4_generated_metadata(model: &mut Model) -> bool {

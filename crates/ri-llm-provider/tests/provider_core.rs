@@ -469,6 +469,359 @@ fn supports_xhigh_model_metadata_port() {
 }
 
 #[test]
+fn anthropic_model_metadata_matches_generated_catalog() {
+    let model_ids = get_models("anthropic")
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+
+    for (model_id, reasoning, xhigh_effort, context_window, max_tokens, cost) in [
+        (
+            "claude-3-5-haiku-20241022",
+            false,
+            None,
+            200_000,
+            8_192,
+            ModelCost {
+                input: 0.8,
+                output: 4.0,
+                cache_read: 0.08,
+                cache_write: 1.0,
+            },
+        ),
+        (
+            "claude-3-5-haiku-latest",
+            false,
+            None,
+            200_000,
+            8_192,
+            ModelCost {
+                input: 0.8,
+                output: 4.0,
+                cache_read: 0.08,
+                cache_write: 1.0,
+            },
+        ),
+        (
+            "claude-3-5-sonnet-20240620",
+            false,
+            None,
+            200_000,
+            8_192,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        ),
+        (
+            "claude-3-5-sonnet-20241022",
+            false,
+            None,
+            200_000,
+            8_192,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        ),
+        (
+            "claude-3-7-sonnet-20250219",
+            true,
+            None,
+            200_000,
+            64_000,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        ),
+        (
+            "claude-3-haiku-20240307",
+            false,
+            None,
+            200_000,
+            4_096,
+            ModelCost {
+                input: 0.25,
+                output: 1.25,
+                cache_read: 0.03,
+                cache_write: 0.3,
+            },
+        ),
+        (
+            "claude-3-opus-20240229",
+            false,
+            None,
+            200_000,
+            4_096,
+            ModelCost {
+                input: 15.0,
+                output: 75.0,
+                cache_read: 1.5,
+                cache_write: 18.75,
+            },
+        ),
+        (
+            "claude-3-sonnet-20240229",
+            false,
+            None,
+            200_000,
+            4_096,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 0.3,
+            },
+        ),
+        (
+            "claude-haiku-4-5",
+            true,
+            None,
+            200_000,
+            64_000,
+            ModelCost {
+                input: 1.0,
+                output: 5.0,
+                cache_read: 0.1,
+                cache_write: 1.25,
+            },
+        ),
+        (
+            "claude-haiku-4-5-20251001",
+            true,
+            None,
+            200_000,
+            64_000,
+            ModelCost {
+                input: 1.0,
+                output: 5.0,
+                cache_read: 0.1,
+                cache_write: 1.25,
+            },
+        ),
+        (
+            "claude-opus-4-0",
+            true,
+            None,
+            200_000,
+            32_000,
+            ModelCost {
+                input: 15.0,
+                output: 75.0,
+                cache_read: 1.5,
+                cache_write: 18.75,
+            },
+        ),
+        (
+            "claude-opus-4-1",
+            true,
+            None,
+            200_000,
+            32_000,
+            ModelCost {
+                input: 15.0,
+                output: 75.0,
+                cache_read: 1.5,
+                cache_write: 18.75,
+            },
+        ),
+        (
+            "claude-opus-4-1-20250805",
+            true,
+            None,
+            200_000,
+            32_000,
+            ModelCost {
+                input: 15.0,
+                output: 75.0,
+                cache_read: 1.5,
+                cache_write: 18.75,
+            },
+        ),
+        (
+            "claude-opus-4-20250514",
+            true,
+            None,
+            200_000,
+            32_000,
+            ModelCost {
+                input: 15.0,
+                output: 75.0,
+                cache_read: 1.5,
+                cache_write: 18.75,
+            },
+        ),
+        (
+            "claude-opus-4-5",
+            true,
+            None,
+            200_000,
+            64_000,
+            ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+        ),
+        (
+            "claude-opus-4-5-20251101",
+            true,
+            None,
+            200_000,
+            64_000,
+            ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+        ),
+        (
+            "claude-opus-4-6",
+            true,
+            Some("max"),
+            1_000_000,
+            128_000,
+            ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+        ),
+        (
+            "claude-opus-4-7",
+            true,
+            Some("xhigh"),
+            1_000_000,
+            128_000,
+            ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+        ),
+        (
+            "claude-sonnet-4-0",
+            true,
+            None,
+            200_000,
+            64_000,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        ),
+        (
+            "claude-sonnet-4-20250514",
+            true,
+            None,
+            200_000,
+            64_000,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        ),
+        (
+            "claude-sonnet-4-5",
+            true,
+            None,
+            200_000,
+            64_000,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        ),
+        (
+            "claude-sonnet-4-5-20250929",
+            true,
+            None,
+            200_000,
+            64_000,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        ),
+        (
+            "claude-sonnet-4-6",
+            true,
+            None,
+            1_000_000,
+            64_000,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+            },
+        ),
+    ] {
+        assert!(
+            model_ids.contains(&model_id.to_owned()),
+            "Anthropic catalog should expose {model_id}: {model_ids:?}"
+        );
+        let model = get_model("anthropic", model_id).expect(model_id);
+        assert_eq!(model.api, "anthropic-messages", "{model_id} api");
+        assert_eq!(model.provider, "anthropic", "{model_id} provider");
+        assert_eq!(model.base_url, "https://api.anthropic.com");
+        assert_eq!(model.reasoning, reasoning, "{model_id} reasoning");
+        assert_eq!(model.input, vec![InputKind::Text, InputKind::Image]);
+        assert_eq!(model.context_window, context_window, "{model_id} context");
+        assert_eq!(model.max_tokens, max_tokens, "{model_id} output");
+        assert_eq!(model.cost, cost, "{model_id} cost");
+
+        if let Some(effort) = xhigh_effort {
+            assert_eq!(
+                model.thinking_level_map,
+                BTreeMap::from([(ThinkingLevel::XHigh, Some(effort.to_owned()))]),
+                "{model_id} thinking map"
+            );
+        } else {
+            assert!(
+                model.thinking_level_map.is_empty(),
+                "{model_id} thinking map"
+            );
+        }
+    }
+
+    let mut usage = Usage {
+        input: 1_000_000,
+        output: 1_000_000,
+        cache_read: 1_000_000,
+        cache_write: 1_000_000,
+        total_tokens: 4_000_000,
+        cost: UsageCost::default(),
+    };
+    let model = get_model("anthropic", "claude-3-sonnet-20240229").expect("claude 3 sonnet");
+    let cost = calculate_cost(&model, &mut usage);
+    assert_cost_close("claude 3 sonnet input cost", cost.input, 3.0);
+    assert_cost_close("claude 3 sonnet output cost", cost.output, 15.0);
+    assert_cost_close("claude 3 sonnet cache read cost", cost.cache_read, 0.3);
+    assert_cost_close("claude 3 sonnet cache write cost", cost.cache_write, 0.3);
+    assert_cost_close("claude 3 sonnet total cost", cost.total, 18.6);
+}
+
+#[test]
 fn openai_codex_model_metadata_matches_generated_catalog() {
     let models = get_models("openai-codex");
     assert_eq!(

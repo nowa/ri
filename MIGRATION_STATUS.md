@@ -41,6 +41,8 @@ counterparts that pass.
     source-style provider `reasoningEffort` / Bedrock `reasoning` option
     preservation through Rust `StreamOptions`.
   - Built-in model registry seed and thinking-level helpers, including
+    Anthropic generated-catalog metadata parity for the current Claude
+    3/3.5/3.7/4.x model slice, plus
     OpenAI and Azure OpenAI Responses generated-catalog metadata parity for the
     current GPT-4/GPT-4.1/GPT-4o, GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5,
     and o-series model slices, plus OpenAI Codex generated-catalog metadata
@@ -431,10 +433,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1191 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1192 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 984 tests: 2 library tests, 351 `provider_core` tests, and
-  631 `provider_live` tests. This is 263 above the 721 direct simple source
+- `ri-llm-provider`: 985 tests: 2 library tests, 352 `provider_core` tests, and
+  631 `provider_live` tests. This is 264 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -758,6 +760,19 @@ This migration is not complete.
   `cargo test -p ri-llm-provider --test provider_core azure_openai -- --test-threads=1`,
   `cargo fmt --check`, `git diff --check`, and
   `cargo test --workspace -- --list` passed; the list command enumerated 1191
+  tests.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` Anthropic catalog metadata: Rust now exposes the
+  generated Claude 3/3.5/3.7/4.x model slice, maps the source Anthropic API/base
+  URL shape, explicit reasoning flags, text+image input capability,
+  context/output windows, Opus 4.6/4.7 xhigh effort map, and non-zero usage
+  cost table:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core anthropic_model_metadata_matches_generated_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core supports_xhigh_model_metadata_port -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core anthropic_ -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed; the list command enumerated 1192
   tests.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
