@@ -25,6 +25,7 @@ fn event_name(event: &AgentEvent) -> &'static str {
         AgentEvent::MessageUpdate { .. } => "message_update",
         AgentEvent::MessageEnd { .. } => "message_end",
         AgentEvent::ToolExecutionStart { .. } => "tool_execution_start",
+        AgentEvent::ToolExecutionUpdate { .. } => "tool_execution_update",
         AgentEvent::ToolExecutionEnd { .. } => "tool_execution_end",
     }
 }
@@ -116,6 +117,38 @@ impl AgentToolExecutor for FailingExecutor {
         _params: Value,
     ) -> Result<AgentToolResult, String> {
         Err("boom".to_owned())
+    }
+}
+
+struct UpdatingExecutor {
+    update_observed_before_return: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl AgentToolExecutor for UpdatingExecutor {
+    async fn execute(
+        &self,
+        _tool_call_id: &str,
+        _params: Value,
+    ) -> Result<AgentToolResult, String> {
+        panic!("agent loop should call execute_with_updates")
+    }
+
+    async fn execute_with_updates(
+        &self,
+        _tool_call_id: &str,
+        params: Value,
+        on_update: AgentToolUpdateCallback,
+    ) -> Result<AgentToolResult, String> {
+        let value = params
+            .get("value")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        on_update(AgentToolResult::text(format!("partial: {value}"))).await;
+        self.update_observed_before_return
+            .store(true, Ordering::SeqCst);
+        Ok(AgentToolResult::text(format!("final: {value}")))
     }
 }
 
@@ -742,6 +775,106 @@ async fn agent_loop_executes_tool_calls_and_appends_results() {
     assert_eq!(
         tool_result_message_events,
         vec!["message_start", "message_end"]
+    );
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_loop_emits_tool_execution_update_from_tool_callbacks() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call(
+                "progress",
+                json!({ "value": "abc" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(Map::new),
+                Some("tool-1".to_owned()),
+            ),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+
+    let update_observed_before_return = Arc::new(AtomicBool::new(false));
+    let tool = AgentTool {
+        definition: Tool {
+            name: "progress".to_owned(),
+            description: "Progress tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Progress".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(UpdatingExecutor {
+            update_observed_before_return: update_observed_before_return.clone(),
+        }),
+    };
+
+    let mut context = context_with_model(&registration.get_model());
+    context.tools.push(tool);
+    let (messages, events) = agent_loop_prompt(
+        context,
+        "run progress tool",
+        AgentLoopConfig::new(registration.get_model()),
+    )
+    .await
+    .expect("loop");
+
+    assert!(update_observed_before_return.load(Ordering::SeqCst));
+    assert_eq!(text_of(&messages[2]), Some("final: abc"));
+    assert_eq!(text_of(&messages[3]), Some("done"));
+
+    let tool_events = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                AgentEvent::ToolExecutionStart { .. }
+                    | AgentEvent::ToolExecutionUpdate { .. }
+                    | AgentEvent::ToolExecutionEnd { .. }
+            )
+        })
+        .map(event_name)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tool_events,
+        vec![
+            "tool_execution_start",
+            "tool_execution_update",
+            "tool_execution_end"
+        ]
+    );
+
+    let update = events.iter().find_map(|event| match event {
+        AgentEvent::ToolExecutionUpdate {
+            tool_call_id,
+            tool_name,
+            args,
+            partial_result,
+        } => Some((tool_call_id, tool_name, args, partial_result)),
+        _ => None,
+    });
+    let Some((tool_call_id, tool_name, args, partial_result)) = update else {
+        panic!("expected tool execution update");
+    };
+    assert_eq!(tool_call_id, "tool-1");
+    assert_eq!(tool_name, "progress");
+    assert_eq!(args.get("value").and_then(Value::as_str), Some("abc"));
+    assert_eq!(
+        partial_result.content,
+        vec![AgentToolResultContent::Text(TextContent::new(
+            "partial: abc"
+        ))]
     );
     registration.unregister();
 }

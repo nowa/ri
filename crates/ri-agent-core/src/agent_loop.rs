@@ -2,15 +2,15 @@ use crate::types::{
     AgentContext, AgentContextTransformer, AgentEvent, AgentEventSink, AgentLoopTurnUpdate,
     AgentMessage, AgentMessageConverter, AgentNextTurnContext, AgentNextTurnPreparer,
     AgentQueuedMessageProvider, AgentShouldStopAfterTurn, AgentStreamProvider, AgentToolCallHook,
-    AgentToolCallHookContext, AgentToolResultContent, AgentToolResultHook,
-    AgentToolResultHookContext, ToolExecutionMode, assistant_tool_calls,
+    AgentToolCallHookContext, AgentToolResult, AgentToolResultContent, AgentToolResultHook,
+    AgentToolResultHookContext, AgentToolUpdateCallback, ToolExecutionMode, assistant_tool_calls,
 };
 use futures::{StreamExt, stream::FuturesUnordered};
 use ri_llm_provider::{
     AssistantMessage, Model, SimpleStreamOptions, StopReason, ToolResultContent, ToolResultMessage,
     Usage, now_millis, stream_simple,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
 pub struct AgentLoopConfig {
@@ -74,6 +74,7 @@ struct ToolExecutionOutcome {
     tool_name: String,
     result: crate::types::AgentToolResult,
     is_error: bool,
+    update_events: Vec<AgentEvent>,
 }
 
 impl std::fmt::Debug for dyn AgentToolCallHook {
@@ -653,6 +654,7 @@ async fn run_one_turn(
                 .iter()
                 .all(|outcome| outcome.result.terminate);
         for outcome in &execution_outcomes {
+            events.extend(outcome.update_events.iter().cloned());
             record_event(
                 events,
                 config,
@@ -721,8 +723,14 @@ async fn execute_tool_calls(
     if !use_parallel {
         let mut outcomes = Vec::new();
         for call in prepared_calls {
-            outcomes
-                .push(execute_prepared_tool_call(call, config.tool_result_hooks.clone()).await?);
+            outcomes.push(
+                execute_prepared_tool_call(
+                    call,
+                    config.tool_result_hooks.clone(),
+                    config.event_sink.clone(),
+                )
+                .await?,
+            );
         }
         return Ok(outcomes);
     }
@@ -730,7 +738,8 @@ async fn execute_tool_calls(
     let mut pending = FuturesUnordered::new();
     for call in prepared_calls {
         let hooks = config.tool_result_hooks.clone();
-        pending.push(async move { execute_prepared_tool_call(call, hooks).await });
+        let event_sink = config.event_sink.clone();
+        pending.push(async move { execute_prepared_tool_call(call, hooks, event_sink).await });
     }
     let mut outcomes = Vec::new();
     while let Some(outcome) = pending.next().await {
@@ -742,13 +751,38 @@ async fn execute_tool_calls(
 async fn execute_prepared_tool_call(
     call: PreparedToolCall,
     tool_result_hooks: Vec<Arc<dyn AgentToolResultHook>>,
+    event_sink: Option<Arc<dyn AgentEventSink>>,
 ) -> Result<ToolExecutionOutcome, String> {
     let result_input = call.args.clone();
+    let update_args = call.args.clone();
+    let update_tool_call_id = call.tool_call_id.clone();
+    let update_tool_name = call.tool_name.clone();
+    let update_events = Arc::new(Mutex::new(Vec::new()));
+    let update_events_ref = update_events.clone();
+    let on_update: AgentToolUpdateCallback = Arc::new(move |partial_result: AgentToolResult| {
+        let event_sink = event_sink.clone();
+        let update_events = update_events_ref.clone();
+        let event = AgentEvent::ToolExecutionUpdate {
+            tool_call_id: update_tool_call_id.clone(),
+            tool_name: update_tool_name.clone(),
+            args: update_args.clone(),
+            partial_result,
+        };
+        Box::pin(async move {
+            if let Some(sink) = event_sink {
+                sink.on_event(&event).await;
+            }
+            update_events
+                .lock()
+                .expect("tool update events")
+                .push(event);
+        })
+    });
     let mut is_error = false;
     let mut result = match call
         .tool
         .executor
-        .execute(&call.tool_call_id, call.args)
+        .execute_with_updates(&call.tool_call_id, call.args, on_update)
         .await
     {
         Ok(result) => result,
@@ -782,6 +816,7 @@ async fn execute_prepared_tool_call(
         tool_name: call.tool_name,
         result,
         is_error,
+        update_events: update_events.lock().expect("tool update events").clone(),
     })
 }
 
@@ -797,6 +832,7 @@ fn error_tool_execution_outcome(
         tool_name,
         result: error_tool_result(error),
         is_error: true,
+        update_events: Vec::new(),
     }
 }
 

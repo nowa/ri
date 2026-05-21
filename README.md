@@ -30,9 +30,9 @@ The test suite covers provider metadata, payload generation, streaming parsers,
 SSE and eventstream behavior, abort handling, response IDs, usage accounting,
 message transforms, simple stream option defaults, tool calling,
 reasoning/thinking controls, agent loop control flow, stateful agents, custom
-stream providers, proxy streaming, tool execution, compaction, resources,
-session storage, bash execution session messages, local execution environment
-behavior, and harness utilities.
+stream providers, proxy streaming, tool execution with partial update events,
+compaction, resources, session storage, bash execution session messages, local
+execution environment behavior, and harness utilities.
 
 Live provider E2E tests are not run by default. Provider behavior is covered
 locally through mock HTTP servers, payload assertions, parser tests, and stream
@@ -98,7 +98,8 @@ credentials, local model services where applicable, and manual OAuth flows.
 `ri-agent-core` includes:
 
 - Stateful `Agent` and lower-level `agent_loop` APIs.
-- Event streaming for agent, turn, message, and tool execution events.
+- Event streaming for agent, turn, message, and tool execution events, including
+  partial tool execution updates.
 - Parallel and sequential tool execution.
 - Tool call and tool result hooks.
 - Steering and follow-up queues.
@@ -217,7 +218,7 @@ Agent runs emit events for:
 - `AgentStart` / `AgentEnd`
 - `TurnStart` / `TurnEnd`
 - `MessageStart` / `MessageUpdate` / `MessageEnd`
-- `ToolExecutionStart` / `ToolExecutionEnd`
+- `ToolExecutionStart` / `ToolExecutionUpdate` / `ToolExecutionEnd`
 
 The `Agent` updates its state from these events and notifies sync or async
 subscribers.

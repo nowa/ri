@@ -156,6 +156,7 @@ fn reduce_agent_state(state: &mut AgentState, event: &AgentEvent) {
         AgentEvent::ToolExecutionStart { tool_call_id, .. } => {
             state.pending_tool_calls.insert(tool_call_id.clone());
         }
+        AgentEvent::ToolExecutionUpdate { .. } => {}
         AgentEvent::ToolExecutionEnd { tool_call_id, .. } => {
             state.pending_tool_calls.remove(tool_call_id);
         }

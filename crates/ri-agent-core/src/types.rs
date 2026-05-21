@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use ri_llm_provider::{
     AssistantMessage, AssistantMessageEvent, AssistantMessageEventStream, Context, ImageContent,
     Message, Model, SimpleStreamOptions, TextContent, ThinkingLevel, Tool, ToolCall,
@@ -155,7 +156,20 @@ impl AgentToolResult {
 #[async_trait]
 pub trait AgentToolExecutor: Send + Sync {
     async fn execute(&self, tool_call_id: &str, params: Value) -> Result<AgentToolResult, String>;
+
+    async fn execute_with_updates(
+        &self,
+        tool_call_id: &str,
+        params: Value,
+        on_update: AgentToolUpdateCallback,
+    ) -> Result<AgentToolResult, String> {
+        let _ = on_update;
+        self.execute(tool_call_id, params).await
+    }
 }
+
+pub type AgentToolUpdateCallback =
+    Arc<dyn Fn(AgentToolResult) -> BoxFuture<'static, ()> + Send + Sync + 'static>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -336,6 +350,12 @@ pub enum AgentEvent {
         tool_call_id: String,
         tool_name: String,
         args: Value,
+    },
+    ToolExecutionUpdate {
+        tool_call_id: String,
+        tool_name: String,
+        args: Value,
+        partial_result: AgentToolResult,
     },
     ToolExecutionEnd {
         tool_call_id: String,
