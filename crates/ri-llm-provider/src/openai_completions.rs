@@ -35,7 +35,15 @@ pub fn build_openai_completions_payload(
     let mut payload = json!({
         "model": model.id,
         "messages": messages,
+        "stream": true,
     });
+
+    if supports_usage_in_streaming(model) {
+        payload["stream_options"] = json!({ "include_usage": true });
+    }
+    if supports_store(model) {
+        payload["store"] = Value::Bool(false);
+    }
 
     if !context.tools.is_empty() {
         payload["tools"] = Value::Array(
@@ -49,7 +57,7 @@ pub fn build_openai_completions_payload(
         payload["tools"] = Value::Array(Vec::new());
     }
 
-    if let Some(tool_choice) = options.tool_choice {
+    if let Some(tool_choice) = options.tool_choice.filter(|value| !value.is_empty()) {
         payload["tool_choice"] = Value::String(tool_choice);
     }
 
@@ -62,7 +70,7 @@ pub fn build_openai_completions_payload(
         payload["prompt_cache_retention"] = Value::String("24h".to_owned());
     }
 
-    if let Some(max_tokens) = options.max_tokens {
+    if let Some(max_tokens) = options.max_tokens.filter(|value| *value > 0) {
         if max_tokens_field(model) == Some("max_tokens") {
             payload["max_tokens"] = json!(max_tokens);
         } else {
@@ -360,7 +368,7 @@ pub fn build_openai_completions_default_headers_with_context(
     {
         headers.extend(build_copilot_dynamic_headers(context));
     }
-    if let Some(session_id) = session_id
+    if let Some(session_id) = session_id.filter(|value| !value.is_empty())
         && cache_retention != CacheRetention::None
         && send_session_affinity_headers(model)
     {
@@ -913,6 +921,54 @@ fn supports_strict_mode(model: &Model) -> bool {
         .and_then(Value::as_bool)
         .map(|enabled| !enabled)
         .unwrap_or(false)
+}
+
+fn supports_usage_in_streaming(model: &Model) -> bool {
+    model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("supportsUsageInStreaming"))
+        .and_then(Value::as_bool)
+        != Some(false)
+}
+
+fn supports_store(model: &Model) -> bool {
+    model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("supportsStore"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| !is_nonstandard_openai_completions_model(model))
+}
+
+fn is_nonstandard_openai_completions_model(model: &Model) -> bool {
+    let provider = model.provider.as_str();
+    let base_url = model.base_url.as_str();
+    let is_together = provider == "together"
+        || base_url.contains("api.together.ai")
+        || base_url.contains("api.together.xyz");
+    let is_zai = provider == "zai" || base_url.contains("api.z.ai");
+    let is_moonshot = provider == "moonshotai"
+        || provider == "moonshotai-cn"
+        || base_url.contains("api.moonshot.");
+    let is_cloudflare_workers_ai =
+        provider == "cloudflare-workers-ai" || base_url.contains("api.cloudflare.com");
+    let is_cloudflare_ai_gateway =
+        provider == "cloudflare-ai-gateway" || base_url.contains("gateway.ai.cloudflare.com");
+
+    provider == "cerebras"
+        || base_url.contains("cerebras.ai")
+        || provider == "xai"
+        || base_url.contains("api.x.ai")
+        || is_together
+        || base_url.contains("chutes.ai")
+        || base_url.contains("deepseek.com")
+        || is_zai
+        || is_moonshot
+        || provider == "opencode"
+        || base_url.contains("opencode.ai")
+        || is_cloudflare_workers_ai
+        || is_cloudflare_ai_gateway
 }
 
 fn uses_anthropic_cache_control(model: &Model) -> bool {

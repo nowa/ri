@@ -10353,6 +10353,9 @@ fn openai_completions_cloudflare_gateway_compat_uses_conservative_payload_and_he
     );
 
     assert_eq!(payload["messages"][0]["role"], "system");
+    assert_eq!(payload["stream"], true);
+    assert_eq!(payload["stream_options"], json!({ "include_usage": true }));
+    assert!(payload.get("store").is_none());
     assert_eq!(payload["max_tokens"], 64);
     assert!(payload.get("max_completion_tokens").is_none());
     assert!(payload.get("reasoning_effort").is_none());
@@ -10387,6 +10390,28 @@ fn openai_completions_cloudflare_gateway_compat_uses_conservative_payload_and_he
     assert!(headers.get("session_id").is_none());
     assert!(headers.get("x-client-request-id").is_none());
     assert!(headers.get("x-session-affinity").is_none());
+}
+
+#[test]
+fn openai_completions_payload_sets_stream_usage_store_and_omits_falsey_options() {
+    let mut model = get_model("openai", "gpt-4o-mini").expect("model");
+    model.api = "openai-completions".to_owned();
+    let payload = build_openai_completions_payload(
+        &model,
+        &user_context("hi"),
+        OpenAICompletionsPayloadOptions {
+            max_tokens: Some(0),
+            tool_choice: Some(String::new()),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(payload["stream"], true);
+    assert_eq!(payload["stream_options"], json!({ "include_usage": true }));
+    assert_eq!(payload["store"], false);
+    assert!(payload.get("max_tokens").is_none());
+    assert!(payload.get("max_completion_tokens").is_none());
+    assert!(payload.get("tool_choice").is_none());
 }
 
 #[test]
@@ -10825,6 +10850,16 @@ fn openai_completions_default_headers_apply_session_affinity_and_overrides() {
         &model,
         Some("session-affinity"),
         CacheRetention::None,
+        &BTreeMap::new(),
+    );
+    assert!(headers.get("session_id").is_none());
+    assert!(headers.get("x-client-request-id").is_none());
+    assert!(headers.get("x-session-affinity").is_none());
+
+    let headers = build_openai_completions_default_headers(
+        &model,
+        Some(""),
+        CacheRetention::Short,
         &BTreeMap::new(),
     );
     assert!(headers.get("session_id").is_none());
