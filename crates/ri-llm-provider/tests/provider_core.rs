@@ -6684,6 +6684,61 @@ fn message_transform_copilot_openai_to_anthropic_downgrades_thinking_and_signatu
 }
 
 #[test]
+fn message_transform_same_model_keeps_only_truthy_empty_thinking_signatures() {
+    let target_model = Model::faux("openai-responses", "openai", "gpt-5");
+    let assistant = AssistantMessage {
+        content: vec![
+            AssistantContent::Thinking(ThinkingContent {
+                thinking: String::new(),
+                thinking_signature: Some(String::new()),
+                redacted: false,
+            }),
+            AssistantContent::Thinking(ThinkingContent {
+                thinking: String::new(),
+                thinking_signature: Some("reasoning".to_owned()),
+                redacted: false,
+            }),
+            AssistantContent::Thinking(ThinkingContent {
+                thinking: "visible".to_owned(),
+                thinking_signature: Some(String::new()),
+                redacted: false,
+            }),
+        ],
+        api: target_model.api.clone(),
+        provider: target_model.provider.clone(),
+        model: target_model.id.clone(),
+        response_model: None,
+        response_id: None,
+        diagnostics: Vec::new(),
+        usage: Usage::zero(),
+        stop_reason: StopReason::Stop,
+        error_message: None,
+        timestamp: 1,
+    };
+
+    let transformed = transform_messages(&[Message::Assistant(assistant)], &target_model, None);
+    let Message::Assistant(assistant) = &transformed[0] else {
+        panic!("assistant");
+    };
+    let thinking = assistant
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            AssistantContent::Thinking(thinking) => Some((
+                thinking.thinking.as_str(),
+                thinking.thinking_signature.as_deref(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        thinking,
+        vec![("", Some("reasoning")), ("visible", Some(""))]
+    );
+}
+
+#[test]
 fn message_transform_copilot_openai_to_anthropic_synthesizes_single_orphan_result() {
     let target_model =
         get_model("github-copilot", "claude-sonnet-4.6").expect("copilot claude target");

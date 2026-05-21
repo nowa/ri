@@ -112,7 +112,12 @@ fn transform_assistant_message(
                 if thinking.redacted {
                     return is_same_model.then_some(AssistantContent::Thinking(thinking));
                 }
-                if is_same_model && thinking.thinking_signature.is_some() {
+                if is_same_model
+                    && thinking
+                        .thinking_signature
+                        .as_deref()
+                        .is_some_and(|signature| !signature.is_empty())
+                {
                     return Some(AssistantContent::Thinking(thinking));
                 }
                 if thinking.thinking.trim().is_empty() {
