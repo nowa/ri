@@ -70,10 +70,10 @@ fn local_execution_env_reads_writes_lists_and_removes_files() {
     assert_eq!(entries[0].size, 5);
     assert!(entries[0].mtime_ms > 0);
 
-    assert!(env.exists("nested/child/file.txt"));
+    assert!(env.exists("nested/child/file.txt").expect("exists"));
     env.remove("nested/child/file.txt", RemoveOptions::default())
         .expect("remove");
-    assert!(!env.exists("nested/child/file.txt"));
+    assert!(!env.exists("nested/child/file.txt").expect("exists"));
 }
 
 #[cfg(unix)]
@@ -187,7 +187,7 @@ fn local_execution_env_returns_file_errors_for_missing_and_wrong_kinds() {
     let missing = env.file_info("missing.txt").expect_err("missing");
     assert_eq!(missing.code, FileErrorCode::NotFound);
     assert_eq!(missing.path, root.join("missing.txt").to_string_lossy());
-    assert!(!env.exists("missing.txt"));
+    assert!(!env.exists("missing.txt").expect("exists"));
 
     env.write_file("file.txt", b"hello").expect("file");
     let not_dir = env.list_dir("file.txt").expect_err("not dir");
@@ -244,7 +244,7 @@ fn local_execution_env_appends_creates_temps_and_removes_recursively() {
         },
     )
     .expect("recursive remove");
-    assert!(!env.exists("dir"));
+    assert!(!env.exists("dir").expect("exists"));
 
     assert_eq!(
         env.remove(
@@ -304,7 +304,7 @@ fn local_execution_env_honors_create_dir_recursive_false_and_remove_options() {
         },
     )
     .expect("recursive remove");
-    assert!(!env.exists("dir"));
+    assert!(!env.exists("dir").expect("exists"));
 
     let missing = env
         .remove(

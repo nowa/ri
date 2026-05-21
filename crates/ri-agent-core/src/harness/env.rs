@@ -372,8 +372,13 @@ impl LocalExecutionEnv {
             .map_err(|error| file_error_from_io(error, &path))
     }
 
-    pub fn exists(&self, path: impl AsRef<Path>) -> bool {
-        self.resolve(path).exists()
+    pub fn exists(&self, path: impl AsRef<Path>) -> Result<bool, FileError> {
+        let path = self.resolve(path);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(file_error_from_io(error, &path)),
+        }
     }
 
     pub fn remove(&self, path: impl AsRef<Path>, options: RemoveOptions) -> Result<(), FileError> {
