@@ -4,6 +4,7 @@ use crate::{
         OAuthLoginFlow, generate_pkce, parse_authorization_input, send_oauth_http_request,
         start_oauth_callback_server,
     },
+    openai_codex_responses::extract_openai_codex_account_id,
     types::now_millis,
 };
 use serde_json::Value;
@@ -338,11 +339,13 @@ pub fn parse_openai_codex_oauth_token_response(
         .get("expires_in")
         .and_then(Value::as_i64)
         .ok_or_else(|| "OpenAI Codex token response was missing expires_in".to_owned())?;
+    let account_id = extract_openai_codex_account_id(access)?;
 
     Ok(OAuthCredentials {
         refresh: refresh.to_owned(),
         access: access.to_owned(),
         expires: now_millis + expires_in * 1000 - 5 * 60 * 1000,
+        extra: BTreeMap::from([("accountId".to_owned(), Value::String(account_id))]),
     })
 }
 

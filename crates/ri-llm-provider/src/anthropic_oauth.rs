@@ -44,6 +44,7 @@ pub struct OAuthCredentials {
     pub refresh: String,
     pub access: String,
     pub expires: i64,
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -546,6 +547,7 @@ pub fn parse_anthropic_oauth_token_response(
         refresh: refresh.to_owned(),
         access: access.to_owned(),
         expires: now_millis + expires_in * 1000 - 5 * 60 * 1000,
+        extra: BTreeMap::new(),
     })
 }
 

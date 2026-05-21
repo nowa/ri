@@ -32,8 +32,8 @@ message transforms, simple stream option defaults, tool calling,
 reasoning/thinking controls, agent loop control flow, stateful agents, custom
 stream providers, proxy streaming, tool execution with partial update events,
 provider request/payload/response hooks, compaction, resources, session
-storage, bash execution session messages, local execution environment behavior,
-and harness utilities.
+storage, OAuth credential metadata, bash execution session messages, local
+execution environment behavior, and harness utilities.
 
 Live provider E2E tests are not run by default. Provider behavior is covered
 locally through mock HTTP servers, payload assertions, parser tests, and stream
@@ -96,7 +96,9 @@ credentials, local model services where applicable, and manual OAuth flows.
 - GitHub Copilot dynamic headers for user/agent initiation and image-capable
   requests across supported OpenAI/Anthropic-compatible paths.
 - OAuth helpers for providers such as OpenAI Codex, Anthropic, GitHub Copilot,
-  and Google Vertex, including local callback pages for browser-based flows.
+  and Google Vertex, including source display metadata, local callback pages
+  for browser-based flows, and OpenAI Codex `accountId` credential
+  preservation.
 
 `ri-agent-core` includes:
 

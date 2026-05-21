@@ -130,7 +130,9 @@ counterparts that pass.
   - OpenAI Codex OAuth helpers for authorization URL construction,
     local callback server/state validation, callback-driven login flow,
     form-encoded token/refresh requests, refresh failure message formatting,
-    and proxy-aware async authorization-code/refresh token exchange primitives.
+    proxy-aware async authorization-code/refresh token exchange primitives,
+    ChatGPT JWT account-id validation, and source-style `accountId` credential
+    preservation.
   - OpenAI Codex Responses helpers for ChatGPT JWT account-id extraction,
     SSE/WebSocket headers, request-body construction, URL resolution, reasoning
     effort mapping, cached WebSocket input-delta continuation, SSE frame parsing
@@ -150,8 +152,9 @@ counterparts that pass.
     device-flow orchestration with refresh-token exchange, and post-login
     model-policy enable requests for known GitHub Copilot models.
   - OAuth provider metadata registry for built-in Anthropic, GitHub Copilot,
-    and OpenAI Codex providers, including callback-server markers and
-    source-style register/unregister/reset behavior. The live external
+    and OpenAI Codex providers, including Pi display names,
+    callback-server markers, and source-style register/unregister/reset
+    behavior. The live external
     requirements manifest is guarded against this built-in provider set so
     each built-in OAuth provider has a stored-token auth-storage requirement
     before its live paths can be considered covered.
@@ -160,7 +163,9 @@ counterparts that pass.
     private file permissions, unknown OAuth provider pre-refresh validation,
     Anthropic/OpenAI Codex callback and manual-input login-to-auth-storage
     round trips, and GitHub Copilot device-flow auth-storage round trips with
-    `enterpriseUrl` preservation.
+    `enterpriseUrl` preservation. OpenAI Codex OAuth writes source-style
+    `accountId` metadata when refreshed/login credentials contain a valid
+    ChatGPT account claim.
   - OpenAI Responses stream and message conversion helpers for function-call
     partial JSON cleanup, foreign tool-call ID normalization, tool-result
     images, prompt-cache fields, session-affinity headers, default reasoning
@@ -370,10 +375,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1135 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1136 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 934 tests: 1 library test, 302 `provider_core` tests, and
-  631 `provider_live` tests. This is 213 above the 721 direct simple source
+- `ri-llm-provider`: 935 tests: 1 library test, 303 `provider_core` tests, and
+  631 `provider_live` tests. This is 214 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -408,7 +413,7 @@ Current Rust tests: 1135 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1135-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1136-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -431,7 +436,25 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning Pi `providers/faux.ts`
+- Latest local verification on 2026-05-21 after aligning Pi
+  `utils/oauth/index.ts` and `utils/oauth/openai-codex.ts` behavior:
+  built-in OAuth provider display names now match the source registry,
+  OpenAI Codex OAuth token responses must contain a valid ChatGPT account
+  claim like the source login/refresh flow, and auth storage preserves the
+  source-style `accountId` credential metadata:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core oauth_provider_registry_matches_built_in_source_metadata -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth_token_response_requires_account_id_and_preserves_extra -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth_refresh_posts_form_and_maps_responses -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth_callback_login_persists_auth_storage_and_resolves_access_key -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth_manual_input_login_persists_auth_storage_and_resolves_access_key -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth_login_flow_callback_exchanges_code -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test -p ri-llm-provider -- --test-threads=1`,
+  `cargo test --workspace -- --list` (1136 tests enumerated),
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --test-threads=1` passed.
+- Previous local verification on 2026-05-21 after aligning Pi `providers/faux.ts`
   stream ordering: faux response hooks now run before queued response/factory
   processing with empty response headers, exhausted queues and factory panics
   emit a single terminal `error` event without an extra `start`, and
@@ -932,6 +955,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1135 Rust tests cover the
+- Test parity is not certified by raw count alone: 1136 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

@@ -100,7 +100,7 @@ impl From<OAuthCredentials> for StoredOAuthCredentials {
             refresh: credentials.refresh,
             access: credentials.access,
             expires: credentials.expires,
-            extra: BTreeMap::new(),
+            extra: credentials.extra,
         }
     }
 }
@@ -121,7 +121,7 @@ pub fn built_in_oauth_providers() -> Vec<OAuthProviderInfo> {
     vec![
         OAuthProviderInfo {
             id: "anthropic".to_owned(),
-            name: "Anthropic".to_owned(),
+            name: "Anthropic (Claude Pro/Max)".to_owned(),
             uses_callback_server: true,
         },
         OAuthProviderInfo {
@@ -131,7 +131,7 @@ pub fn built_in_oauth_providers() -> Vec<OAuthProviderInfo> {
         },
         OAuthProviderInfo {
             id: "openai-codex".to_owned(),
-            name: "OpenAI Codex".to_owned(),
+            name: "ChatGPT Plus/Pro (Codex Subscription)".to_owned(),
             uses_callback_server: true,
         },
     ]

@@ -2515,9 +2515,12 @@ async fn openai_codex_oauth_callback_server_rejects_state_mismatch_then_accepts_
 
 #[tokio::test]
 async fn openai_codex_oauth_login_flow_callback_exchanges_code() {
-    let (token_url, request_task) = mock_json_server(
-        r#"{"access_token":"codex-access","refresh_token":"codex-refresh","expires_in":7200}"#,
-    )
+    let codex_access = codex_test_token();
+    let (token_url, request_task) = mock_json_server(codex_oauth_token_response(
+        &codex_access,
+        "codex-refresh",
+        7200,
+    ))
     .await;
     let flow = start_openai_codex_oauth_login_flow_with_pkce(
         "verifier-value",
@@ -2550,9 +2553,10 @@ async fn openai_codex_oauth_login_flow_callback_exchanges_code() {
     let request = request_task.await.expect("token request");
 
     assert!(callback_response.starts_with("HTTP/1.1 200 OK"));
-    assert_eq!(credentials.access, "codex-access");
+    assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "codex-refresh");
     assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
     assert!(request.contains("grant_type=authorization_code"));
     assert!(request.contains("code=callback-code"));
     assert!(request.contains("code_verifier=verifier-value"));
@@ -2566,9 +2570,12 @@ async fn openai_codex_oauth_login_flow_callback_routes_token_exchange_through_pr
     let _lock = ENV_LOCK.lock().expect("env lock");
     let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
 
-    let (proxy_url, proxy_request_task) = mock_json_server(
-        r#"{"access_token":"proxy-codex-access","refresh_token":"proxy-codex-refresh","expires_in":7200}"#,
-    )
+    let codex_access = codex_test_token();
+    let (proxy_url, proxy_request_task) = mock_json_server(codex_oauth_token_response(
+        &codex_access,
+        "proxy-codex-refresh",
+        7200,
+    ))
     .await;
     set_env("HTTP_PROXY", &proxy_url);
     set_env("NO_PROXY", "127.0.0.1,localhost");
@@ -2596,9 +2603,10 @@ async fn openai_codex_oauth_login_flow_callback_routes_token_exchange_through_pr
     let proxy_request = proxy_request_task.await.expect("proxy request task");
 
     assert!(callback_response.starts_with("HTTP/1.1 200 OK"));
-    assert_eq!(credentials.access, "proxy-codex-access");
+    assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "proxy-codex-refresh");
     assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
     assert!(
         proxy_request.starts_with("POST http://auth.example/oauth/token HTTP/1.1"),
         "{proxy_request}"
@@ -2616,9 +2624,12 @@ async fn openai_codex_oauth_login_flow_manual_input_routes_token_exchange_throug
     let _lock = ENV_LOCK.lock().expect("env lock");
     let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
 
-    let (proxy_url, proxy_request_task) = mock_json_server(
-        r#"{"access_token":"proxy-codex-manual-access","refresh_token":"proxy-codex-manual-refresh","expires_in":7200}"#,
-    )
+    let codex_access = codex_test_token();
+    let (proxy_url, proxy_request_task) = mock_json_server(codex_oauth_token_response(
+        &codex_access,
+        "proxy-codex-manual-refresh",
+        7200,
+    ))
     .await;
     set_env("HTTP_PROXY", &proxy_url);
     set_env("NO_PROXY", "127.0.0.1,localhost");
@@ -2643,9 +2654,10 @@ async fn openai_codex_oauth_login_flow_manual_input_routes_token_exchange_throug
     .expect("credentials through proxy");
     let proxy_request = proxy_request_task.await.expect("proxy request task");
 
-    assert_eq!(credentials.access, "proxy-codex-manual-access");
+    assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "proxy-codex-manual-refresh");
     assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
     assert!(
         proxy_request.starts_with("POST http://auth.example/oauth/token HTTP/1.1"),
         "{proxy_request}"
@@ -2721,6 +2733,27 @@ fn openai_codex_oauth_refresh_failure_message_includes_status_and_body() {
     assert!(!message.contains("stderr"));
 }
 
+#[test]
+fn openai_codex_oauth_token_response_requires_account_id_and_preserves_extra() {
+    let codex_access = codex_test_token();
+    let credentials = parse_openai_codex_oauth_token_response(
+        &codex_oauth_token_response(&codex_access, "codex-refresh", 7200),
+        2_000_000,
+    )
+    .expect("token response with account id");
+
+    assert_eq!(credentials.access, codex_access);
+    assert_eq!(credentials.refresh, "codex-refresh");
+    assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
+
+    let error = parse_openai_codex_oauth_token_response(
+        r#"{"access_token":"not-a-jwt","refresh_token":"codex-refresh","expires_in":7200}"#,
+        2_000_000,
+    )
+    .expect_err("missing account id should fail like source OAuth login/refresh");
+    assert_eq!(error, "Failed to extract accountId from token");
+}
+
 struct FakeOAuthRefresher {
     result: StoredOAuthCredentials,
     calls: Mutex<Vec<(String, StoredOAuthCredentials, i64)>>,
@@ -2794,7 +2827,7 @@ fn oauth_provider_registry_matches_built_in_source_metadata() {
         get_oauth_provider("anthropic"),
         Some(OAuthProviderInfo {
             id: "anthropic".to_owned(),
-            name: "Anthropic".to_owned(),
+            name: "Anthropic (Claude Pro/Max)".to_owned(),
             uses_callback_server: true,
         })
     );
@@ -2810,7 +2843,7 @@ fn oauth_provider_registry_matches_built_in_source_metadata() {
         get_oauth_provider("openai-codex"),
         Some(OAuthProviderInfo {
             id: "openai-codex".to_owned(),
-            name: "OpenAI Codex".to_owned(),
+            name: "ChatGPT Plus/Pro (Codex Subscription)".to_owned(),
             uses_callback_server: true,
         })
     );
@@ -2853,7 +2886,7 @@ fn oauth_provider_registry_registers_custom_and_restores_built_ins() {
         get_oauth_provider("anthropic")
             .expect("restored anthropic")
             .name,
-        "Anthropic"
+        "Anthropic (Claude Pro/Max)"
     );
     assert_eq!(get_oauth_provider("custom-oauth"), None);
     reset_oauth_providers();
@@ -3071,9 +3104,12 @@ async fn anthropic_oauth_manual_input_login_persists_auth_storage_and_resolves_a
 
 #[tokio::test]
 async fn openai_codex_oauth_callback_login_persists_auth_storage_and_resolves_access_key() {
-    let (token_url, request_task) = mock_json_server(
-        r#"{"access_token":"codex-callback-access","refresh_token":"codex-callback-refresh","expires_in":7200}"#,
-    )
+    let codex_access = codex_test_token();
+    let (token_url, request_task) = mock_json_server(codex_oauth_token_response(
+        &codex_access,
+        "codex-callback-refresh",
+        7200,
+    ))
     .await;
     let path = auth_storage_test_path("openai-codex-login-roundtrip");
     let parent = path.parent().expect("auth storage parent");
@@ -3123,8 +3159,12 @@ async fn openai_codex_oauth_callback_login_persists_auth_storage_and_resolves_ac
     .expect("oauth result");
 
     assert!(callback_response.starts_with("HTTP/1.1 200 OK"));
-    assert_eq!(stored_credentials.access, "codex-callback-access");
+    assert_eq!(stored_credentials.access, codex_access);
     assert_eq!(stored_credentials.refresh, "codex-callback-refresh");
+    assert_eq!(
+        stored_credentials.extra.get("accountId"),
+        Some(&json!("acc_test"))
+    );
     assert_eq!(
         stored_credentials.expires,
         2_000_000 + 7200 * 1000 - 5 * 60 * 1000
@@ -3138,13 +3178,14 @@ async fn openai_codex_oauth_callback_login_persists_auth_storage_and_resolves_ac
     assert_eq!(saved_raw["openai-codex"]["type"], json!("oauth"));
     assert_eq!(
         saved_raw["openai-codex"]["access"],
-        json!("codex-callback-access")
+        json!(stored_credentials.access.as_str())
     );
     assert_eq!(
         saved_raw["openai-codex"]["refresh"],
         json!("codex-callback-refresh")
     );
-    assert_eq!(resolution.api_key, "codex-callback-access");
+    assert_eq!(saved_raw["openai-codex"]["accountId"], json!("acc_test"));
+    assert_eq!(resolution.api_key, stored_credentials.access);
     assert_eq!(resolution.credentials, Some(stored_credentials));
     assert!(!resolution.refreshed);
     assert!(refresher.calls.lock().expect("calls lock").is_empty());
@@ -3153,9 +3194,12 @@ async fn openai_codex_oauth_callback_login_persists_auth_storage_and_resolves_ac
 
 #[tokio::test]
 async fn openai_codex_oauth_manual_input_login_persists_auth_storage_and_resolves_access_key() {
-    let (token_url, request_task) = mock_json_server(
-        r#"{"access_token":"codex-manual-storage-access","refresh_token":"codex-manual-storage-refresh","expires_in":7200}"#,
-    )
+    let codex_access = codex_test_token();
+    let (token_url, request_task) = mock_json_server(codex_oauth_token_response(
+        &codex_access,
+        "codex-manual-storage-refresh",
+        7200,
+    ))
     .await;
     let path = auth_storage_test_path("openai-codex-manual-login-roundtrip");
     let parent = path.parent().expect("auth storage parent");
@@ -3206,8 +3250,12 @@ async fn openai_codex_oauth_manual_input_login_persists_auth_storage_and_resolve
     .expect("oauth resolution")
     .expect("oauth result");
 
-    assert_eq!(stored_credentials.access, "codex-manual-storage-access");
+    assert_eq!(stored_credentials.access, codex_access);
     assert_eq!(stored_credentials.refresh, "codex-manual-storage-refresh");
+    assert_eq!(
+        stored_credentials.extra.get("accountId"),
+        Some(&json!("acc_test"))
+    );
     assert_eq!(
         stored_credentials.expires,
         2_000_000 + 7200 * 1000 - 5 * 60 * 1000
@@ -3221,13 +3269,14 @@ async fn openai_codex_oauth_manual_input_login_persists_auth_storage_and_resolve
     assert_eq!(saved_raw["openai-codex"]["type"], json!("oauth"));
     assert_eq!(
         saved_raw["openai-codex"]["access"],
-        json!("codex-manual-storage-access")
+        json!(stored_credentials.access.as_str())
     );
     assert_eq!(
         saved_raw["openai-codex"]["refresh"],
         json!("codex-manual-storage-refresh")
     );
-    assert_eq!(resolution.api_key, "codex-manual-storage-access");
+    assert_eq!(saved_raw["openai-codex"]["accountId"], json!("acc_test"));
+    assert_eq!(resolution.api_key, stored_credentials.access);
     assert_eq!(resolution.credentials, Some(stored_credentials));
     assert!(!resolution.refreshed);
     assert!(refresher.calls.lock().expect("calls lock").is_empty());
@@ -3465,9 +3514,12 @@ async fn oauth_auth_storage_rejects_unknown_oauth_provider_before_refresh() {
 
 #[tokio::test]
 async fn openai_codex_oauth_refresh_posts_form_and_maps_responses() {
-    let (token_url, request_task) = mock_json_server(
-        r#"{"access_token":"codex-access","refresh_token":"codex-refresh","expires_in":7200}"#,
-    )
+    let codex_access = codex_test_token();
+    let (token_url, request_task) = mock_json_server(codex_oauth_token_response(
+        &codex_access,
+        "codex-refresh",
+        7200,
+    ))
     .await;
 
     let credentials =
@@ -3476,9 +3528,10 @@ async fn openai_codex_oauth_refresh_posts_form_and_maps_responses() {
             .expect("refresh token");
     let request = request_task.await.expect("request task");
 
-    assert_eq!(credentials.access, "codex-access");
+    assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "codex-refresh");
     assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
     assert!(request.starts_with("POST / HTTP/1.1"));
     assert!(
         request
@@ -3509,9 +3562,12 @@ async fn openai_codex_oauth_refresh_routes_token_request_through_resolved_proxy(
     let _lock = ENV_LOCK.lock().expect("env lock");
     let _guard = EnvGuard::clearing(PROXY_ENV_KEYS);
 
-    let (proxy_url, proxy_request_task) = mock_json_server(
-        r#"{"access_token":"proxy-codex-access","refresh_token":"proxy-codex-refresh","expires_in":7200}"#,
-    )
+    let codex_access = codex_test_token();
+    let (proxy_url, proxy_request_task) = mock_json_server(codex_oauth_token_response(
+        &codex_access,
+        "proxy-codex-refresh",
+        7200,
+    ))
     .await;
     set_env("HTTP_PROXY", &proxy_url);
     set_env("NO_PROXY", "127.0.0.1,localhost");
@@ -3525,9 +3581,10 @@ async fn openai_codex_oauth_refresh_routes_token_request_through_resolved_proxy(
     .expect("refresh token through proxy");
     let proxy_request = proxy_request_task.await.expect("proxy request task");
 
-    assert_eq!(credentials.access, "proxy-codex-access");
+    assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "proxy-codex-refresh");
     assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
     assert!(
         proxy_request.starts_with("POST http://auth.example/oauth/token HTTP/1.1"),
         "{proxy_request}"
@@ -9317,6 +9374,15 @@ const CODEX_TEST_JWT_PAYLOAD: &str =
 
 fn codex_test_token() -> String {
     format!("aaa.{CODEX_TEST_JWT_PAYLOAD}.bbb")
+}
+
+fn codex_oauth_token_response(access_token: &str, refresh_token: &str, expires_in: i64) -> String {
+    json!({
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_in": expires_in,
+    })
+    .to_string()
 }
 
 #[test]
@@ -16227,20 +16293,21 @@ fn server_websocket_text_frame(text: &str) -> Vec<u8> {
     frame
 }
 
-async fn mock_json_server(body: &'static str) -> (String, tokio::task::JoinHandle<String>) {
+async fn mock_json_server(body: impl Into<String>) -> (String, tokio::task::JoinHandle<String>) {
     mock_json_status_server(200, "OK", body).await
 }
 
 async fn mock_json_status_server(
     status: u16,
     reason: &'static str,
-    body: &'static str,
+    body: impl Into<String>,
 ) -> (String, tokio::task::JoinHandle<String>) {
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
 
+    let body = body.into();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind mock server");
