@@ -353,6 +353,30 @@ fn local_execution_env_executes_shell_commands_in_cwd_with_env() {
         .exec("printf ok", ExecOptions::default())
         .expect_err("missing shell");
     assert_eq!(error.code, FileErrorCode::ShellUnavailable);
+
+    #[cfg(unix)]
+    {
+        let custom_shell = root.join("custom-shell");
+        let arg_file = root.join("custom-shell-arg");
+        fs::write(
+            &custom_shell,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$1\" > '{}'\nexec /bin/sh \"$@\"\n",
+                arg_file.to_string_lossy()
+            ),
+        )
+        .expect("write custom shell");
+        fs::set_permissions(&custom_shell, fs::Permissions::from_mode(0o755))
+            .expect("custom shell permissions");
+
+        let custom = LocalExecutionEnv::new(&root).with_shell(&custom_shell);
+        let output = custom
+            .exec("printf custom", ExecOptions::default())
+            .expect("custom shell");
+
+        assert_eq!(output.stdout, "custom");
+        assert_eq!(fs::read_to_string(arg_file).expect("arg file"), "-c");
+    }
 }
 
 #[test]

@@ -351,8 +351,9 @@ counterparts that pass.
     diagnostics for name/description rules.
   - Local execution environment foundation for filesystem operations, shell
     execution with per-command working-directory overrides and shell
-    environment overrides, stdout/stderr callbacks, callback error propagation
-    that terminates running commands, command timeout/abort handling,
+    environment overrides, Pi-style `-c` shell invocation for default and
+    custom shells, stdout/stderr callbacks, callback error propagation that
+    terminates running commands, command timeout/abort handling,
     pre-aborted file-operation cancellation, symlink directory entries,
     text-line read limits, stable file error mapping, shell spawn error
     mapping, best-effort cleanup, and streaming shell-output capture/truncation
@@ -422,6 +423,17 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning Pi
+  `NodeExecutionEnv` shell invocation from `harness/env/nodejs.ts`: Rust
+  `LocalExecutionEnv::exec` now invokes configured shells with `-c` instead of
+  login-shell `-lc`, and the existing exec behavior test records the first
+  argument received by a custom shell:
+  `cargo test -p ri-agent-core --test execution_env local_execution_env_executes_shell_commands_in_cwd_with_env -- --exact`,
+  `cargo fmt`, `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1132 tests.
+- Previous local verification on 2026-05-21 after aligning Pi
   `ModelSelectEvent.source` from `harness/types.ts` and
   `AgentHarness.setModel` in `harness/agent-harness.ts`: Rust
   `ModelSelectEvent` now exposes a `ModelSelectSource` enum and emits

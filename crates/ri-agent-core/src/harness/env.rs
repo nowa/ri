@@ -452,7 +452,7 @@ impl LocalExecutionEnv {
             .unwrap_or_else(|| self.cwd.clone());
         let mut command_builder = Command::new(&self.shell_path);
         command_builder
-            .arg("-lc")
+            .arg("-c")
             .arg(command)
             .current_dir(cwd)
             .envs(self.shell_env.iter().cloned())
