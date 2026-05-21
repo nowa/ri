@@ -2163,6 +2163,98 @@ async fn agent_loop_forces_sequential_execution_when_tool_requires_it() {
 }
 
 #[tokio::test]
+async fn agent_loop_sequential_tool_execution_emits_each_result_before_next_start() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message(
+            vec![
+                faux_tool_call(
+                    "echo",
+                    json!({ "value": "first" })
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_else(Map::new),
+                    Some("tool-1".to_owned()),
+                ),
+                faux_tool_call(
+                    "echo",
+                    json!({ "value": "second" })
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_else(Map::new),
+                    Some("tool-2".to_owned()),
+                ),
+            ],
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let tool = AgentTool {
+        definition: Tool {
+            name: "echo".to_owned(),
+            description: "Echo tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Echo".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(EchoExecutor {
+            executed: executed.clone(),
+        }),
+    };
+    let mut context = context_with_model(&registration.get_model());
+    context.tools.push(tool);
+    let mut config = AgentLoopConfig::new(registration.get_model());
+    config.tool_execution = ToolExecutionMode::Sequential;
+
+    let (_messages, events) = agent_loop_prompt(context, "run tools", config)
+        .await
+        .expect("loop");
+
+    assert_eq!(
+        *executed.lock().expect("mutex"),
+        vec!["first".to_owned(), "second".to_owned()]
+    );
+    let sequence = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ToolExecutionStart { tool_call_id, .. } => {
+                Some(format!("start:{tool_call_id}"))
+            }
+            AgentEvent::ToolExecutionEnd { tool_call_id, .. } => {
+                Some(format!("end:{tool_call_id}"))
+            }
+            AgentEvent::MessageEnd {
+                message: AgentMessage::ToolResult(result),
+            } => Some(format!("message:{}", result.tool_call_id)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sequence,
+        vec![
+            "start:tool-1",
+            "end:tool-1",
+            "message:tool-1",
+            "start:tool-2",
+            "end:tool-2",
+            "message:tool-2",
+        ]
+    );
+    registration.unregister();
+}
+
+#[tokio::test]
 async fn agent_loop_forces_sequential_execution_when_any_tool_requires_it() {
     let registration = register_faux_provider(RegisterFauxProviderOptions::default());
     registration.set_responses(vec![

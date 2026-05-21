@@ -104,7 +104,8 @@ credentials, local model services where applicable, and manual OAuth flows.
 - Event streaming for agent, turn, message, and tool execution events, including
   partial tool execution updates with Pi-style raw tool-call arguments in
   start/update events.
-- Parallel and sequential tool execution.
+- Parallel and sequential tool execution, including per-call lifecycle and
+  tool-result event ordering for sequential batches.
 - Tool call and tool result hooks, including pre-execution blocking with error
   tool results, tool-result error-flag overrides, and assistant/context
   snapshots for low-level hook implementations.

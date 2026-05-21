@@ -81,6 +81,11 @@ struct ToolExecutionOutcome {
     update_events: Vec<AgentEvent>,
 }
 
+enum ToolCallPreparation {
+    Prepared(PreparedToolCall),
+    Immediate(ToolExecutionOutcome),
+}
+
 impl std::fmt::Debug for dyn AgentToolCallHook {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("AgentToolCallHook")
@@ -549,143 +554,72 @@ async fn run_one_turn(
     let mut tool_results = Vec::new();
     let mut terminate = false;
     if assistant.stop_reason == StopReason::ToolUse {
-        let mut prepared_calls = Vec::new();
-        let mut execution_outcomes = Vec::new();
-        'tool_calls: for (index, tool_call) in assistant_tool_calls(&assistant).enumerate() {
-            let event_args = serde_json::Value::Object(tool_call.arguments.clone());
-            record_event(
-                events,
-                config,
-                AgentEvent::ToolExecutionStart {
-                    tool_call_id: tool_call.id.clone(),
-                    tool_name: tool_call.name.clone(),
-                    args: event_args.clone(),
-                },
-            )
-            .await;
-            let mut args = serde_json::Value::Object(tool_call.arguments.clone());
-            let Some(tool) = context
-                .tools
-                .iter()
-                .find(|tool| tool.definition.name == tool_call.name)
-            else {
-                execution_outcomes.push(error_tool_execution_outcome(
-                    index,
-                    tool_call.id.clone(),
-                    tool_call.name.clone(),
-                    format!("Tool {} not found", tool_call.name),
-                ));
-                continue 'tool_calls;
-            };
-            if let Some(preparer) = &tool.argument_preparer {
-                match preparer.prepare_arguments(args.clone()) {
-                    Ok(prepared_args) => args = prepared_args,
-                    Err(error) => {
-                        execution_outcomes.push(error_tool_execution_outcome(
-                            index,
-                            tool_call.id.clone(),
-                            tool_call.name.clone(),
-                            error,
-                        ));
-                        continue 'tool_calls;
+        let tool_calls = assistant_tool_calls(&assistant)
+            .cloned()
+            .collect::<Vec<_>>();
+        if use_parallel_tool_execution(&tool_calls, context, config) {
+            let mut prepared_calls = Vec::new();
+            let mut execution_outcomes = Vec::new();
+            for (index, tool_call) in tool_calls.into_iter().enumerate() {
+                match prepare_tool_call(index, tool_call, &assistant, context, config, events).await
+                {
+                    ToolCallPreparation::Prepared(call) => prepared_calls.push(call),
+                    ToolCallPreparation::Immediate(outcome) => {
+                        record_tool_execution_end(events, config, &outcome).await;
+                        execution_outcomes.push(outcome);
                     }
                 }
             }
-            let mut hook_context = AgentToolCallHookContext {
-                tool_call_id: tool_call.id.clone(),
-                tool_name: tool_call.name.clone(),
-                input: args.clone(),
-                assistant_message: assistant.clone(),
-                tool_call: tool_call.clone(),
-                context: context.clone(),
-            };
-            for hook in &config.tool_call_hooks {
-                match hook.on_tool_call(hook_context.clone()).await {
-                    Ok(Some(result)) => {
-                        if let Some(replacement) = result.input {
-                            args = replacement;
-                            hook_context.input = args.clone();
-                        }
-                        if result.block {
-                            execution_outcomes.push(error_tool_execution_outcome(
-                                index,
-                                tool_call.id.clone(),
-                                tool_call.name.clone(),
-                                result
-                                    .reason
-                                    .unwrap_or_else(|| "Tool execution was blocked".to_owned()),
-                            ));
-                            continue 'tool_calls;
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        execution_outcomes.push(error_tool_execution_outcome(
-                            index,
-                            tool_call.id.clone(),
-                            tool_call.name.clone(),
-                            error,
-                        ));
-                        continue 'tool_calls;
-                    }
-                }
+
+            let prepared_outcomes = execute_tool_calls(prepared_calls, config, events).await?;
+            for outcome in &prepared_outcomes {
+                events.extend(outcome.update_events.iter().cloned());
+                record_tool_execution_end(events, config, outcome).await;
             }
-            prepared_calls.push(PreparedToolCall {
-                index,
-                tool_call_id: tool_call.id.clone(),
-                tool_name: tool_call.name.clone(),
-                args,
-                event_args,
-                assistant_message: assistant.clone(),
-                tool_call: tool_call.clone(),
-                context: context.clone(),
-                tool: tool.clone(),
-            });
-        }
+            execution_outcomes.extend(prepared_outcomes);
+            terminate |= should_terminate_tool_batch(&execution_outcomes);
 
-        execution_outcomes.extend(execute_tool_calls(prepared_calls, config, events).await?);
-        terminate |= !execution_outcomes.is_empty()
-            && execution_outcomes
-                .iter()
-                .all(|outcome| outcome.result.terminate);
-        for outcome in &execution_outcomes {
-            events.extend(outcome.update_events.iter().cloned());
-            record_event(
-                events,
-                config,
-                AgentEvent::ToolExecutionEnd {
-                    tool_call_id: outcome.tool_call_id.clone(),
-                    tool_name: outcome.tool_name.clone(),
-                    result: outcome.result.clone(),
-                    is_error: outcome.is_error,
-                },
-            )
-            .await;
-        }
-
-        let mut source_order_outcomes = execute_tool_calls_in_source_order(execution_outcomes);
-        for outcome in source_order_outcomes.drain(..).flatten() {
-            let message = tool_result_message_from_outcome(outcome);
-            let tool_result_message = AgentMessage::ToolResult(message.clone());
-            record_event(
-                events,
-                config,
-                AgentEvent::MessageStart {
-                    message: tool_result_message.clone(),
-                },
-            )
-            .await;
-            context.messages.push(tool_result_message.clone());
-            new_messages.push(tool_result_message.clone());
-            record_event(
-                events,
-                config,
-                AgentEvent::MessageEnd {
-                    message: tool_result_message,
-                },
-            )
-            .await;
-            tool_results.push(message);
+            let mut source_order_outcomes = execute_tool_calls_in_source_order(execution_outcomes);
+            for outcome in source_order_outcomes.drain(..).flatten() {
+                let message = tool_result_message_from_outcome(outcome);
+                let tool_result_message = AgentMessage::ToolResult(message.clone());
+                record_tool_result_message_events(events, config, &tool_result_message).await;
+                context.messages.push(tool_result_message.clone());
+                new_messages.push(tool_result_message);
+                tool_results.push(message);
+            }
+        } else {
+            let mut execution_outcomes = Vec::new();
+            let mut tool_result_messages = Vec::new();
+            for (index, tool_call) in tool_calls.into_iter().enumerate() {
+                let outcome =
+                    match prepare_tool_call(index, tool_call, &assistant, context, config, events)
+                        .await
+                    {
+                        ToolCallPreparation::Prepared(call) => {
+                            execute_prepared_tool_call(
+                                call,
+                                config.tool_result_hooks.clone(),
+                                config.event_sink.clone(),
+                            )
+                            .await?
+                        }
+                        ToolCallPreparation::Immediate(outcome) => outcome,
+                    };
+                events.extend(outcome.update_events.iter().cloned());
+                record_tool_execution_end(events, config, &outcome).await;
+                let message = tool_result_message_from_outcome(outcome.clone());
+                let tool_result_message = AgentMessage::ToolResult(message.clone());
+                record_tool_result_message_events(events, config, &tool_result_message).await;
+                tool_result_messages.push(tool_result_message);
+                tool_results.push(message);
+                execution_outcomes.push(outcome);
+            }
+            terminate |= should_terminate_tool_batch(&execution_outcomes);
+            for message in tool_result_messages {
+                context.messages.push(message.clone());
+                new_messages.push(message);
+            }
         }
     }
 
@@ -704,6 +638,166 @@ async fn run_one_turn(
         tool_results,
         terminate,
     })
+}
+
+fn use_parallel_tool_execution(
+    tool_calls: &[ToolCall],
+    context: &AgentContext,
+    config: &AgentLoopConfig,
+) -> bool {
+    config.tool_execution == ToolExecutionMode::Parallel
+        && tool_calls.iter().all(|tool_call| {
+            context
+                .tools
+                .iter()
+                .find(|tool| tool.definition.name == tool_call.name)
+                .map(|tool| tool.execution_mode != Some(ToolExecutionMode::Sequential))
+                .unwrap_or(true)
+        })
+}
+
+async fn prepare_tool_call(
+    index: usize,
+    tool_call: ToolCall,
+    assistant: &AssistantMessage,
+    context: &AgentContext,
+    config: &AgentLoopConfig,
+    events: &mut Vec<AgentEvent>,
+) -> ToolCallPreparation {
+    let event_args = serde_json::Value::Object(tool_call.arguments.clone());
+    record_event(
+        events,
+        config,
+        AgentEvent::ToolExecutionStart {
+            tool_call_id: tool_call.id.clone(),
+            tool_name: tool_call.name.clone(),
+            args: event_args.clone(),
+        },
+    )
+    .await;
+
+    let mut args = serde_json::Value::Object(tool_call.arguments.clone());
+    let Some(tool) = context
+        .tools
+        .iter()
+        .find(|tool| tool.definition.name == tool_call.name)
+    else {
+        return ToolCallPreparation::Immediate(error_tool_execution_outcome(
+            index,
+            tool_call.id,
+            tool_call.name.clone(),
+            format!("Tool {} not found", tool_call.name),
+        ));
+    };
+
+    if let Some(preparer) = &tool.argument_preparer {
+        match preparer.prepare_arguments(args.clone()) {
+            Ok(prepared_args) => args = prepared_args,
+            Err(error) => {
+                return ToolCallPreparation::Immediate(error_tool_execution_outcome(
+                    index,
+                    tool_call.id,
+                    tool_call.name,
+                    error,
+                ));
+            }
+        }
+    }
+
+    let mut hook_context = AgentToolCallHookContext {
+        tool_call_id: tool_call.id.clone(),
+        tool_name: tool_call.name.clone(),
+        input: args.clone(),
+        assistant_message: assistant.clone(),
+        tool_call: tool_call.clone(),
+        context: context.clone(),
+    };
+    for hook in &config.tool_call_hooks {
+        match hook.on_tool_call(hook_context.clone()).await {
+            Ok(Some(result)) => {
+                if let Some(replacement) = result.input {
+                    args = replacement;
+                    hook_context.input = args.clone();
+                }
+                if result.block {
+                    return ToolCallPreparation::Immediate(error_tool_execution_outcome(
+                        index,
+                        tool_call.id,
+                        tool_call.name,
+                        result
+                            .reason
+                            .unwrap_or_else(|| "Tool execution was blocked".to_owned()),
+                    ));
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return ToolCallPreparation::Immediate(error_tool_execution_outcome(
+                    index,
+                    tool_call.id,
+                    tool_call.name,
+                    error,
+                ));
+            }
+        }
+    }
+
+    ToolCallPreparation::Prepared(PreparedToolCall {
+        index,
+        tool_call_id: tool_call.id.clone(),
+        tool_name: tool_call.name.clone(),
+        args,
+        event_args,
+        assistant_message: assistant.clone(),
+        tool_call,
+        context: context.clone(),
+        tool: tool.clone(),
+    })
+}
+
+fn should_terminate_tool_batch(outcomes: &[ToolExecutionOutcome]) -> bool {
+    !outcomes.is_empty() && outcomes.iter().all(|outcome| outcome.result.terminate)
+}
+
+async fn record_tool_execution_end(
+    events: &mut Vec<AgentEvent>,
+    config: &AgentLoopConfig,
+    outcome: &ToolExecutionOutcome,
+) {
+    record_event(
+        events,
+        config,
+        AgentEvent::ToolExecutionEnd {
+            tool_call_id: outcome.tool_call_id.clone(),
+            tool_name: outcome.tool_name.clone(),
+            result: outcome.result.clone(),
+            is_error: outcome.is_error,
+        },
+    )
+    .await;
+}
+
+async fn record_tool_result_message_events(
+    events: &mut Vec<AgentEvent>,
+    config: &AgentLoopConfig,
+    message: &AgentMessage,
+) {
+    record_event(
+        events,
+        config,
+        AgentEvent::MessageStart {
+            message: message.clone(),
+        },
+    )
+    .await;
+    record_event(
+        events,
+        config,
+        AgentEvent::MessageEnd {
+            message: message.clone(),
+        },
+    )
+    .await;
 }
 
 async fn execute_tool_calls(
