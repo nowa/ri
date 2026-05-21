@@ -372,7 +372,17 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("together", "MiniMaxAI/MiniMax-M2.7"),
     ("together", "deepseek-ai/DeepSeek-V4-Pro"),
     ("together", "openai/gpt-oss-120b"),
+    ("cloudflare-workers-ai", "@cf/google/gemma-4-26b-a4b-it"),
+    (
+        "cloudflare-workers-ai",
+        "@cf/meta/llama-4-scout-17b-16e-instruct",
+    ),
+    ("cloudflare-workers-ai", "@cf/moonshotai/kimi-k2.5"),
     ("cloudflare-workers-ai", "@cf/moonshotai/kimi-k2.6"),
+    ("cloudflare-workers-ai", "@cf/nvidia/nemotron-3-120b-a12b"),
+    ("cloudflare-workers-ai", "@cf/openai/gpt-oss-120b"),
+    ("cloudflare-workers-ai", "@cf/openai/gpt-oss-20b"),
+    ("cloudflare-workers-ai", "@cf/zai-org/glm-4.7-flash"),
     (
         "cloudflare-ai-gateway",
         "workers-ai/@cf/moonshotai/kimi-k2.6",
@@ -465,17 +475,10 @@ fn apply_known_model_overrides(model: &mut Model) {
         }
     }
 
-    if model.provider == "cloudflare-workers-ai" && model.id == "@cf/moonshotai/kimi-k2.6" {
-        model.reasoning = true;
-        ensure_image_input(model);
-        model.context_window = 256_000;
-        model.max_tokens = 256_000;
-        model.cost = ModelCost {
-            input: 0.95,
-            output: 4.0,
-            cache_read: 0.16,
-            cache_write: 0.0,
-        };
+    if model.provider == "cloudflare-workers-ai" {
+        if apply_cloudflare_workers_ai_generated_metadata(model) {
+            return;
+        }
     }
 
     if model.provider == "amazon-bedrock" && model.id.contains("opus-4-6") {
@@ -1040,6 +1043,127 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
     model.cost = cost;
     model.context_window = context_window;
     model.max_tokens = max_tokens;
+    true
+}
+
+fn apply_cloudflare_workers_ai_generated_metadata(model: &mut Model) -> bool {
+    let metadata = match model.id.as_str() {
+        "@cf/google/gemma-4-26b-a4b-it" => Some((
+            true,
+            true,
+            256_000,
+            16_384,
+            ModelCost {
+                input: 0.1,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        )),
+        "@cf/meta/llama-4-scout-17b-16e-instruct" => Some((
+            false,
+            true,
+            128_000,
+            16_384,
+            ModelCost {
+                input: 0.27,
+                output: 0.85,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        )),
+        "@cf/moonshotai/kimi-k2.5" => Some((
+            true,
+            true,
+            256_000,
+            256_000,
+            ModelCost {
+                input: 0.6,
+                output: 3.0,
+                cache_read: 0.1,
+                cache_write: 0.0,
+            },
+        )),
+        "@cf/moonshotai/kimi-k2.6" => Some((
+            true,
+            true,
+            256_000,
+            256_000,
+            ModelCost {
+                input: 0.95,
+                output: 4.0,
+                cache_read: 0.16,
+                cache_write: 0.0,
+            },
+        )),
+        "@cf/nvidia/nemotron-3-120b-a12b" => Some((
+            true,
+            false,
+            256_000,
+            256_000,
+            ModelCost {
+                input: 0.5,
+                output: 1.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        )),
+        "@cf/openai/gpt-oss-120b" => Some((
+            true,
+            false,
+            128_000,
+            16_384,
+            ModelCost {
+                input: 0.35,
+                output: 0.75,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        )),
+        "@cf/openai/gpt-oss-20b" => Some((
+            true,
+            false,
+            128_000,
+            16_384,
+            ModelCost {
+                input: 0.2,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        )),
+        "@cf/zai-org/glm-4.7-flash" => Some((
+            true,
+            false,
+            131_072,
+            131_072,
+            ModelCost {
+                input: 0.06,
+                output: 0.4,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        )),
+        _ => None,
+    };
+    let Some((reasoning, image_input, context_window, max_tokens, cost)) = metadata else {
+        return false;
+    };
+
+    model.api = "openai-completions".to_owned();
+    model.base_url = CLOUDFLARE_WORKERS_AI_BASE_URL.to_owned();
+    model.reasoning = reasoning;
+    model.thinking_level_map.clear();
+    model.input = vec![crate::types::InputKind::Text];
+    if image_input {
+        ensure_image_input(model);
+    }
+    model.cost = cost;
+    model.context_window = context_window;
+    model.max_tokens = max_tokens;
+    model.compat = Some(json!({
+        "sendSessionAffinityHeaders": true,
+    }));
     true
 }
 

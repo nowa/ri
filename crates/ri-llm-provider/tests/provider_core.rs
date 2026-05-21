@@ -2298,6 +2298,159 @@ fn fireworks_and_together_env_keys_resolve_from_provider_specific_variables() {
 }
 
 #[test]
+fn cloudflare_workers_ai_model_metadata_matches_generated_catalog() {
+    let models = get_models("cloudflare-workers-ai");
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "@cf/google/gemma-4-26b-a4b-it",
+            "@cf/meta/llama-4-scout-17b-16e-instruct",
+            "@cf/moonshotai/kimi-k2.5",
+            "@cf/moonshotai/kimi-k2.6",
+            "@cf/nvidia/nemotron-3-120b-a12b",
+            "@cf/openai/gpt-oss-120b",
+            "@cf/openai/gpt-oss-20b",
+            "@cf/zai-org/glm-4.7-flash",
+        ]
+    );
+
+    for (model_id, reasoning, image_input, context_window, max_tokens, cost) in [
+        (
+            "@cf/google/gemma-4-26b-a4b-it",
+            true,
+            true,
+            256_000,
+            16_384,
+            ModelCost {
+                input: 0.1,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "@cf/meta/llama-4-scout-17b-16e-instruct",
+            false,
+            true,
+            128_000,
+            16_384,
+            ModelCost {
+                input: 0.27,
+                output: 0.85,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "@cf/moonshotai/kimi-k2.5",
+            true,
+            true,
+            256_000,
+            256_000,
+            ModelCost {
+                input: 0.6,
+                output: 3.0,
+                cache_read: 0.1,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "@cf/moonshotai/kimi-k2.6",
+            true,
+            true,
+            256_000,
+            256_000,
+            ModelCost {
+                input: 0.95,
+                output: 4.0,
+                cache_read: 0.16,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "@cf/nvidia/nemotron-3-120b-a12b",
+            true,
+            false,
+            256_000,
+            256_000,
+            ModelCost {
+                input: 0.5,
+                output: 1.5,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "@cf/openai/gpt-oss-120b",
+            true,
+            false,
+            128_000,
+            16_384,
+            ModelCost {
+                input: 0.35,
+                output: 0.75,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "@cf/openai/gpt-oss-20b",
+            true,
+            false,
+            128_000,
+            16_384,
+            ModelCost {
+                input: 0.2,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "@cf/zai-org/glm-4.7-flash",
+            true,
+            false,
+            131_072,
+            131_072,
+            ModelCost {
+                input: 0.06,
+                output: 0.4,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+    ] {
+        let model = get_model("cloudflare-workers-ai", model_id).expect(model_id);
+        assert_eq!(model.api, "openai-completions", "{model_id} api");
+        assert_eq!(
+            model.base_url, CLOUDFLARE_WORKERS_AI_BASE_URL,
+            "{model_id} base"
+        );
+        assert_eq!(model.reasoning, reasoning, "{model_id} reasoning");
+        assert!(model.thinking_level_map.is_empty(), "{model_id} thinking");
+        let expected_input = if image_input {
+            vec![InputKind::Text, InputKind::Image]
+        } else {
+            vec![InputKind::Text]
+        };
+        assert_eq!(model.input, expected_input, "{model_id} input");
+        assert_eq!(model.cost, cost, "{model_id} cost");
+        assert_eq!(model.context_window, context_window, "{model_id} context");
+        assert_eq!(model.max_tokens, max_tokens, "{model_id} max tokens");
+        assert_eq!(
+            model.compat,
+            Some(json!({
+                "sendSessionAffinityHeaders": true,
+            })),
+            "{model_id} compat"
+        );
+    }
+}
+
+#[test]
 fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
     let _lock = ENV_LOCK.lock().expect("env lock");
     let _guard = EnvGuard::clearing(&["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"]);
