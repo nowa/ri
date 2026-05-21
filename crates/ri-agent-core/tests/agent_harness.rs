@@ -25,6 +25,19 @@ impl AgentToolExecutor for CalculateExecutor {
     }
 }
 
+struct HarnessFailingExecutor;
+
+#[async_trait]
+impl AgentToolExecutor for HarnessFailingExecutor {
+    async fn execute(
+        &self,
+        _tool_call_id: &str,
+        _params: Value,
+    ) -> Result<AgentToolResult, String> {
+        Err("harness boom".to_owned())
+    }
+}
+
 fn user_texts(messages: &[Message]) -> Vec<String> {
     messages
         .iter()
@@ -104,6 +117,26 @@ fn calculate_tool() -> AgentTool {
         execution_mode: None,
         argument_preparer: None,
         executor: Arc::new(CalculateExecutor),
+    }
+}
+
+fn failing_tool() -> AgentTool {
+    AgentTool {
+        definition: Tool {
+            name: "fail".to_owned(),
+            description: "Always fails".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "value": { "type": "string" }
+                },
+                "required": ["value"]
+            }),
+        },
+        label: "Fail".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(HarnessFailingExecutor),
     }
 }
 
@@ -4688,6 +4721,7 @@ async fn agent_harness_runs_tool_call_and_tool_result_hooks_through_direct_loop(
             ))]),
             details: Some(json!({ "patched": true })),
             terminate: Some(true),
+            is_error: None,
         }))
     });
 
@@ -4717,6 +4751,67 @@ async fn agent_harness_runs_tool_call_and_tool_result_hooks_through_direct_loop(
         Some(ToolResultContent::Text(text)) if text.text == "patched result"
     ));
     assert_eq!(tool_result.details, Some(json!({ "patched": true })));
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_harness_tool_result_hook_can_override_error_flag() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    let mut args = Map::new();
+    args.insert("value".to_owned(), Value::String("fail now".to_owned()));
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call("fail", args, Some("call-fail".to_owned())),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+    let session = Session::new(InMemorySessionStorage::new());
+    let mut options =
+        AgentHarnessOptions::new(test_env(), session.clone(), registration.get_model());
+    options.tools = vec![failing_tool()];
+    let harness = AgentHarness::new(options);
+    harness.on_tool_result(|event| {
+        assert_eq!(event.tool_call_id, "call-fail");
+        assert_eq!(event.tool_name, "fail");
+        assert_eq!(event.input["value"], Value::String("fail now".to_owned()));
+        assert!(event.is_error);
+        assert!(matches!(
+            event.content.first(),
+            Some(AgentToolResultContent::Text(text)) if text.text == "harness boom"
+        ));
+        Ok(Some(ToolResultPatch {
+            content: Some(vec![AgentToolResultContent::Text(TextContent::new(
+                "harness recovered",
+            ))]),
+            is_error: Some(false),
+            ..Default::default()
+        }))
+    });
+
+    harness.prompt("hello").await.expect("prompt");
+
+    let tool_result = session
+        .entries()
+        .into_iter()
+        .find_map(|entry| match entry {
+            SessionTreeEntry::Message {
+                message: SessionEntryMessage::Llm(Message::ToolResult(result)),
+                ..
+            } => Some(result),
+            _ => None,
+        })
+        .expect("tool result");
+    assert_eq!(tool_result.tool_call_id, "call-fail");
+    assert!(!tool_result.is_error);
+    assert!(matches!(
+        tool_result.content.first(),
+        Some(ToolResultContent::Text(text)) if text.text == "harness recovered"
+    ));
     registration.unregister();
 }
 

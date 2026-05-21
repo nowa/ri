@@ -817,17 +817,25 @@ async fn execute_prepared_tool_call(
             error_tool_result(error)
         }
     };
+    let mut hook_context = AgentToolResultHookContext {
+        tool_call_id: call.tool_call_id.clone(),
+        tool_name: call.tool_name.clone(),
+        input: result_input.clone(),
+        result: result.clone(),
+        is_error,
+    };
     for hook in &tool_result_hooks {
-        match hook
-            .on_tool_result(AgentToolResultHookContext {
-                tool_call_id: call.tool_call_id.clone(),
-                tool_name: call.tool_name.clone(),
-                input: result_input.clone(),
-                result: result.clone(),
-            })
-            .await
-        {
-            Ok(Some(replacement)) => result = replacement,
+        match hook.on_tool_result(hook_context.clone()).await {
+            Ok(Some(replacement)) => {
+                if let Some(replacement_result) = replacement.result {
+                    result = replacement_result;
+                    hook_context.result = result.clone();
+                }
+                if let Some(replacement_is_error) = replacement.is_error {
+                    is_error = replacement_is_error;
+                    hook_context.is_error = is_error;
+                }
+            }
             Ok(None) => {}
             Err(error) => {
                 is_error = true;

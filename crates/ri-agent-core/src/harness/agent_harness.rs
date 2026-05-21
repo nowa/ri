@@ -11,8 +11,9 @@ use crate::{
     types::{
         AgentContext, AgentEvent, AgentEventSink, AgentLoopTurnUpdate, AgentMessage,
         AgentNextTurnContext, AgentNextTurnPreparer, AgentTool, AgentToolCallHook,
-        AgentToolCallHookContext, AgentToolCallHookResult, AgentToolResult, AgentToolResultContent,
-        AgentToolResultHook, AgentToolResultHookContext, QueueMode, ToolExecutionMode,
+        AgentToolCallHookContext, AgentToolCallHookResult, AgentToolResultContent,
+        AgentToolResultHook, AgentToolResultHookContext, AgentToolResultHookResult, QueueMode,
+        ToolExecutionMode,
     },
 };
 use async_trait::async_trait;
@@ -476,6 +477,7 @@ pub struct ToolResultPatch {
     pub content: Option<Vec<AgentToolResultContent>>,
     pub details: Option<Value>,
     pub terminate: Option<bool>,
+    pub is_error: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -2479,13 +2481,15 @@ impl AgentToolResultHook for HarnessToolResultHook {
     async fn on_tool_result(
         &self,
         context: AgentToolResultHookContext,
-    ) -> Result<Option<AgentToolResult>, String> {
+    ) -> Result<Option<AgentToolResultHookResult>, String> {
         let hooks: Vec<ToolResultHook> = self.hooks.lock().values().cloned().collect();
         if hooks.is_empty() {
             return Ok(None);
         }
         let mut result = context.result;
-        let mut patched = false;
+        let mut is_error = context.is_error;
+        let mut result_patched = false;
+        let mut is_error_patched = None;
         for hook in hooks {
             if let Some(patch) = hook(ToolResultEvent {
                 tool_call_id: context.tool_call_id.clone(),
@@ -2494,25 +2498,34 @@ impl AgentToolResultHook for HarnessToolResultHook {
                 content: result.content.clone(),
                 details: result.details.clone(),
                 terminate: result.terminate,
-                is_error: false,
+                is_error,
             })
             .map_err(|error| error.to_string())?
             {
                 if let Some(content) = patch.content {
                     result.content = content;
-                    patched = true;
+                    result_patched = true;
                 }
                 if let Some(details) = patch.details {
                     result.details = Some(details);
-                    patched = true;
+                    result_patched = true;
                 }
                 if let Some(terminate) = patch.terminate {
                     result.terminate = terminate;
-                    patched = true;
+                    result_patched = true;
+                }
+                if let Some(patch_is_error) = patch.is_error {
+                    is_error = patch_is_error;
+                    is_error_patched = Some(patch_is_error);
                 }
             }
         }
-        Ok(patched.then_some(result))
+        Ok(
+            (result_patched || is_error_patched.is_some()).then_some(AgentToolResultHookResult {
+                result: result_patched.then_some(result),
+                is_error: is_error_patched,
+            }),
+        )
     }
 }
 

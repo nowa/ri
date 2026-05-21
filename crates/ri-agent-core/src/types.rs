@@ -215,6 +215,32 @@ pub struct AgentToolResultHookContext {
     pub tool_name: String,
     pub input: Value,
     pub result: AgentToolResult,
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentToolResultHookResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<AgentToolResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
+}
+
+impl AgentToolResultHookResult {
+    pub fn replace_result(result: AgentToolResult) -> Self {
+        Self {
+            result: Some(result),
+            is_error: None,
+        }
+    }
+
+    pub fn set_is_error(is_error: bool) -> Self {
+        Self {
+            result: None,
+            is_error: Some(is_error),
+        }
+    }
 }
 
 #[async_trait]
@@ -230,7 +256,7 @@ pub trait AgentToolResultHook: Send + Sync {
     async fn on_tool_result(
         &self,
         context: AgentToolResultHookContext,
-    ) -> Result<Option<AgentToolResult>, String>;
+    ) -> Result<Option<AgentToolResultHookResult>, String>;
 }
 
 #[async_trait]

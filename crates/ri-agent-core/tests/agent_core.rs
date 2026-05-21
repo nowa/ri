@@ -401,9 +401,10 @@ impl AgentToolResultHook for ReplacingToolResultHook {
     async fn on_tool_result(
         &self,
         context: AgentToolResultHookContext,
-    ) -> Result<Option<AgentToolResult>, String> {
+    ) -> Result<Option<AgentToolResultHookResult>, String> {
         assert_eq!(context.tool_call_id, "tool-1");
         assert_eq!(context.tool_name, "echo");
+        assert!(!context.is_error);
         assert_eq!(
             context.input.get("value").and_then(Value::as_str),
             Some("abc")
@@ -414,13 +415,15 @@ impl AgentToolResultHook for ReplacingToolResultHook {
                 "echoed: abc"
             ))]
         );
-        Ok(Some(AgentToolResult {
-            content: vec![AgentToolResultContent::Text(TextContent::new(
-                "patched result",
-            ))],
-            details: Some(json!({ "patched": true })),
-            terminate: true,
-        }))
+        Ok(Some(AgentToolResultHookResult::replace_result(
+            AgentToolResult {
+                content: vec![AgentToolResultContent::Text(TextContent::new(
+                    "patched result",
+                ))],
+                details: Some(json!({ "patched": true })),
+                terminate: true,
+            },
+        )))
     }
 }
 
@@ -431,7 +434,7 @@ impl AgentToolResultHook for FailingToolResultHook {
     async fn on_tool_result(
         &self,
         _context: AgentToolResultHookContext,
-    ) -> Result<Option<AgentToolResult>, String> {
+    ) -> Result<Option<AgentToolResultHookResult>, String> {
         Err("hook exploded".to_owned())
     }
 }
@@ -443,10 +446,32 @@ impl AgentToolResultHook for TerminatingToolResultHook {
     async fn on_tool_result(
         &self,
         context: AgentToolResultHookContext,
-    ) -> Result<Option<AgentToolResult>, String> {
+    ) -> Result<Option<AgentToolResultHookResult>, String> {
         let mut result = context.result;
         result.terminate = true;
-        Ok(Some(result))
+        Ok(Some(AgentToolResultHookResult::replace_result(result)))
+    }
+}
+
+struct ClearingToolErrorHook;
+
+#[async_trait]
+impl AgentToolResultHook for ClearingToolErrorHook {
+    async fn on_tool_result(
+        &self,
+        context: AgentToolResultHookContext,
+    ) -> Result<Option<AgentToolResultHookResult>, String> {
+        assert_eq!(context.tool_call_id, "tool-1");
+        assert_eq!(context.tool_name, "echo");
+        assert!(context.is_error);
+        assert_eq!(
+            context.result.content,
+            vec![AgentToolResultContent::Text(TextContent::new("boom"))]
+        );
+        Ok(Some(AgentToolResultHookResult {
+            result: Some(AgentToolResult::text("recovered")),
+            is_error: Some(false),
+        }))
     }
 }
 
@@ -2394,6 +2419,72 @@ async fn agent_loop_runs_tool_call_and_tool_result_hooks() {
     let event_names: Vec<&str> = events.iter().map(event_name).collect();
     assert!(event_names.contains(&"tool_execution_start"));
     assert!(event_names.contains(&"tool_execution_end"));
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_loop_tool_result_hook_can_override_error_flag() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call(
+                "echo",
+                json!({ "value": "abc" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(Map::new),
+                Some("tool-1".to_owned()),
+            ),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+
+    let tool = AgentTool {
+        definition: Tool {
+            name: "echo".to_owned(),
+            description: "Echo tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Echo".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(FailingExecutor),
+    };
+
+    let mut context = context_with_model(&registration.get_model());
+    context.tools.push(tool);
+    let mut config = AgentLoopConfig::new(registration.get_model());
+    config
+        .tool_result_hooks
+        .push(Arc::new(ClearingToolErrorHook));
+
+    let (messages, events) = agent_loop_prompt(context, "run tool", config)
+        .await
+        .expect("loop");
+
+    assert_eq!(text_of(&messages[2]), Some("recovered"));
+    let AgentMessage::ToolResult(tool_result) = &messages[2] else {
+        panic!("expected tool result");
+    };
+    assert!(!tool_result.is_error);
+    let tool_end = events.iter().find_map(|event| match event {
+        AgentEvent::ToolExecutionEnd {
+            tool_call_id,
+            is_error,
+            ..
+        } if tool_call_id == "tool-1" => Some(*is_error),
+        _ => None,
+    });
+    assert_eq!(tool_end, Some(false));
     registration.unregister();
 }
 
