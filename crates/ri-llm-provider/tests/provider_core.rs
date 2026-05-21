@@ -439,6 +439,7 @@ fn supports_xhigh_model_metadata_port() {
 
     for (provider, model_id) in [
         ("deepseek", "deepseek-v4-flash"),
+        ("deepseek", "deepseek-v4-pro"),
         ("opencode-go", "deepseek-v4-flash"),
         ("openrouter", "deepseek/deepseek-v4-flash"),
     ] {
@@ -13103,20 +13104,70 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
     assert_eq!(payload["reasoning"], json!({ "effort": "max" }));
     assert!(payload.get("reasoning_effort").is_none());
 
-    let deepseek_v4 = get_model("deepseek", "deepseek-v4-flash").expect("deepseek v4");
-    let payload = build_openai_completions_payload(
-        &deepseek_v4,
-        &Context {
-            messages: vec![Message::User(UserMessage::text("Hi"))],
-            ..Default::default()
-        },
-        OpenAICompletionsPayloadOptions {
-            reasoning: Some(ThinkingLevel::XHigh),
-            ..Default::default()
-        },
-    );
-    assert_eq!(payload["thinking"], json!({ "type": "enabled" }));
-    assert_eq!(payload["reasoning_effort"], "max");
+    for (model_id, cost) in [
+        (
+            "deepseek-v4-flash",
+            ModelCost {
+                input: 0.14,
+                output: 0.28,
+                cache_read: 0.0028,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "deepseek-v4-pro",
+            ModelCost {
+                input: 0.435,
+                output: 0.87,
+                cache_read: 0.003625,
+                cache_write: 0.0,
+            },
+        ),
+    ] {
+        let model = get_model("deepseek", model_id).expect("deepseek v4");
+        assert_eq!(model.api, "openai-completions", "{model_id}");
+        assert_eq!(model.base_url, "https://api.deepseek.com", "{model_id}");
+        assert_eq!(model.input, vec![InputKind::Text], "{model_id}");
+        assert_eq!(model.context_window, 1_000_000, "{model_id}");
+        assert_eq!(model.max_tokens, 384_000, "{model_id}");
+        assert_eq!(model.cost, cost, "{model_id}");
+        assert_eq!(
+            model.thinking_level_map,
+            BTreeMap::from([
+                (ThinkingLevel::Minimal, None),
+                (ThinkingLevel::Low, None),
+                (ThinkingLevel::Medium, None),
+                (ThinkingLevel::High, Some("high".to_owned())),
+                (ThinkingLevel::XHigh, Some("max".to_owned())),
+            ]),
+            "{model_id}"
+        );
+        assert_eq!(
+            model.compat,
+            Some(json!({
+                "requiresReasoningContentOnAssistantMessages": true,
+                "thinkingFormat": "deepseek",
+            })),
+            "{model_id}"
+        );
+        let payload = build_openai_completions_payload(
+            &model,
+            &Context {
+                messages: vec![Message::User(UserMessage::text("Hi"))],
+                ..Default::default()
+            },
+            OpenAICompletionsPayloadOptions {
+                reasoning: Some(ThinkingLevel::XHigh),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            payload["thinking"],
+            json!({ "type": "enabled" }),
+            "{model_id}"
+        );
+        assert_eq!(payload["reasoning_effort"], "max", "{model_id}");
+    }
 
     let zai = get_model("zai", "glm-5.1").expect("zai");
     let payload = build_openai_completions_payload(

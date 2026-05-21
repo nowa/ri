@@ -304,6 +304,7 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("google-vertex", "gemini-2.5-flash"),
     ("google-vertex", "gemini-3-flash-preview"),
     ("deepseek", "deepseek-v4-flash"),
+    ("deepseek", "deepseek-v4-pro"),
     ("opencode", "big-pickle"),
     ("opencode", "claude-sonnet-4-5"),
     ("opencode", "gemini-3-flash"),
@@ -585,6 +586,9 @@ fn apply_known_model_overrides(model: &mut Model) {
         ensure_image_input(model);
     }
 
+    if model.provider == "deepseek" && apply_deepseek_generated_metadata(model) {
+        return;
+    }
     if model.provider == "zai" && apply_zai_generated_metadata(model) {
         return;
     }
@@ -825,6 +829,51 @@ struct AnthropicGeneratedMetadata {
     context_window: u64,
     max_tokens: u64,
     cost: ModelCost,
+}
+
+fn apply_deepseek_generated_metadata(model: &mut Model) -> bool {
+    let Some(cost) = (match model.id.as_str() {
+        "deepseek-v4-flash" => Some(ModelCost {
+            input: 0.14,
+            output: 0.28,
+            cache_read: 0.0028,
+            cache_write: 0.0,
+        }),
+        "deepseek-v4-pro" => Some(ModelCost {
+            input: 0.435,
+            output: 0.87,
+            cache_read: 0.003625,
+            cache_write: 0.0,
+        }),
+        _ => None,
+    }) else {
+        return false;
+    };
+
+    model.api = "openai-completions".to_owned();
+    model.base_url = base_url_for_provider("deepseek").to_owned();
+    model.reasoning = true;
+    model.thinking_level_map.clear();
+    model
+        .thinking_level_map
+        .insert(ThinkingLevel::Minimal, None);
+    model.thinking_level_map.insert(ThinkingLevel::Low, None);
+    model.thinking_level_map.insert(ThinkingLevel::Medium, None);
+    model
+        .thinking_level_map
+        .insert(ThinkingLevel::High, Some("high".to_owned()));
+    model
+        .thinking_level_map
+        .insert(ThinkingLevel::XHigh, Some("max".to_owned()));
+    model.input = vec![crate::types::InputKind::Text];
+    model.cost = cost;
+    model.context_window = 1_000_000;
+    model.max_tokens = 384_000;
+    model.compat = Some(json!({
+        "requiresReasoningContentOnAssistantMessages": true,
+        "thinkingFormat": "deepseek",
+    }));
+    true
 }
 
 fn apply_zai_generated_metadata(model: &mut Model) -> bool {
@@ -1830,6 +1879,7 @@ fn base_url_for_provider(provider: &str) -> &'static str {
         "openai-codex" => "https://chatgpt.com/backend-api",
         "mistral" => "https://api.mistral.ai",
         "fireworks" => "https://api.fireworks.ai/inference",
+        "deepseek" => "https://api.deepseek.com",
         "together" => "https://api.together.ai/v1",
         "openrouter" => "https://openrouter.ai/api/v1",
         "xai" => "https://api.x.ai/v1",

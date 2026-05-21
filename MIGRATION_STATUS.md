@@ -42,7 +42,8 @@ counterparts that pass.
     preservation through Rust `StreamOptions`.
   - Built-in model registry seed and thinking-level helpers, including
     Anthropic generated-catalog metadata parity for the current Claude
-    3/3.5/3.7/4.x model slice, Zai generated-catalog metadata parity for the
+    3/3.5/3.7/4.x model slice, DeepSeek generated-catalog metadata parity for
+    the current V4 model slice, Zai generated-catalog metadata parity for the
     current GLM coding model slice, plus
     OpenAI and Azure OpenAI Responses generated-catalog metadata parity for the
     current GPT-4/GPT-4.1/GPT-4o, GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5,
@@ -783,6 +784,18 @@ This migration is not complete.
   and context/output windows:
   `cargo fmt`,
   `cargo test -p ri-llm-provider --test provider_core openai_completions_zai_tool_stream_metadata_override_and_no_tools_match_provider -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_completions_ -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed; the list command enumerated 1192
+  tests.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` DeepSeek catalog metadata: Rust now exposes the
+  generated `deepseek-v4-pro` model and maps the source DeepSeek API/base URL,
+  text-only input, context/output windows, DeepSeek thinking-level map,
+  reasoning-content compat, and distinct Flash/Pro usage cost tables:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core supports_xhigh_model_metadata_port -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core openai_completions_ -- --test-threads=1`,
   `cargo fmt --check`, `git diff --check`, and
   `cargo test --workspace -- --list` passed; the list command enumerated 1192
