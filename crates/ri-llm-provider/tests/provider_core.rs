@@ -2859,6 +2859,88 @@ fn oauth_provider_registry_matches_built_in_source_metadata() {
 }
 
 #[test]
+fn pi_ai_cli_help_list_and_provider_selection_match_source_surface() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    reset_oauth_providers();
+    let providers = get_oauth_providers();
+
+    assert_eq!(
+        render_cli_provider_list(&providers),
+        "Available OAuth providers:\n\n  anthropic            Anthropic (Claude Pro/Max)\n  github-copilot       GitHub Copilot\n  openai-codex         ChatGPT Plus/Pro (Codex Subscription)\n"
+    );
+
+    let help = render_cli_help("npx @earendil-works/pi-ai", &providers);
+    assert!(help.contains("Usage: npx @earendil-works/pi-ai <command> [provider]"));
+    assert!(help.contains("  login [provider]  Login to an OAuth provider"));
+    assert!(help.contains("  list              List available providers"));
+    assert!(help.contains("  npx @earendil-works/pi-ai login anthropic"));
+
+    assert_eq!(
+        parse_cli_provider_selection("1", &providers).expect("anthropic selection"),
+        "anthropic"
+    );
+    assert_eq!(
+        parse_cli_provider_selection(" 2\n", &providers).expect("github selection"),
+        "github-copilot"
+    );
+    assert_eq!(
+        parse_cli_provider_selection("3", &providers).expect("openai selection"),
+        "openai-codex"
+    );
+    assert_eq!(
+        parse_cli_provider_selection("4", &providers).expect_err("out of range"),
+        "Invalid selection"
+    );
+    assert_eq!(
+        parse_cli_provider_selection("abc", &providers).expect_err("not a number"),
+        "Invalid selection"
+    );
+}
+
+#[test]
+fn pi_ai_cli_auth_save_preserves_existing_entries_and_source_json_shape() {
+    let path = auth_storage_test_path("pi-ai-cli-save");
+    let mut existing = AuthStorage::new();
+    existing.insert(
+        "openai".to_owned(),
+        AuthCredential::ApiKey {
+            key: "plain-key".to_owned(),
+        },
+    );
+    save_auth_storage_to_path(&path, &existing).expect("seed auth");
+
+    let credentials = StoredOAuthCredentials {
+        refresh: "refresh-token".to_owned(),
+        access: "access-token".to_owned(),
+        expires: 123_456,
+        extra: BTreeMap::from([("accountId".to_owned(), json!("acct_123"))]),
+    };
+    save_cli_oauth_credentials(&path, "openai-codex", credentials).expect("save cli auth");
+
+    let raw = std::fs::read_to_string(&path).expect("read auth file");
+    let saved_json: Value = serde_json::from_str(&raw).expect("auth json");
+    assert_eq!(saved_json["openai"]["type"], "api_key");
+    assert_eq!(saved_json["openai"]["key"], "plain-key");
+    assert_eq!(saved_json["openai-codex"]["type"], "oauth");
+    assert_eq!(saved_json["openai-codex"]["refresh"], "refresh-token");
+    assert_eq!(saved_json["openai-codex"]["access"], "access-token");
+    assert_eq!(saved_json["openai-codex"]["expires"], 123_456);
+    assert_eq!(saved_json["openai-codex"]["accountId"], "acct_123");
+
+    let loaded = load_cli_auth(&path).expect("load cli auth");
+    assert!(matches!(
+        loaded.get("openai"),
+        Some(AuthCredential::ApiKey { key }) if key == "plain-key"
+    ));
+    assert!(matches!(
+        loaded.get("openai-codex"),
+        Some(AuthCredential::OAuth { credentials })
+            if credentials.access == "access-token"
+                && credentials.extra.get("accountId") == Some(&json!("acct_123"))
+    ));
+}
+
+#[test]
 fn oauth_provider_registry_registers_custom_and_restores_built_ins() {
     let _lock = ENV_LOCK.lock().expect("env lock");
     reset_oauth_providers();

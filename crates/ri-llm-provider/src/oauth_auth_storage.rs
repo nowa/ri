@@ -226,7 +226,10 @@ pub fn save_auth_storage_to_path(
     storage: &AuthStorage,
 ) -> Result<(), String> {
     let path = path.as_ref();
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent).map_err(|error| {
             format!(
                 "Failed to create auth storage directory {}: {error}",
@@ -348,4 +351,55 @@ fn set_private_file_permissions(path: &Path) -> Result<(), String> {
         let _ = path;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct CurrentDirGuard {
+        original: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn enter(path: &Path) -> Self {
+            let original = std::env::current_dir().expect("current dir");
+            std::env::set_current_dir(path).expect("set test current dir");
+            Self { original }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.original).expect("restore current dir");
+        }
+    }
+
+    #[test]
+    fn save_auth_storage_supports_current_directory_auth_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "ri-auth-storage-current-dir-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let _guard = CurrentDirGuard::enter(&dir);
+
+        let mut storage = AuthStorage::new();
+        storage.insert(
+            "anthropic".to_owned(),
+            AuthCredential::OAuth {
+                credentials: StoredOAuthCredentials {
+                    refresh: "refresh".to_owned(),
+                    access: "access".to_owned(),
+                    expires: 123,
+                    extra: BTreeMap::new(),
+                },
+            },
+        );
+
+        save_auth_storage_to_path("auth.json", &storage).expect("save auth.json");
+        let loaded = load_auth_storage_from_path("auth.json").expect("load auth.json");
+        assert_eq!(loaded, storage);
+    }
 }
