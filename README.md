@@ -27,7 +27,7 @@ core pi-ai and pi-agent-core behavior that is practical to verify without live
 provider credentials.
 
 As of the latest local verification, `cargo test --workspace -- --list`
-enumerates 1172 Rust tests: 968 under `ri-llm-provider` and 204 under
+enumerates 1174 Rust tests: 968 under `ri-llm-provider` and 206 under
 `ri-agent-core`. Those numbers are tracked in detail in
 [MIGRATION_STATUS.md](MIGRATION_STATUS.md), including why the Rust count is not
 a one-to-one completion proof against the 871 direct source test-case baseline.

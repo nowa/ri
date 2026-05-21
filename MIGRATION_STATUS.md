@@ -404,16 +404,16 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1172 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1174 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 968 tests: 2 library tests, 335 `provider_core` tests, and
   631 `provider_live` tests. This is 247 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 204 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 206 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 54 above the 150 direct simple
+  `resources`, and `session_storage`. This is 56 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -465,6 +465,20 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-22 after aligning
+  `harness/prompt-templates.ts` prompt-template file-info diagnostics and
+  `utils/node-http-proxy.ts` proxy parsing: `load_prompt_templates` now reports
+  `FileInfoFailed` for non-`not_found` metadata failures and preserves the
+  underlying list-directory error message, matching Pi's diagnostic path; the
+  HTTP proxy helper now treats an empty lowercase proxy env var as absent so
+  uppercase fallback still works, splits `NO_PROXY` on comma or any whitespace,
+  and ignores hostless target URLs like Pi's URL parser. `cargo test -p
+  ri-agent-core --test resources load_prompt_templates_reports_file_info_failures
+  -- --exact --test-threads=1`, `cargo test -p ri-agent-core --test resources
+  -- --test-threads=1`, `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo test --workspace -- --list`, `cargo fmt --check`, `git diff --check`,
+  and `cargo test --workspace -- --test-threads=1` passed; the workspace list
+  enumerated 1174 tests.
 - Latest local verification on 2026-05-22 after aligning
   `harness/env/nodejs.ts` temporary file creation:
   `LocalExecutionEnv::create_temp_file` now creates a `tmp-...` temporary

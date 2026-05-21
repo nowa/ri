@@ -435,6 +435,26 @@ fn loads_prompt_templates_from_symlinked_markdown_files() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn load_prompt_templates_reports_file_info_failures() {
+    let root = temp_dir();
+    let loop_path = root.join("loop.md");
+    unix_fs::symlink(&loop_path, &loop_path).expect("symlink loop");
+
+    let (templates, diagnostics) = load_prompt_templates([loop_path.clone()]);
+
+    assert!(templates.is_empty());
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].diagnostic_type, "warning");
+    assert_eq!(
+        diagnostics[0].code,
+        PromptTemplateDiagnosticCode::FileInfoFailed
+    );
+    assert_eq!(diagnostics[0].path, loop_path.to_string_lossy());
+    assert!(!diagnostics[0].message.is_empty());
+}
+
 #[test]
 fn sourced_prompt_templates_preserve_source_and_attach_diagnostics() {
     let root = temp_dir();

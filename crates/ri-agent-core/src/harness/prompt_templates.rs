@@ -48,19 +48,28 @@ pub fn load_prompt_templates(
     let mut diagnostics = Vec::new();
     for path in paths {
         let path = path.as_ref();
-        let Ok(metadata) = fs::metadata(path) else {
-            continue;
-        };
-        if metadata.is_dir() {
-            let (templates, mut nested_diagnostics) = load_templates_from_dir(path);
-            prompt_templates.extend(templates);
-            diagnostics.append(&mut nested_diagnostics);
-        } else if metadata.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("md")
-        {
-            match load_template_from_file(path) {
-                Ok(template) => prompt_templates.push(template),
-                Err(diagnostic) => diagnostics.push(diagnostic),
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_dir() => {
+                let (templates, mut nested_diagnostics) = load_templates_from_dir(path);
+                prompt_templates.extend(templates);
+                diagnostics.append(&mut nested_diagnostics);
             }
+            Ok(metadata)
+                if metadata.is_file()
+                    && path.extension().and_then(|ext| ext.to_str()) == Some("md") =>
+            {
+                match load_template_from_file(path) {
+                    Ok(template) => prompt_templates.push(template),
+                    Err(diagnostic) => diagnostics.push(diagnostic),
+                }
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => diagnostics.push(diagnostic(
+                PromptTemplateDiagnosticCode::FileInfoFailed,
+                error.to_string(),
+                path,
+            )),
         }
     }
     (prompt_templates, diagnostics)
@@ -93,15 +102,18 @@ pub fn load_sourced_prompt_templates<TSource: Clone>(
 }
 
 fn load_templates_from_dir(dir: &Path) -> (Vec<PromptTemplate>, Vec<PromptTemplateDiagnostic>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return (
-            Vec::new(),
-            vec![diagnostic(
-                PromptTemplateDiagnosticCode::ListFailed,
-                "failed to list directory",
-                dir,
-            )],
-        );
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            return (
+                Vec::new(),
+                vec![diagnostic(
+                    PromptTemplateDiagnosticCode::ListFailed,
+                    error.to_string(),
+                    dir,
+                )],
+            );
+        }
     };
     let mut paths = entries
         .filter_map(Result::ok)
