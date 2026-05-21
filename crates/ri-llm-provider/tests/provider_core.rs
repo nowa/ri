@@ -7831,15 +7831,42 @@ fn anthropic_tool_context(tools: Vec<Tool>) -> Context {
 }
 
 #[test]
-fn anthropic_payload_sends_per_tool_eager_input_streaming_by_default() {
+fn anthropic_payload_sends_tools_metadata_and_tool_choice() {
     let model = anthropic_test_model(None);
     let context = anthropic_tool_context(vec![anthropic_tool()]);
 
-    let payload = build_anthropic_payload(&model, &context, AnthropicPayloadOptions::default());
+    let payload = build_anthropic_payload(
+        &model,
+        &context,
+        AnthropicPayloadOptions {
+            metadata_user_id: Some("user-123".to_owned()),
+            tool_choice: Some(json!({ "type": "tool", "name": "lookup" })),
+            ..Default::default()
+        },
+    );
     let headers = build_anthropic_default_headers(&model, &context);
 
     assert_eq!(payload["tools"][0]["eager_input_streaming"], true);
+    assert_eq!(payload["metadata"], json!({ "user_id": "user-123" }));
+    assert_eq!(
+        payload["tool_choice"],
+        json!({ "type": "tool", "name": "lookup" })
+    );
     assert!(headers.get("anthropic-beta").is_none());
+
+    let mut simple_options = SimpleStreamOptions::default();
+    simple_options
+        .stream
+        .metadata
+        .insert("user_id".to_owned(), json!("user-456"));
+    simple_options
+        .stream
+        .extra
+        .insert("toolChoice".to_owned(), json!("any"));
+    let simple_payload =
+        build_anthropic_simple_payload_for_client(&model, &context, simple_options, false);
+    assert_eq!(simple_payload["metadata"], json!({ "user_id": "user-456" }));
+    assert_eq!(simple_payload["tool_choice"], json!({ "type": "any" }));
 }
 
 #[test]
@@ -8441,6 +8468,29 @@ fn anthropic_simple_payload_applies_base_options_and_budget_adjustment() {
         })
     );
 
+    let mut provider_options = SimpleStreamOptions::default();
+    provider_options
+        .stream
+        .extra
+        .insert("thinkingEnabled".to_owned(), json!(true));
+    provider_options
+        .stream
+        .extra
+        .insert("thinkingBudgetTokens".to_owned(), json!(2048));
+    provider_options
+        .stream
+        .extra
+        .insert("thinkingDisplay".to_owned(), json!("omitted"));
+    let payload = build_anthropic_simple_payload(&model, &user_context("Hello"), provider_options);
+    assert_eq!(
+        payload["thinking"],
+        json!({
+            "type": "enabled",
+            "budget_tokens": 2048,
+            "display": "omitted",
+        })
+    );
+
     let payload = build_anthropic_simple_payload(
         &model,
         &user_context("Hello"),
@@ -8474,6 +8524,26 @@ fn anthropic_simple_payload_uses_adaptive_thinking_for_opus_47() {
         json!({ "type": "adaptive", "display": "summarized" })
     );
     assert_eq!(payload["output_config"], json!({ "effort": "high" }));
+
+    let mut provider_options = SimpleStreamOptions::default();
+    provider_options
+        .stream
+        .extra
+        .insert("thinkingEnabled".to_owned(), json!(true));
+    provider_options
+        .stream
+        .extra
+        .insert("effort".to_owned(), json!("medium"));
+    provider_options
+        .stream
+        .extra
+        .insert("thinkingDisplay".to_owned(), json!("omitted"));
+    let payload = build_anthropic_simple_payload(&model, &user_context("Hello"), provider_options);
+    assert_eq!(
+        payload["thinking"],
+        json!({ "type": "adaptive", "display": "omitted" })
+    );
+    assert_eq!(payload["output_config"], json!({ "effort": "medium" }));
 }
 
 #[test]
@@ -15322,8 +15392,30 @@ async fn builtin_anthropic_provider_posts_json_and_parses_sse() {
     model.base_url = base_url;
     let mut options = SimpleStreamOptions::default();
     options.stream.api_key = Some("anthropic-key".to_owned());
+    options
+        .stream
+        .metadata
+        .insert("user_id".to_owned(), json!("user-http"));
+    options
+        .stream
+        .extra
+        .insert("toolChoice".to_owned(), json!("any"));
+    options
+        .stream
+        .extra
+        .insert("interleavedThinking".to_owned(), json!(false));
 
-    let message = complete_simple(&model, user_context("hello"), options)
+    let context = Context {
+        messages: vec![Message::User(UserMessage::text("hello"))],
+        tools: vec![Tool {
+            name: "lookup".to_owned(),
+            description: "Lookup tool".to_owned(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        }],
+        ..Default::default()
+    };
+
+    let message = complete_simple(&model, context, options)
         .await
         .expect("complete");
     let request = request_task.await.expect("request task");
@@ -15348,8 +15440,18 @@ async fn builtin_anthropic_provider_posts_json_and_parses_sse() {
             .to_ascii_lowercase()
             .contains("authorization: bearer")
     );
+    assert!(
+        !request
+            .to_ascii_lowercase()
+            .contains("interleaved-thinking-2025-05-14")
+    );
     assert!(request.contains("\"stream\":true"));
     assert!(request.contains("\"model\":\"claude-test\""));
+    let request_body = request.split("\r\n\r\n").nth(1).expect("request body");
+    let request_json: Value = serde_json::from_str(request_body).expect("request json");
+    assert_eq!(request_json["metadata"], json!({ "user_id": "user-http" }));
+    assert_eq!(request_json["tool_choice"], json!({ "type": "any" }));
+    assert_eq!(request_json["tools"].as_array().map(Vec::len), Some(1));
 }
 
 #[tokio::test]

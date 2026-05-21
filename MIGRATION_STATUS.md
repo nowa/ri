@@ -454,6 +454,21 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning
+  `providers/anthropic.ts` provider-specific stream options: Anthropic payload
+  construction now forwards `metadata.user_id`, string and object `toolChoice`,
+  explicit `thinkingEnabled`, `thinkingBudgetTokens`, `effort`, and
+  `thinkingDisplay` extras from ordinary `stream` options, and the built-in
+  HTTP provider honors `interleavedThinking: false` when constructing beta
+  headers:
+  `cargo test -p ri-llm-provider --test provider_core anthropic_payload_sends_tools_metadata_and_tool_choice -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core anthropic_simple_payload_applies_base_options_and_budget_adjustment -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core anthropic_simple_payload_uses_adaptive_thinking_for_opus_47 -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_anthropic_provider_posts_json_and_parses_sse -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`,
+  `cargo test --workspace -- --list` (1161 tests enumerated), and
+  `cargo fmt --check` and `git diff --check` passed.
+- Latest local verification on 2026-05-21 after aligning
   `providers/amazon-bedrock.ts` request-side tool configuration: Bedrock
   Converse payload construction now emits `toolConfig.tools` when `Context`
   includes tools, maps `toolChoice` `auto`, `any`, `none`, and named

@@ -560,6 +560,8 @@ pub struct AnthropicPayloadOptions {
     pub cache_retention: Option<CacheRetention>,
     pub max_tokens: Option<u64>,
     pub temperature: Option<f64>,
+    pub metadata_user_id: Option<String>,
+    pub tool_choice: Option<Value>,
     pub thinking_enabled: Option<bool>,
     pub thinking_budget_tokens: Option<u64>,
     pub effort: Option<String>,
@@ -618,7 +620,43 @@ pub fn build_anthropic_simple_payload_for_client(
     payload_options.cache_retention = options.stream.cache_retention;
     payload_options.max_tokens = options.stream.max_tokens;
     payload_options.temperature = options.stream.temperature;
-    if let Some(reasoning) = options.reasoning {
+    payload_options.metadata_user_id = options
+        .stream
+        .metadata
+        .get("user_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    payload_options.tool_choice = options
+        .stream
+        .extra
+        .get("toolChoice")
+        .and_then(format_anthropic_tool_choice_option);
+    payload_options.thinking_display = options
+        .stream
+        .extra
+        .get("thinkingDisplay")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+
+    let explicit_thinking_enabled = options
+        .stream
+        .extra
+        .get("thinkingEnabled")
+        .and_then(Value::as_bool);
+    if let Some(thinking_enabled) = explicit_thinking_enabled {
+        payload_options.thinking_enabled = Some(thinking_enabled);
+        payload_options.thinking_budget_tokens = options
+            .stream
+            .extra
+            .get("thinkingBudgetTokens")
+            .and_then(Value::as_u64);
+        payload_options.effort = options
+            .stream
+            .extra
+            .get("effort")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+    } else if let Some(reasoning) = options.reasoning {
         payload_options.thinking_enabled = Some(true);
         if supports_anthropic_adaptive_thinking(&model.id) {
             payload_options.effort =
@@ -697,6 +735,12 @@ pub fn build_anthropic_payload(
                 })
                 .collect(),
         );
+    }
+    if let Some(metadata_user_id) = options.metadata_user_id {
+        payload["metadata"] = json!({ "user_id": metadata_user_id });
+    }
+    if let Some(tool_choice) = options.tool_choice {
+        payload["tool_choice"] = tool_choice;
     }
 
     if model.reasoning {
@@ -1154,6 +1198,15 @@ fn format_anthropic_tool(
         formatted["cache_control"] = cache_control.clone();
     }
     formatted
+}
+
+fn format_anthropic_tool_choice_option(value: &Value) -> Option<Value> {
+    match value.as_str() {
+        Some("") => None,
+        Some(choice) => Some(json!({ "type": choice })),
+        None if value.is_object() => Some(value.clone()),
+        None => None,
+    }
 }
 
 fn anthropic_outbound_tool_name(name: &str, use_claude_code_tool_names: bool) -> String {

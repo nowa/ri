@@ -464,6 +464,12 @@ impl ApiProvider for AnthropicMessagesHttpProvider {
                 headers: options.stream.headers.clone(),
                 session_id: options.stream.session_id.clone(),
                 cache_retention: options.stream.cache_retention,
+                interleaved_thinking: options
+                    .stream
+                    .extra
+                    .get("interleavedThinking")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
                 ..Default::default()
             },
         );
