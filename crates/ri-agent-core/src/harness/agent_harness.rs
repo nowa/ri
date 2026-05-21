@@ -1265,7 +1265,7 @@ impl AgentHarness {
                 None => {
                     let model = self.get_model();
                     let thinking_level = self.get_thinking_level();
-                    let auth = self.resolve_provider_auth(&model)?;
+                    let auth = self.resolve_summary_auth(&model, "compaction")?;
                     let headers = (!auth.headers.is_empty()).then_some(auth.headers);
                     match compact_prepared_session(
                         &preparation,
@@ -1369,7 +1369,7 @@ impl AgentHarness {
                             Some(result) => result,
                             None => {
                                 let model = self.get_model();
-                                let auth = self.resolve_provider_auth(&model)?;
+                                let auth = self.resolve_summary_auth(&model, "branch summary")?;
                                 let headers = (!auth.headers.is_empty()).then_some(auth.headers);
                                 match generate_branch_summary(
                                     &collected.entries,
@@ -1497,7 +1497,7 @@ impl AgentHarness {
 
             if summary_text.is_none() && options.summarize && !collected.entries.is_empty() {
                 let model = self.get_model();
-                let auth = self.resolve_provider_auth(&model)?;
+                let auth = self.resolve_summary_auth(&model, "branch summary")?;
                 let headers = (!auth.headers.is_empty()).then_some(auth.headers);
                 let custom_instructions = hook_result
                     .as_ref()
@@ -1854,11 +1854,17 @@ impl AgentHarness {
         Ok(())
     }
 
-    fn resolve_provider_auth(&self, model: &Model) -> Result<ProviderAuth, AgentHarnessError> {
-        self.get_api_key_and_headers
-            .as_ref()
-            .map(|provider| provider(model))
-            .unwrap_or_else(|| Ok(ProviderAuth::default()))
+    fn resolve_summary_auth(
+        &self,
+        model: &Model,
+        operation: &'static str,
+    ) -> Result<ProviderAuth, AgentHarnessError> {
+        self.get_api_key_and_headers.as_ref().ok_or_else(|| {
+            AgentHarnessError::new(
+                AgentHarnessErrorCode::Auth,
+                format!("No auth available for {operation}"),
+            )
+        })?(model)
     }
 
     fn emit_before_agent_start(

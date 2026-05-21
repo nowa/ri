@@ -330,16 +330,16 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1109 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1111 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 926 tests: 1 library test, 294 `provider_core` tests, and
   631 `provider_live` tests. This is 205 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 183 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 185 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 33 above the 150 direct simple
+  `resources`, and `session_storage`. This is 35 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -368,7 +368,7 @@ Current Rust tests: 1109 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1109-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1111-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -391,7 +391,21 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning harness
+- Latest local verification on 2026-05-21 after aligning generated compaction
+  and branch-summary auth handling with `harness/agent-harness.ts`: generated
+  compaction and `navigateTree(..., { summarize: true })` branch summaries now
+  require a configured auth provider and fail with `Auth` when auth is
+  unavailable, while hook-supplied summaries still bypass provider generation
+  and existing provider-generation error paths keep their `Compaction` /
+  `BranchSummary` classification once auth is present:
+  `cargo fmt`, `cargo fmt --check`,
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_compaction_generation_requires_auth_provider -- --exact`,
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_navigate_tree_summary_requires_auth_provider -- --exact`,
+  `cargo test -p ri-agent-core -- --test-threads=1`, `git diff --check`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1111 tests.
+- Previous local verification on 2026-05-21 after aligning harness
   compaction/branch-summary error classification with
   `harness/agent-harness.ts` and `harness/types.ts`: `session_before_compact`
   cancellation now returns a `Compaction` harness error instead of conflating
@@ -542,6 +556,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1109 Rust tests cover the
+- Test parity is not certified by raw count alone: 1111 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

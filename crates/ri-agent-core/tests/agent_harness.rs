@@ -2520,11 +2520,15 @@ async fn agent_harness_compaction_generation_errors_flush_pending_writes_without
         .append_message(Message::User(UserMessage::text("recent request")))
         .expect("append recent");
 
-    let harness = Arc::new(AgentHarness::new(AgentHarnessOptions::new(
-        test_env(),
-        session.clone(),
-        registration.get_model(),
-    )));
+    let mut options =
+        AgentHarnessOptions::new(test_env(), session.clone(), registration.get_model());
+    options.get_api_key_and_headers = Some(Arc::new(|_| {
+        Ok(ProviderAuth {
+            api_key: Some("compact-error-key".to_owned()),
+            headers: BTreeMap::new(),
+        })
+    }));
+    let harness = Arc::new(AgentHarness::new(options));
     let events = Arc::new(Mutex::new(Vec::<String>::new()));
     let events_ref = events.clone();
     harness.subscribe(move |event| match event {
@@ -2582,6 +2586,55 @@ async fn agent_harness_compaction_generation_errors_flush_pending_writes_without
             .all(|entry| !matches!(entry, SessionTreeEntry::Compaction { .. }))
     );
     registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_harness_compaction_generation_requires_auth_provider() {
+    let mut session = Session::new(InMemorySessionStorage::new());
+    session
+        .append_message(Message::User(UserMessage::text("old user context")))
+        .expect("append user");
+    session
+        .append_message(Message::Assistant(faux_assistant_message(
+            "old assistant context",
+            Default::default(),
+        )))
+        .expect("append assistant");
+    session
+        .append_message(Message::User(UserMessage::text("recent request")))
+        .expect("append recent");
+
+    let harness = AgentHarness::new(AgentHarnessOptions::new(
+        test_env(),
+        session.clone(),
+        Model::faux(
+            "compact-auth-api",
+            "compact-auth-provider",
+            "compact-auth-model",
+        ),
+    ));
+
+    let error = harness
+        .compact_session(AgentHarnessCompactionOptions {
+            settings: CompactionThresholdSettings {
+                enabled: true,
+                reserve_tokens: 128,
+                keep_recent_tokens: 1,
+            },
+            custom_instructions: None,
+        })
+        .await
+        .expect_err("missing compaction auth");
+
+    assert_eq!(error.code, AgentHarnessErrorCode::Auth);
+    assert_eq!(error.message, "No auth available for compaction");
+    assert_eq!(harness.phase(), AgentHarnessPhase::Idle);
+    assert!(
+        session
+            .entries()
+            .iter()
+            .all(|entry| !matches!(entry, SessionTreeEntry::Compaction { .. }))
+    );
 }
 
 #[tokio::test]
@@ -2920,6 +2973,55 @@ async fn agent_harness_navigate_tree_hook_can_cancel_without_moving() {
 }
 
 #[tokio::test]
+async fn agent_harness_navigate_tree_summary_requires_auth_provider() {
+    let mut session = Session::new(InMemorySessionStorage::new());
+    let _anchor = session
+        .append_message(Message::User(UserMessage::text("main path")))
+        .expect("append anchor");
+    let target_user = session
+        .append_message(Message::User(UserMessage::text("revise this")))
+        .expect("append target user");
+    let old_leaf = session
+        .append_message(Message::Assistant(faux_assistant_message(
+            "old branch response",
+            Default::default(),
+        )))
+        .expect("append old leaf");
+
+    let harness = AgentHarness::new(AgentHarnessOptions::new(
+        test_env(),
+        session.clone(),
+        Model::faux(
+            "branch-auth-api",
+            "branch-auth-provider",
+            "branch-auth-model",
+        ),
+    ));
+
+    let error = harness
+        .navigate_tree(
+            target_user,
+            AgentHarnessNavigateTreeOptions {
+                summarize: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("missing branch summary auth");
+
+    assert_eq!(error.code, AgentHarnessErrorCode::Auth);
+    assert_eq!(error.message, "No auth available for branch summary");
+    assert_eq!(harness.phase(), AgentHarnessPhase::Idle);
+    assert_eq!(session.leaf_id().expect("leaf"), Some(old_leaf));
+    assert!(
+        session
+            .entries()
+            .iter()
+            .all(|entry| !matches!(entry, SessionTreeEntry::BranchSummary { .. }))
+    );
+}
+
+#[tokio::test]
 async fn agent_harness_session_before_branch_summary_hook_can_supply_summary() {
     let registration = register_faux_provider(RegisterFauxProviderOptions {
         models: vec![FauxModelDefinition::new("hook-branch-summary-model")],
@@ -3174,11 +3276,15 @@ async fn agent_harness_branch_summary_generation_errors_flush_pending_writes_wit
         .append_message(Message::User(UserMessage::text("branch work")))
         .expect("append branch");
 
-    let harness = Arc::new(AgentHarness::new(AgentHarnessOptions::new(
-        test_env(),
-        session.clone(),
-        registration.get_model(),
-    )));
+    let mut options =
+        AgentHarnessOptions::new(test_env(), session.clone(), registration.get_model());
+    options.get_api_key_and_headers = Some(Arc::new(|_| {
+        Ok(ProviderAuth {
+            api_key: Some("branch-error-key".to_owned()),
+            headers: BTreeMap::new(),
+        })
+    }));
+    let harness = Arc::new(AgentHarness::new(options));
     let events = Arc::new(Mutex::new(Vec::<String>::new()));
     let events_ref = events.clone();
     harness.subscribe(move |event| match event {
