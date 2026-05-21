@@ -204,8 +204,8 @@ pub fn normalize_github_domain(input: &str) -> Option<String> {
         return None;
     }
     let without_scheme = trimmed
-        .strip_prefix("https://")
-        .or_else(|| trimmed.strip_prefix("http://"))
+        .find("://")
+        .map(|scheme_end| &trimmed[scheme_end + 3..])
         .unwrap_or(trimmed);
     let host = without_scheme
         .split(['/', '?', '#'])
@@ -220,7 +220,7 @@ pub fn normalize_github_domain(input: &str) -> Option<String> {
         .trim()
         .trim_end_matches('.');
     if is_valid_domain(host) {
-        Some(host.to_owned())
+        Some(host.to_ascii_lowercase())
     } else {
         None
     }
@@ -301,11 +301,8 @@ pub fn parse_github_copilot_device_code_response(
             .get("verification_uri_complete")
             .and_then(Value::as_str)
             .map(str::to_owned),
-        interval_seconds: data.get("interval").and_then(Value::as_u64).unwrap_or(5),
-        expires_in_seconds: data
-            .get("expires_in")
-            .and_then(Value::as_u64)
-            .unwrap_or(900),
+        interval_seconds: required_u64(&data, "interval", "GitHub Copilot device code")?,
+        expires_in_seconds: required_u64(&data, "expires_in", "GitHub Copilot device code")?,
     })
 }
 
@@ -808,6 +805,13 @@ fn required_string(value: &Value, field: &str, label: &str) -> Result<String, St
         .get(field)
         .and_then(Value::as_str)
         .map(str::to_owned)
+        .ok_or_else(|| format!("{label} response was missing {field}"))
+}
+
+fn required_u64(value: &Value, field: &str, label: &str) -> Result<u64, String> {
+    value
+        .get(field)
+        .and_then(Value::as_u64)
         .ok_or_else(|| format!("{label} response was missing {field}"))
 }
 

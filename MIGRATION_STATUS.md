@@ -162,11 +162,12 @@ counterparts that pass.
     stale context, registered cleanup hooks all run, errors are aggregated in a
     `Result`, and cleanup registrations unregister on drop.
   - GitHub Copilot OAuth helpers for device-flow request construction,
-    slow-down-aware polling intervals, enterprise domain normalization,
-    Copilot token refresh headers, base-URL derivation, proxy-aware async
-    device-code/access-token poll/token-refresh primitives, complete
-    device-flow orchestration with refresh-token exchange, and post-login
-    model-policy enable requests for known GitHub Copilot models.
+    slow-down-aware polling intervals, source-style enterprise domain
+    normalization for mixed-case URL schemes/hosts, strict device-code response
+    field validation, Copilot token refresh headers, base-URL derivation,
+    proxy-aware async device-code/access-token poll/token-refresh primitives,
+    complete device-flow orchestration with refresh-token exchange, and
+    post-login model-policy enable requests for known GitHub Copilot models.
   - OAuth provider metadata registry for built-in Anthropic, GitHub Copilot,
     and OpenAI Codex providers, including Pi display names,
     callback-server markers, and source-style register/unregister/reset
@@ -622,6 +623,14 @@ This migration is not complete.
   `cargo fmt`, `cargo test -p ri-agent-core -- --test-threads=1`,
   `cargo fmt --check`, `git diff --check`, and
   `cargo test --workspace -- --test-threads=1` passed.
+- Latest local verification on 2026-05-22 after aligning
+  `utils/oauth/github-copilot.ts` enterprise-domain and device-code response
+  parsing: GitHub Copilot enterprise domains now accept mixed-case URL schemes
+  and hosts while normalizing to the lowercase hostname, and device-code
+  responses must include the same required `interval` and `expires_in` numeric
+  fields as Pi before polling starts:
+  `cargo fmt`, `cargo test -p ri-llm-provider --test provider_core github_copilot_oauth -- --test-threads=1`,
+  `cargo fmt --check`, and `git diff --check` passed.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
   RFC3339 timestamp values, matching Pi's `new Date(createdAt).getTime()`

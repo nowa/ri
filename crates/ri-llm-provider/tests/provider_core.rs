@@ -3951,10 +3951,24 @@ fn github_copilot_oauth_refresh_and_base_url_helpers_match_provider() {
         Some("ghe.example.com".to_owned())
     );
     assert_eq!(
+        normalize_github_domain(" HTTPS://GHE.EXAMPLE.COM:8443/org "),
+        Some("ghe.example.com".to_owned())
+    );
+    assert_eq!(
+        normalize_github_domain("user@GHE.EXAMPLE.COM"),
+        Some("ghe.example.com".to_owned())
+    );
+    assert_eq!(
         normalize_github_domain("github.com"),
         Some("github.com".to_owned())
     );
     assert_eq!(normalize_github_domain("not a domain"), None);
+
+    let err = parse_github_copilot_device_code_response(
+        r#"{"device_code":"device-code","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","expires_in":900}"#,
+    )
+    .expect_err("missing interval should be invalid");
+    assert!(err.contains("interval"), "{err}");
 
     let refresh = build_github_copilot_refresh_request("ghu_refresh_token", None);
     assert_eq!(
