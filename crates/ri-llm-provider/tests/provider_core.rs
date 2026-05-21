@@ -14924,6 +14924,41 @@ async fn builtin_cloudflare_ai_gateway_completions_uses_cf_aig_auth_without_upst
 }
 
 #[tokio::test]
+async fn builtin_cloudflare_ai_gateway_completions_preserves_byok_auth_header() {
+    let sse = concat!(
+        "data: {\"id\":\"chatcmpl_cf_byok\",\"choices\":[{\"delta\":{\"content\":\"Cloudflare BYOK\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let mut model = get_model(
+        "cloudflare-ai-gateway",
+        "workers-ai/@cf/moonshotai/kimi-k2.6",
+    )
+    .expect("cloudflare gateway workers model");
+    assert_eq!(model.api, "openai-completions");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("cf-token".to_owned());
+    options.stream.headers.insert(
+        "Authorization".to_owned(),
+        "Bearer upstream-token".to_owned(),
+    );
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let request = request_task.await.expect("request task");
+    let lower_request = request.to_ascii_lowercase();
+
+    assert_eq!(text_of(&message), Some("Cloudflare BYOK"));
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+    assert!(lower_request.contains("authorization: bearer upstream-token"));
+    assert!(lower_request.contains("cf-aig-authorization: bearer cf-token"));
+    assert!(!lower_request.contains("\r\nauthorization: bearer cf-token"));
+}
+
+#[tokio::test]
 async fn builtin_openai_completions_provider_emits_sse_events_incrementally() {
     let (base_url, request_task) = mock_delayed_sse_server(
         vec![
