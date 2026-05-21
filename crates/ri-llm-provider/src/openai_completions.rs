@@ -45,11 +45,19 @@ pub fn build_openai_completions_payload(
     }
 
     if !context.tools.is_empty() {
+        let last_tool_index = context.tools.len() - 1;
         payload["tools"] = Value::Array(
             context
                 .tools
                 .iter()
-                .map(|tool| format_tool(tool, model, cache_control.as_ref()))
+                .enumerate()
+                .map(|(index, tool)| {
+                    format_tool(
+                        tool,
+                        model,
+                        cache_control.as_ref().filter(|_| index == last_tool_index),
+                    )
+                })
                 .collect(),
         );
     } else if has_tool_history(&context.messages) {
@@ -117,9 +125,6 @@ fn convert_openai_completions_messages_with_cache(
         model,
         Some(&|id, model, _source| normalize_openai_completions_tool_call_id(id, model)),
     );
-    let last_user_index = transformed_messages
-        .iter()
-        .rposition(|message| matches!(message, Message::User(_)));
     let mut last_role: Option<&str> = None;
     let mut index = 0;
     while index < transformed_messages.len() {
@@ -136,8 +141,7 @@ fn convert_openai_completions_messages_with_cache(
 
         match message {
             Message::User(user) => {
-                let cache = cache_control.filter(|_| Some(index) == last_user_index);
-                if let Some(content) = format_user_content(&user.content, cache) {
+                if let Some(content) = format_user_content(&user.content, None) {
                     messages.push(json!({
                         "role": "user",
                         "content": content,
@@ -331,6 +335,12 @@ fn convert_openai_completions_messages_with_cache(
         index += 1;
     }
 
+    if let Some(cache_control) = cache_control {
+        add_openai_completions_cache_control_to_last_conversation_message(
+            &mut messages,
+            cache_control,
+        );
+    }
     messages
 }
 
@@ -888,6 +898,54 @@ fn text_part(text: &str, cache_control: Option<&Value>) -> Value {
         part["cache_control"] = cache_control.clone();
     }
     part
+}
+
+fn add_openai_completions_cache_control_to_last_conversation_message(
+    messages: &mut [Value],
+    cache_control: &Value,
+) {
+    for message in messages.iter_mut().rev() {
+        if matches!(
+            message.get("role").and_then(Value::as_str),
+            Some("user" | "assistant")
+        ) && add_openai_completions_cache_control_to_message(message, cache_control)
+        {
+            return;
+        }
+    }
+}
+
+fn add_openai_completions_cache_control_to_message(
+    message: &mut Value,
+    cache_control: &Value,
+) -> bool {
+    let Some(content) = message.get_mut("content") else {
+        return false;
+    };
+    add_openai_completions_cache_control_to_content(content, cache_control)
+}
+
+fn add_openai_completions_cache_control_to_content(
+    content: &mut Value,
+    cache_control: &Value,
+) -> bool {
+    match content {
+        Value::String(text) if !text.is_empty() => {
+            let text = text.clone();
+            *content = Value::Array(vec![text_part(&text, Some(cache_control))]);
+            true
+        }
+        Value::Array(parts) => {
+            for part in parts.iter_mut().rev() {
+                if part.get("type").and_then(Value::as_str) == Some("text") {
+                    part["cache_control"] = cache_control.clone();
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 fn format_tool(tool: &Tool, model: &Model, cache_control: Option<&Value>) -> Value {

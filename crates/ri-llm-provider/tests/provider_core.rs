@@ -10998,6 +10998,53 @@ fn openai_completions_payload_applies_anthropic_cache_control_format() {
         json!({ "type": "ephemeral" })
     );
 
+    let assistant_tail_context = Context {
+        system_prompt: Some("System prompt".to_owned()),
+        messages: vec![
+            Message::User(UserMessage::text("Hello")),
+            Message::Assistant(AssistantMessage {
+                content: vec![AssistantContent::Text(TextContent::new("Assistant replay"))],
+                api: model.api.clone(),
+                provider: model.provider.clone(),
+                model: model.id.clone(),
+                response_model: None,
+                response_id: None,
+                diagnostics: Vec::new(),
+                usage: Usage::zero(),
+                stop_reason: StopReason::Stop,
+                error_message: None,
+                timestamp: 2,
+            }),
+        ],
+        tools: vec![
+            Tool {
+                name: "read".to_owned(),
+                description: "Read a file".to_owned(),
+                parameters: json!({ "type": "object" }),
+            },
+            Tool {
+                name: "write".to_owned(),
+                description: "Write a file".to_owned(),
+                parameters: json!({ "type": "object" }),
+            },
+        ],
+    };
+    let payload = build_openai_completions_payload(
+        &model,
+        &assistant_tail_context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert!(payload["tools"][0].get("cache_control").is_none());
+    assert_eq!(
+        payload["tools"][1]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+    assert!(payload["messages"][1]["content"].as_str().is_some());
+    assert_eq!(
+        payload["messages"][2]["content"][0]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+
     let openrouter_anthropic =
         get_model("openrouter", "anthropic/claude-sonnet-4").expect("openrouter anthropic model");
     let openrouter_payload = build_openai_completions_payload(
