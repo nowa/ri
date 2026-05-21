@@ -8911,6 +8911,67 @@ fn anthropic_oauth_payload_uses_claude_code_tool_names_for_tools_and_history() {
     );
 }
 
+#[test]
+fn anthropic_oauth_payload_adds_claude_code_identity_system_blocks() {
+    let model = anthropic_test_model(None);
+    let context = Context {
+        system_prompt: Some("You are concise.".to_owned()),
+        messages: vec![Message::User(UserMessage::text("Hello"))],
+        ..Default::default()
+    };
+
+    let payload = build_anthropic_payload(
+        &model,
+        &context,
+        AnthropicPayloadOptions {
+            use_claude_code_tool_names: true,
+            cache_retention: Some(CacheRetention::Short),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(payload["system"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        payload["system"][0]["text"],
+        "You are Claude Code, Anthropic's official CLI for Claude."
+    );
+    assert_eq!(payload["system"][1]["text"], "You are concise.");
+    assert_eq!(
+        payload["system"][0]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+    assert_eq!(
+        payload["system"][1]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+
+    let identity_only_payload = build_anthropic_payload(
+        &model,
+        &Context {
+            messages: vec![Message::User(UserMessage::text("Hello"))],
+            ..Default::default()
+        },
+        AnthropicPayloadOptions {
+            use_claude_code_tool_names: true,
+            cache_retention: Some(CacheRetention::None),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        identity_only_payload["system"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        identity_only_payload["system"][0]["text"],
+        "You are Claude Code, Anthropic's official CLI for Claude."
+    );
+    assert!(
+        identity_only_payload["system"][0]
+            .get("cache_control")
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn anthropic_oauth_stream_processor_restores_source_tool_name() {
     let model = anthropic_test_model(None);

@@ -126,8 +126,8 @@ counterparts that pass.
     and BYOK upstream authorization preservation, and adaptive-model
     interleaved-thinking beta omission.
   - Anthropic Claude Code tool-name casing helpers, including OAuth payload,
-    assistant-history replay, stream inbound restoration, and built-in provider
-    wiring integration.
+    assistant-history replay, OAuth identity system prompts, stream inbound
+    restoration, and built-in provider wiring integration.
   - Anthropic OAuth helpers for PKCE generation, authorization URL
     construction, local callback server/state validation with pi-style
     success/error HTML pages and escaped details, manual redirect input login
@@ -867,7 +867,9 @@ This migration is not complete.
   `providers/anthropic.ts` usage-cost parity: Anthropic raw SSE parsing and
   the HTTP streaming processor now calculate model-priced usage costs when
   `message_start` or `message_delta` usage arrives, while preserving partial
-  usage fields across deltas:
+  usage fields across deltas. Anthropic OAuth payloads now also include the
+  source Claude Code identity system prompt before caller-provided system
+  prompts:
   `cargo test -p ri-llm-provider --test provider_core anthropic -- --test-threads=1`,
   `cargo fmt --check`, and `git diff --check` passed.
 - Latest local verification on 2026-05-21 after aligning

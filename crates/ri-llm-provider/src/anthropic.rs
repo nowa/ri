@@ -708,15 +708,29 @@ pub fn build_anthropic_payload(
         payload["temperature"] = json!(temperature);
     }
 
-    if let Some(system_prompt) = &context.system_prompt {
+    let mut system_blocks = Vec::new();
+    if use_claude_code_tool_names {
         let mut block = json!({
             "type": "text",
-            "text": system_prompt,
+            "text": "You are Claude Code, Anthropic's official CLI for Claude.",
         });
         if let Some(cache_control) = &cache_control {
             block["cache_control"] = cache_control.clone();
         }
-        payload["system"] = Value::Array(vec![block]);
+        system_blocks.push(block);
+    }
+    if let Some(system_prompt) = &context.system_prompt {
+        let mut block = json!({
+            "type": "text",
+            "text": sanitize_surrogates(system_prompt),
+        });
+        if let Some(cache_control) = &cache_control {
+            block["cache_control"] = cache_control.clone();
+        }
+        system_blocks.push(block);
+    }
+    if !system_blocks.is_empty() {
+        payload["system"] = Value::Array(system_blocks);
     }
 
     if !context.tools.is_empty() {
