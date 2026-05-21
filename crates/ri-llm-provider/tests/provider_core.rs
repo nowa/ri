@@ -248,6 +248,37 @@ fn api_registry_provider_rejects_mismatched_model_api_before_delegating() {
     assert!(get_api_provider(&api).is_none());
 }
 
+#[test]
+fn api_provider_reset_restores_builtins_after_clear_and_removes_custom_providers() {
+    let api = format!("reset-api-{}", now_millis());
+    register_api_provider(
+        Arc::new(RecordingApiProvider {
+            api: api.clone(),
+            called: Arc::new(AtomicBool::new(false)),
+        }),
+        Some(format!("source-{api}")),
+    );
+    assert!(get_api_provider(&api).is_some());
+
+    clear_api_providers();
+    ensure_builtin_api_providers();
+    assert!(get_api_provider("openai-responses").is_some());
+    assert!(get_api_provider("anthropic-messages").is_some());
+    assert!(get_api_provider(&api).is_none());
+
+    register_api_provider(
+        Arc::new(RecordingApiProvider {
+            api: api.clone(),
+            called: Arc::new(AtomicBool::new(false)),
+        }),
+        Some(format!("source-{api}")),
+    );
+    reset_api_providers();
+    assert!(get_api_provider("openai-responses").is_some());
+    assert!(get_api_provider("bedrock-converse-stream").is_some());
+    assert!(get_api_provider(&api).is_none());
+}
+
 fn user_context(text: &str) -> Context {
     Context {
         messages: vec![Message::User(UserMessage::text(text))],
@@ -1948,6 +1979,35 @@ async fn images_api_registry_dispatches_generate_images_and_reports_missing_prov
     assert_eq!(seen.lock().expect("seen").len(), 1);
 
     unregister_images_api_providers(&source_id);
+    assert!(get_images_api_provider(&api).is_none());
+}
+
+#[test]
+fn images_api_provider_reset_restores_builtins_after_clear_and_removes_custom_providers() {
+    let api = format!("reset-images-{}", now_millis());
+    register_images_api_provider(
+        Arc::new(RecordingImagesProvider {
+            api: api.clone(),
+            seen: Arc::new(Mutex::new(Vec::new())),
+        }),
+        Some(format!("source-{api}")),
+    );
+    assert!(get_images_api_provider(&api).is_some());
+
+    clear_images_api_providers();
+    ensure_builtin_images_api_providers();
+    assert!(get_images_api_provider("openrouter-images").is_some());
+    assert!(get_images_api_provider(&api).is_none());
+
+    register_images_api_provider(
+        Arc::new(RecordingImagesProvider {
+            api: api.clone(),
+            seen: Arc::new(Mutex::new(Vec::new())),
+        }),
+        Some(format!("source-{api}")),
+    );
+    reset_images_api_providers();
+    assert!(get_images_api_provider("openrouter-images").is_some());
     assert!(get_images_api_provider(&api).is_none());
 }
 

@@ -1,7 +1,10 @@
 use crate::{
     api_registry::ProviderError,
     get_env_api_key,
-    images_api_registry::{ImagesApiProvider, register_images_api_provider},
+    images_api_registry::{
+        ImagesApiProvider, clear_images_api_providers, get_images_api_provider,
+        register_images_api_provider,
+    },
     json_repair::{parse_json_with_repair, sanitize_surrogates},
     node_http_proxy::reqwest_client_for_target,
     types::{
@@ -15,20 +18,43 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     future::Future,
-    sync::{Arc, Once, atomic::Ordering},
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
-static REGISTER_BUILTIN_IMAGES: Once = Once::new();
+const BUILTIN_IMAGES_API_PROVIDER_SOURCE_ID: &str = "builtin-http";
 const OPENROUTER_IMAGES_BASE_RETRY_DELAY_MS: u64 = 1000;
 
 pub fn ensure_builtin_images_api_providers() {
-    REGISTER_BUILTIN_IMAGES.call_once(|| {
-        register_images_api_provider(
-            Arc::new(OpenRouterImagesHttpProvider),
-            Some("builtin-http".to_owned()),
-        );
-    });
+    register_builtin_images_api_provider_if_missing(
+        "openrouter-images",
+        Arc::new(OpenRouterImagesHttpProvider),
+    );
+}
+
+pub fn register_builtin_images_api_providers() {
+    register_builtin_images_api_provider(Arc::new(OpenRouterImagesHttpProvider));
+}
+
+pub fn reset_images_api_providers() {
+    clear_images_api_providers();
+    register_builtin_images_api_providers();
+}
+
+fn register_builtin_images_api_provider_if_missing(
+    api: &str,
+    provider: Arc<dyn ImagesApiProvider>,
+) {
+    if get_images_api_provider(api).is_none() {
+        register_builtin_images_api_provider(provider);
+    }
+}
+
+fn register_builtin_images_api_provider(provider: Arc<dyn ImagesApiProvider>) {
+    register_images_api_provider(
+        provider,
+        Some(BUILTIN_IMAGES_API_PROVIDER_SOURCE_ID.to_owned()),
+    );
 }
 
 struct OpenRouterImagesHttpProvider;

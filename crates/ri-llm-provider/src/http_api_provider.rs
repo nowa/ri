@@ -3,7 +3,10 @@ use crate::{
         AnthropicClientOptions, AnthropicStreamProcessor, build_anthropic_client_config,
         build_anthropic_simple_payload_for_client,
     },
-    api_registry::{ApiProvider, ProviderError, ensure_model_api, register_api_provider},
+    api_registry::{
+        ApiProvider, ProviderError, clear_api_providers, ensure_model_api, get_api_provider,
+        register_api_provider,
+    },
     azure_openai::{
         AzureOpenAIConfigOptions, AzureOpenAIResponsesPayloadOptions,
         build_azure_openai_responses_payload, resolve_azure_openai_config,
@@ -57,12 +60,12 @@ use futures::StreamExt;
 use serde_json::{Map, Value};
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Once, OnceLock, atomic::Ordering},
+    sync::{Arc, OnceLock, atomic::Ordering},
 };
 
-static REGISTER_BUILTINS: Once = Once::new();
 static OPENAI_CODEX_WS_CACHE: OnceLock<tokio::sync::Mutex<BTreeMap<String, CachedCodexWebSocket>>> =
     OnceLock::new();
+const BUILTIN_API_PROVIDER_SOURCE_ID: &str = "builtin-http";
 
 struct CachedCodexWebSocket {
     socket: OpenAICodexWebSocket,
@@ -88,44 +91,70 @@ pub async fn cleanup_openai_codex_websocket_sessions(session_id: Option<&str>) -
 }
 
 pub fn ensure_builtin_api_providers() {
-    REGISTER_BUILTINS.call_once(|| {
-        register_api_provider(
-            Arc::new(OpenAICompletionsHttpProvider),
-            Some("builtin-http".to_owned()),
-        );
-        register_api_provider(
-            Arc::new(OpenAIResponsesHttpProvider),
-            Some("builtin-http".to_owned()),
-        );
-        register_api_provider(
-            Arc::new(MistralHttpProvider),
-            Some("builtin-http".to_owned()),
-        );
-        register_api_provider(
-            Arc::new(AzureOpenAIResponsesHttpProvider),
-            Some("builtin-http".to_owned()),
-        );
-        register_api_provider(
-            Arc::new(AnthropicMessagesHttpProvider),
-            Some("builtin-http".to_owned()),
-        );
-        register_api_provider(
-            Arc::new(GoogleGenerativeAiHttpProvider),
-            Some("builtin-http".to_owned()),
-        );
-        register_api_provider(
-            Arc::new(GoogleVertexHttpProvider),
-            Some("builtin-http".to_owned()),
-        );
-        register_api_provider(
-            Arc::new(OpenAICodexResponsesHttpProvider),
-            Some("builtin-http".to_owned()),
-        );
-        register_api_provider(
-            Arc::new(BedrockConverseStreamHttpProvider),
-            Some("builtin-http".to_owned()),
-        );
-    });
+    register_missing_builtin_api_providers();
+}
+
+pub fn register_builtin_api_providers() {
+    register_builtin_api_provider(Arc::new(AnthropicMessagesHttpProvider));
+    register_builtin_api_provider(Arc::new(OpenAICompletionsHttpProvider));
+    register_builtin_api_provider(Arc::new(MistralHttpProvider));
+    register_builtin_api_provider(Arc::new(OpenAIResponsesHttpProvider));
+    register_builtin_api_provider(Arc::new(AzureOpenAIResponsesHttpProvider));
+    register_builtin_api_provider(Arc::new(OpenAICodexResponsesHttpProvider));
+    register_builtin_api_provider(Arc::new(GoogleGenerativeAiHttpProvider));
+    register_builtin_api_provider(Arc::new(GoogleVertexHttpProvider));
+    register_builtin_api_provider(Arc::new(BedrockConverseStreamHttpProvider));
+}
+
+pub fn reset_api_providers() {
+    clear_api_providers();
+    register_builtin_api_providers();
+}
+
+fn register_missing_builtin_api_providers() {
+    register_builtin_api_provider_if_missing(
+        "anthropic-messages",
+        Arc::new(AnthropicMessagesHttpProvider),
+    );
+    register_builtin_api_provider_if_missing(
+        "openai-completions",
+        Arc::new(OpenAICompletionsHttpProvider),
+    );
+    register_builtin_api_provider_if_missing(
+        "mistral-conversations",
+        Arc::new(MistralHttpProvider),
+    );
+    register_builtin_api_provider_if_missing(
+        "openai-responses",
+        Arc::new(OpenAIResponsesHttpProvider),
+    );
+    register_builtin_api_provider_if_missing(
+        "azure-openai-responses",
+        Arc::new(AzureOpenAIResponsesHttpProvider),
+    );
+    register_builtin_api_provider_if_missing(
+        "openai-codex-responses",
+        Arc::new(OpenAICodexResponsesHttpProvider),
+    );
+    register_builtin_api_provider_if_missing(
+        "google-generative-ai",
+        Arc::new(GoogleGenerativeAiHttpProvider),
+    );
+    register_builtin_api_provider_if_missing("google-vertex", Arc::new(GoogleVertexHttpProvider));
+    register_builtin_api_provider_if_missing(
+        "bedrock-converse-stream",
+        Arc::new(BedrockConverseStreamHttpProvider),
+    );
+}
+
+fn register_builtin_api_provider_if_missing(api: &str, provider: Arc<dyn ApiProvider>) {
+    if get_api_provider(api).is_none() {
+        register_builtin_api_provider(provider);
+    }
+}
+
+fn register_builtin_api_provider(provider: Arc<dyn ApiProvider>) {
+    register_api_provider(provider, Some(BUILTIN_API_PROVIDER_SOURCE_ID.to_owned()));
 }
 
 struct OpenAICompletionsHttpProvider;
