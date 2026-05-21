@@ -29,7 +29,23 @@ fn message_entry(id: &str, parent_id: Option<&str>, message: Message) -> Session
         id: id.to_owned(),
         parent_id: parent_id.map(str::to_owned),
         timestamp: "2026-01-01T00:00:00.000Z".to_owned(),
-        message,
+        message: message.into(),
+    }
+}
+
+fn bash_execution_entry(
+    id: &str,
+    parent_id: Option<&str>,
+    command: &str,
+    output: &str,
+) -> SessionTreeEntry {
+    let mut message = BashExecutionMessage::new(command, output, 1_700_000_000_000);
+    message.exit_code = Some(0);
+    SessionTreeEntry::Message {
+        id: id.to_owned(),
+        parent_id: parent_id.map(str::to_owned),
+        timestamp: "2026-01-01T00:00:00.000Z".to_owned(),
+        message: message.into(),
     }
 }
 
@@ -227,6 +243,32 @@ fn compaction_estimates_tokens_and_uses_latest_valid_assistant_usage() {
             .last_usage_index,
         None
     );
+}
+
+#[test]
+fn compaction_treats_bash_execution_as_user_visible_context() {
+    let mut bash_message = BashExecutionMessage::new("cargo test", "ok", 1_700_000_000_000);
+    bash_message.exit_code = Some(0);
+    let session_messages = vec![SessionMessage::BashExecution(bash_message.clone())];
+    assert!(estimate_session_context_tokens(&session_messages) > 0);
+
+    let llm_messages = convert_session_messages_to_llm(&session_messages);
+    assert_eq!(llm_messages.len(), 1);
+    let text = first_user_text(&Context {
+        system_prompt: None,
+        messages: llm_messages,
+        tools: Vec::new(),
+    });
+    assert_eq!(text, bash_execution_to_text(&bash_message));
+
+    let bash = bash_execution_entry("bash", None, "cargo test", "ok");
+    let assistant = message_entry("assistant", Some("bash"), assistant_message_text("done"));
+    let entries = vec![bash, assistant];
+    assert_eq!(find_entry_turn_start_index(&entries, 1, 0), Some(0));
+    let cut = find_cut_point(&entries, 0, entries.len(), 1);
+    assert_eq!(cut.first_kept_entry_index, 1);
+    assert_eq!(cut.turn_start_index, Some(0));
+    assert!(cut.is_split_turn);
 }
 
 #[test]

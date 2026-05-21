@@ -1,5 +1,5 @@
 use ri_agent_core::*;
-use ri_llm_provider::Message;
+use ri_llm_provider::{Message, UserContent, UserContentValue};
 use serde_json::json;
 use std::{fs, path::PathBuf};
 
@@ -38,7 +38,23 @@ fn entry(id: &str, parent_id: Option<&str>, message: Message) -> SessionTreeEntr
         id: id.to_owned(),
         parent_id: parent_id.map(str::to_owned),
         timestamp: "2026-01-01T00:00:00.000Z".to_owned(),
-        message,
+        message: message.into(),
+    }
+}
+
+fn user_message_text_content(message: &Message) -> String {
+    let Message::User(user) = message else {
+        return String::new();
+    };
+    match &user.content {
+        UserContentValue::Plain(text) => text.clone(),
+        UserContentValue::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|block| match block {
+                UserContent::Text(text) => Some(text.text.as_str()),
+                UserContent::Image(_) => None,
+            })
+            .collect(),
     }
 }
 
@@ -593,6 +609,80 @@ fn session_builds_model_thinking_compaction_custom_and_branch_summary_context() 
         session.get_entry(&summary_id),
         Some(SessionTreeEntry::BranchSummary { .. })
     ));
+}
+
+#[test]
+fn session_bash_execution_messages_convert_to_llm_context_and_wire_shape() {
+    let mut session = Session::new(InMemorySessionStorage::new());
+    session
+        .append_message(user_message_text("before"))
+        .expect("user");
+    let mut bash = BashExecutionMessage::new("npm run check", "ok", 1_700_000_000_000);
+    bash.exit_code = Some(7);
+    bash.truncated = true;
+    bash.full_output_path = Some("/tmp/full.log".to_owned());
+    session
+        .append_bash_execution(bash.clone())
+        .expect("bash execution");
+    let mut excluded = BashExecutionMessage::new("cat secret", "hidden", 1_700_000_000_001);
+    excluded.exclude_from_context = true;
+    session
+        .append_bash_execution(excluded)
+        .expect("excluded bash execution");
+
+    let context = session.build_context().expect("context");
+    assert_eq!(
+        context
+            .messages
+            .iter()
+            .map(SessionMessage::role)
+            .collect::<Vec<_>>(),
+        vec!["user", "bashExecution", "bashExecution"]
+    );
+
+    let llm_messages = convert_session_messages_to_llm(&context.messages);
+    assert_eq!(
+        llm_messages
+            .iter()
+            .map(|message| match message {
+                Message::User(_) => "user",
+                Message::Assistant(_) => "assistant",
+                Message::ToolResult(_) => "toolResult",
+            })
+            .collect::<Vec<_>>(),
+        vec!["user", "user"]
+    );
+    let bash_text = user_message_text_content(&llm_messages[1]);
+    assert_eq!(bash_text, bash_execution_to_text(&bash));
+    assert!(bash_text.contains("Ran `npm run check`"));
+    assert!(bash_text.contains("Command exited with code 7"));
+    assert!(bash_text.contains("[Output truncated. Full output: /tmp/full.log]"));
+    let session_message_json =
+        serde_json::to_value(SessionMessage::BashExecution(bash.clone())).expect("session message");
+    assert_eq!(session_message_json["role"], "bashExecution");
+
+    let dir = temp_dir();
+    let path = dir.join("session.jsonl");
+    let storage = JsonlSessionStorage::create(&path, dir.to_string_lossy(), "session-1", None)
+        .expect("jsonl");
+    let mut jsonl_session = Session::new(storage);
+    jsonl_session
+        .append_bash_execution(bash)
+        .expect("jsonl bash execution");
+    let lines = fs::read_to_string(&path).expect("read jsonl");
+    let values = lines
+        .trim()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("json"))
+        .collect::<Vec<_>>();
+    assert_eq!(values[1]["type"], "message");
+    assert_eq!(values[1]["message"]["role"], "bashExecution");
+    assert_eq!(values[1]["message"]["exitCode"], 7);
+    let reloaded = Session::new(JsonlSessionStorage::open(&path).expect("reload"));
+    assert_eq!(
+        reloaded.build_context().expect("context").messages[0].role(),
+        "bashExecution"
+    );
 }
 
 #[test]

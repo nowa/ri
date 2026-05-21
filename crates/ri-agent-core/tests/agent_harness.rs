@@ -53,7 +53,7 @@ fn session_user_texts(session: &Session) -> Vec<String> {
             SessionTreeEntry::Message { message, .. } => Some(message),
             _ => None,
         })
-        .filter_map(|message| match message {
+        .filter_map(|message| match message.into_llm_message()? {
             Message::User(user) => Some(user.content),
             _ => None,
         })
@@ -252,7 +252,7 @@ fn agent_harness_appends_custom_messages_labels_and_session_name() {
         entries.as_slice(),
         [
             SessionTreeEntry::Message {
-                message: Message::User(_),
+                message: SessionEntryMessage::Llm(Message::User(_)),
                 ..
             },
             SessionTreeEntry::Custom {
@@ -521,11 +521,11 @@ async fn agent_harness_queues_model_and_thinking_session_writes_during_turn() {
         entries.as_slice(),
         [
             SessionTreeEntry::Message {
-                message: Message::User(_),
+                message: SessionEntryMessage::Llm(Message::User(_)),
                 ..
             },
             SessionTreeEntry::Message {
-                message: Message::Assistant(_),
+                message: SessionEntryMessage::Llm(Message::Assistant(_)),
                 ..
             },
             SessionTreeEntry::ModelChange { .. },
@@ -588,15 +588,15 @@ async fn agent_harness_orders_pending_append_message_after_agent_messages() {
         entries.as_slice(),
         [
             SessionTreeEntry::Message {
-                message: Message::User(_),
+                message: SessionEntryMessage::Llm(Message::User(_)),
                 ..
             },
             SessionTreeEntry::Message {
-                message: Message::Assistant(_),
+                message: SessionEntryMessage::Llm(Message::Assistant(_)),
                 ..
             },
             SessionTreeEntry::Message {
-                message: Message::User(_),
+                message: SessionEntryMessage::Llm(Message::User(_)),
                 ..
             }
         ]
@@ -3292,15 +3292,15 @@ async fn agent_harness_orders_pending_async_append_message_after_agent_messages(
         entries.as_slice(),
         [
             SessionTreeEntry::Message {
-                message: Message::User(_),
+                message: SessionEntryMessage::Llm(Message::User(_)),
                 ..
             },
             SessionTreeEntry::Message {
-                message: Message::Assistant(_),
+                message: SessionEntryMessage::Llm(Message::Assistant(_)),
                 ..
             },
             SessionTreeEntry::Message {
-                message: Message::User(_),
+                message: SessionEntryMessage::Llm(Message::User(_)),
                 ..
             }
         ]
@@ -3702,7 +3702,7 @@ async fn agent_harness_after_agent_finish_runs_for_provider_start_failure_and_pe
     assert!(session.entries().iter().any(|entry| matches!(
         entry,
         SessionTreeEntry::Message {
-            message: Message::Assistant(assistant),
+            message: SessionEntryMessage::Llm(Message::Assistant(assistant)),
             ..
         } if assistant.stop_reason == StopReason::Error
             && assistant.error_message.as_deref()
@@ -3873,7 +3873,7 @@ async fn agent_harness_after_agent_finish_errors_flush_pending_writes_without_se
     assert!(entries.iter().any(|entry| matches!(
         entry,
         SessionTreeEntry::Message {
-            message: Message::Assistant(assistant),
+            message: SessionEntryMessage::Llm(Message::Assistant(assistant)),
             ..
         } if assistant_text(assistant) == Some("done")
     )));
@@ -3956,7 +3956,7 @@ async fn agent_harness_after_agent_finish_error_waits_for_async_savepoint_listen
     assert!(session.entries().iter().any(|entry| matches!(
         entry,
         SessionTreeEntry::Message {
-            message: Message::Assistant(assistant),
+            message: SessionEntryMessage::Llm(Message::Assistant(assistant)),
             ..
         } if assistant_text(assistant) == Some("done")
     )));
@@ -4019,7 +4019,7 @@ async fn agent_harness_context_hook_failures_persist_assistant_error_messages() 
         .entries()
         .into_iter()
         .filter_map(|entry| match entry {
-            SessionTreeEntry::Message { message, .. } => Some(message),
+            SessionTreeEntry::Message { message, .. } => message.into_llm_message(),
             _ => None,
         })
         .collect();
@@ -4376,7 +4376,7 @@ async fn agent_harness_runs_tool_call_and_tool_result_hooks_through_direct_loop(
         .into_iter()
         .find_map(|entry| match entry {
             SessionTreeEntry::Message {
-                message: Message::ToolResult(result),
+                message: SessionEntryMessage::Llm(Message::ToolResult(result)),
                 ..
             } => Some(result),
             _ => None,

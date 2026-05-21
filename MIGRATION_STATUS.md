@@ -307,7 +307,10 @@ counterparts that pass.
     branch-summary events.
   - In-memory and JSONL session storage/repositories with branching, labels,
     metadata, context building, full-session fork, before-target user-message
-    fork, at-target fork, and invalid-target errors.
+    fork, at-target fork, invalid-target errors, and source-shaped
+    `bashExecution` message entries with LLM-context formatting,
+    `excludeFromContext` filtering, JSONL round trips, token estimates, and
+    compaction turn-start handling.
   - Skill and prompt-template invocation formatting plus skill/prompt-template
     loading, pi-style numeric/slice/all-argument substitution including
     multi-digit numeric placeholders, skill ignore-file handling, and
@@ -323,16 +326,16 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1102 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1104 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 925 tests: 1 library test, 293 `provider_core` tests, and
   631 `provider_live` tests. This is 204 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 177 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 179 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 27 above the 150 direct simple
+  `resources`, and `session_storage`. This is 29 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -361,7 +364,7 @@ Current Rust tests: 1102 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1102-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1104-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -385,6 +388,19 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after adding Rust-native
+  `harness/messages.ts` `bashExecution` parity through typed session message
+  entries: pi-shaped JSONL `message.role = "bashExecution"` round trips,
+  `bashExecutionToText` formatting, `excludeFromContext` filtering during LLM
+  context conversion, session-context role preservation, compaction token
+  accounting, and bash execution as a user-visible turn start:
+  `cargo fmt`,
+  `cargo test -p ri-agent-core --test session_storage session_bash_execution_messages_convert_to_llm_context_and_wire_shape -- --exact`,
+  `cargo test -p ri-agent-core --test harness_compaction compaction_treats_bash_execution_as_user_visible_context -- --exact`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1104 tests.
+- Previous local verification on 2026-05-21 after adding Rust-native
   `utils/validation.ts` parity for TypeBox/plain JSON-schema validation and
   coercion keywords, including `allOf`/`oneOf`, object
   `additionalProperties`, tuple array items, `enum`/`const`, and common

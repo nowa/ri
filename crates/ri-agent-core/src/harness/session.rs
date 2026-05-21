@@ -71,11 +71,161 @@ pub enum CustomMessageContent {
     Blocks(Vec<UserContent>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BashExecutionMessage {
+    pub command: String,
+    pub output: String,
+    pub exit_code: Option<i32>,
+    pub cancelled: bool,
+    pub truncated: bool,
+    pub full_output_path: Option<String>,
+    pub timestamp: i64,
+    pub exclude_from_context: bool,
+}
+
+impl BashExecutionMessage {
+    pub fn new(command: impl Into<String>, output: impl Into<String>, timestamp: i64) -> Self {
+        Self {
+            command: command.into(),
+            output: output.into(),
+            exit_code: None,
+            cancelled: false,
+            truncated: false,
+            full_output_path: None,
+            timestamp,
+            exclude_from_context: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BashExecutionMessageWire {
+    role: String,
+    command: String,
+    output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i32>,
+    cancelled: bool,
+    truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    full_output_path: Option<String>,
+    timestamp: i64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    exclude_from_context: bool,
+}
+
+impl From<BashExecutionMessage> for BashExecutionMessageWire {
+    fn from(message: BashExecutionMessage) -> Self {
+        Self {
+            role: "bashExecution".to_owned(),
+            command: message.command,
+            output: message.output,
+            exit_code: message.exit_code,
+            cancelled: message.cancelled,
+            truncated: message.truncated,
+            full_output_path: message.full_output_path,
+            timestamp: message.timestamp,
+            exclude_from_context: message.exclude_from_context,
+        }
+    }
+}
+
+impl TryFrom<BashExecutionMessageWire> for BashExecutionMessage {
+    type Error = String;
+
+    fn try_from(wire: BashExecutionMessageWire) -> Result<Self, Self::Error> {
+        if wire.role != "bashExecution" {
+            return Err(format!(
+                "expected bashExecution message role, got {}",
+                wire.role
+            ));
+        }
+        Ok(Self {
+            command: wire.command,
+            output: wire.output,
+            exit_code: wire.exit_code,
+            cancelled: wire.cancelled,
+            truncated: wire.truncated,
+            full_output_path: wire.full_output_path,
+            timestamp: wire.timestamp,
+            exclude_from_context: wire.exclude_from_context,
+        })
+    }
+}
+
+impl Serialize for BashExecutionMessage {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        BashExecutionMessageWire::from(self.clone()).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BashExecutionMessage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        BashExecutionMessageWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SessionEntryMessage {
+    Llm(Message),
+    BashExecution(BashExecutionMessage),
+}
+
+impl SessionEntryMessage {
+    pub fn as_llm_message(&self) -> Option<&Message> {
+        match self {
+            Self::Llm(message) => Some(message),
+            Self::BashExecution(_) => None,
+        }
+    }
+
+    pub fn into_llm_message(self) -> Option<Message> {
+        match self {
+            Self::Llm(message) => Some(message),
+            Self::BashExecution(_) => None,
+        }
+    }
+
+    pub fn role(&self) -> &'static str {
+        match self {
+            Self::Llm(Message::User(_)) => "user",
+            Self::Llm(Message::Assistant(_)) => "assistant",
+            Self::Llm(Message::ToolResult(_)) => "toolResult",
+            Self::BashExecution(_) => "bashExecution",
+        }
+    }
+}
+
+impl From<Message> for SessionEntryMessage {
+    fn from(message: Message) -> Self {
+        Self::Llm(message)
+    }
+}
+
+impl From<BashExecutionMessage> for SessionEntryMessage {
+    fn from(message: BashExecutionMessage) -> Self {
+        Self::BashExecution(message)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "camelCase")]
 pub enum SessionMessage {
     #[serde(rename = "llm")]
-    Llm { message: Message },
+    Llm {
+        message: Message,
+    },
+    BashExecution(BashExecutionMessage),
     Custom {
         custom_type: String,
         content: CustomMessageContent,
@@ -108,6 +258,7 @@ impl SessionMessage {
             Self::Llm {
                 message: Message::ToolResult(_),
             } => "toolResult",
+            Self::BashExecution(_) => "bashExecution",
             Self::Custom { .. } => "custom",
             Self::BranchSummary { .. } => "branchSummary",
             Self::CompactionSummary { .. } => "compactionSummary",
@@ -121,6 +272,12 @@ impl From<Message> for SessionMessage {
     }
 }
 
+impl From<BashExecutionMessage> for SessionMessage {
+    fn from(message: BashExecutionMessage) -> Self {
+        Self::BashExecution(message)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionTreeEntry {
@@ -129,7 +286,7 @@ pub enum SessionTreeEntry {
         #[serde(rename = "parentId")]
         parent_id: Option<String>,
         timestamp: String,
-        message: Message,
+        message: SessionEntryMessage,
     },
     ThinkingLevelChange {
         id: String,
@@ -709,7 +866,21 @@ impl Session {
             id,
             parent_id,
             timestamp: now_iso(),
-            message,
+            message: message.into(),
+        })
+    }
+
+    pub fn append_bash_execution(
+        &mut self,
+        message: BashExecutionMessage,
+    ) -> Result<String, SessionError> {
+        let id = self.storage.lock().create_entry_id();
+        let parent_id = self.storage.lock().leaf_id()?;
+        self.append_entry(SessionTreeEntry::Message {
+            id,
+            parent_id,
+            timestamp: now_iso(),
+            message: message.into(),
         })
     }
 
@@ -1113,7 +1284,7 @@ fn entries_to_fork(
         ForkPosition::At => Some(target.id().to_owned()),
         ForkPosition::Before => match target {
             SessionTreeEntry::Message {
-                message: Message::User(_),
+                message: SessionEntryMessage::Llm(Message::User(_)),
                 ..
             } => target.parent_id().map(str::to_owned),
             _ => {
@@ -1149,7 +1320,7 @@ pub fn build_session_context(
                 });
             }
             SessionTreeEntry::Message {
-                message: Message::Assistant(message),
+                message: SessionEntryMessage::Llm(Message::Assistant(message)),
                 ..
             } => {
                 model = Some(SessionModelSelection {
@@ -1274,9 +1445,36 @@ pub fn custom_text_content(text: impl Into<String>) -> CustomMessageContent {
     CustomMessageContent::Text(text.into())
 }
 
+pub fn bash_execution_to_text(message: &BashExecutionMessage) -> String {
+    let mut text = format!("Ran `{}`\n", message.command);
+    if message.output.is_empty() {
+        text.push_str("(no output)");
+    } else {
+        text.push_str("```\n");
+        text.push_str(&message.output);
+        text.push_str("\n```");
+    }
+    if message.cancelled {
+        text.push_str("\n\n(command cancelled)");
+    } else if let Some(exit_code) = message.exit_code
+        && exit_code != 0
+    {
+        text.push_str(&format!("\n\nCommand exited with code {exit_code}"));
+    }
+    if message.truncated
+        && let Some(path) = &message.full_output_path
+    {
+        text.push_str(&format!("\n\n[Output truncated. Full output: {path}]"));
+    }
+    text
+}
+
 fn append_context_message(messages: &mut Vec<SessionMessage>, entry: &SessionTreeEntry) {
     match entry {
-        SessionTreeEntry::Message { message, .. } => messages.push(message.clone().into()),
+        SessionTreeEntry::Message { message, .. } => match message {
+            SessionEntryMessage::Llm(message) => messages.push(message.clone().into()),
+            SessionEntryMessage::BashExecution(message) => messages.push(message.clone().into()),
+        },
         SessionTreeEntry::CustomMessage {
             custom_type,
             content,

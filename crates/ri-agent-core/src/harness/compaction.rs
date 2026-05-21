@@ -1,6 +1,6 @@
 use super::session::{
-    CustomMessageContent, Session, SessionError, SessionMessage, SessionTreeEntry,
-    build_session_context,
+    CustomMessageContent, Session, SessionEntryMessage, SessionError, SessionMessage,
+    SessionTreeEntry, bash_execution_to_text, build_session_context,
 };
 use ri_llm_provider::{
     AssistantContent, Context, Message, Model, SimpleStreamOptions, StopReason, StreamOptions,
@@ -282,7 +282,7 @@ pub fn get_last_assistant_usage(messages: &[Message]) -> Option<(usize, &Usage)>
 pub fn get_last_assistant_usage_from_entries(entries: &[SessionTreeEntry]) -> Option<&Usage> {
     entries.iter().rev().find_map(|entry| match entry {
         SessionTreeEntry::Message {
-            message: Message::Assistant(assistant),
+            message: SessionEntryMessage::Llm(Message::Assistant(assistant)),
             ..
         } if assistant.stop_reason != StopReason::Error
             && assistant.stop_reason != StopReason::Aborted =>
@@ -349,7 +349,8 @@ pub fn find_entry_turn_start_index(
                 return Some(index);
             }
             SessionTreeEntry::Message {
-                message: Message::User(_),
+                message:
+                    SessionEntryMessage::Llm(Message::User(_)) | SessionEntryMessage::BashExecution(_),
                 ..
             } => return Some(index),
             _ => {}
@@ -387,7 +388,7 @@ pub fn find_cut_point(
         let SessionTreeEntry::Message { message, .. } = &entries[index] else {
             continue;
         };
-        accumulated_tokens += estimate_message_tokens(message);
+        accumulated_tokens += estimate_entry_message_tokens(message);
         if accumulated_tokens >= keep_recent_tokens {
             if let Some(next_cut) = cut_points.iter().find(|cut| **cut >= index) {
                 cut_index = *next_cut;
@@ -410,7 +411,7 @@ pub fn find_cut_point(
     let is_user_message = matches!(
         entries.get(cut_index),
         Some(SessionTreeEntry::Message {
-            message: Message::User(_),
+            message: SessionEntryMessage::Llm(Message::User(_)),
             ..
         })
     );
@@ -1021,6 +1022,9 @@ fn estimate_message_tokens(message: &Message) -> u64 {
 fn estimate_session_message_tokens(message: &SessionMessage) -> u64 {
     match message {
         SessionMessage::Llm { message } => estimate_message_tokens(message),
+        SessionMessage::BashExecution(message) => {
+            estimate_tokens(&message.command) + estimate_tokens(&message.output)
+        }
         SessionMessage::Custom { content, .. } => match content {
             CustomMessageContent::Text(text) => estimate_tokens(text),
             CustomMessageContent::Blocks(blocks) => blocks
@@ -1036,6 +1040,15 @@ fn estimate_session_message_tokens(message: &SessionMessage) -> u64 {
     }
 }
 
+fn estimate_entry_message_tokens(message: &SessionEntryMessage) -> u64 {
+    match message {
+        SessionEntryMessage::Llm(message) => estimate_message_tokens(message),
+        SessionEntryMessage::BashExecution(message) => {
+            estimate_tokens(&message.command) + estimate_tokens(&message.output)
+        }
+    }
+}
+
 fn find_valid_cut_points(
     entries: &[SessionTreeEntry],
     start_index: usize,
@@ -1045,7 +1058,10 @@ fn find_valid_cut_points(
     for index in start_index..end_index {
         match &entries[index] {
             SessionTreeEntry::Message {
-                message: Message::User(_) | Message::Assistant(_),
+                message:
+                    SessionEntryMessage::Llm(Message::User(_))
+                    | SessionEntryMessage::Llm(Message::Assistant(_))
+                    | SessionEntryMessage::BashExecution(_),
                 ..
             }
             | SessionTreeEntry::BranchSummary { .. }
@@ -1058,7 +1074,10 @@ fn find_valid_cut_points(
 
 fn get_message_from_entry(entry: &SessionTreeEntry) -> Option<SessionMessage> {
     match entry {
-        SessionTreeEntry::Message { message, .. } => Some(message.clone().into()),
+        SessionTreeEntry::Message { message, .. } => match message {
+            SessionEntryMessage::Llm(message) => Some(message.clone().into()),
+            SessionEntryMessage::BashExecution(message) => Some(message.clone().into()),
+        },
         SessionTreeEntry::CustomMessage {
             custom_type,
             content,
@@ -1109,7 +1128,7 @@ fn get_message_from_entry_for_branch_summary(entry: &SessionTreeEntry) -> Option
     if matches!(
         entry,
         SessionTreeEntry::Message {
-            message: Message::ToolResult(_),
+            message: SessionEntryMessage::Llm(Message::ToolResult(_)),
             ..
         }
     ) {
@@ -1351,6 +1370,18 @@ fn summary_options(
 fn convert_session_message_to_llm(message: &SessionMessage) -> Option<Message> {
     match message {
         SessionMessage::Llm { message } => Some(message.clone()),
+        SessionMessage::BashExecution(message) => {
+            if message.exclude_from_context {
+                None
+            } else {
+                Some(Message::User(ri_llm_provider::UserMessage {
+                    content: UserContentValue::Blocks(vec![UserContent::Text(TextContent::new(
+                        bash_execution_to_text(message),
+                    ))]),
+                    timestamp: message.timestamp,
+                }))
+            }
+        }
         SessionMessage::Custom {
             content, timestamp, ..
         } => Some(Message::User(ri_llm_provider::UserMessage {

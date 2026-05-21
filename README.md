@@ -31,7 +31,8 @@ SSE and eventstream behavior, abort handling, response IDs, usage accounting,
 message transforms, simple stream option defaults, tool calling,
 reasoning/thinking controls, agent loop control flow, stateful agents, custom
 stream providers, proxy streaming, tool execution, compaction, resources,
-session storage, local execution environment behavior, and harness utilities.
+session storage, bash execution session messages, local execution environment
+behavior, and harness utilities.
 
 Live provider E2E tests are not run by default. Provider behavior is covered
 locally through mock HTTP servers, payload assertions, parser tests, and stream
@@ -105,8 +106,8 @@ credentials, local model services where applicable, and manual OAuth flows.
 - Custom stream providers, including proxy streaming through `/api/stream`.
 - Prompt templates, skills/resources loading, session storage, compaction, and
   local execution environment utilities.
-- Harness prompt context conversion for LLM messages, custom session messages,
-  branch summaries, and compaction summaries.
+- Harness prompt context conversion for LLM messages, bash execution messages,
+  custom session messages, branch summaries, and compaction summaries.
 - Pi-style skill metadata validation diagnostics and prompt-template argument
   substitution.
 
