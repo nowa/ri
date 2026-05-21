@@ -131,13 +131,16 @@ impl ImagesApiProvider for OpenRouterImagesHttpProvider {
             let retry_after_ms =
                 header_value(&response_headers, "retry-after-ms").map(str::to_owned);
             let retry_after = header_value(&response_headers, "retry-after").map(str::to_owned);
-            if let Err(error) = options.emit_response_hooks(
-                model,
-                ProviderResponse {
-                    status: status.as_u16(),
-                    headers: response_headers,
-                },
-            ) {
+            if let Err(error) = options
+                .emit_response_hooks(
+                    model,
+                    ProviderResponse {
+                        status: status.as_u16(),
+                        headers: response_headers,
+                    },
+                )
+                .await
+            {
                 return Ok(openrouter_images_error(model, error, false));
             }
             let body = match await_openrouter_images_abortable(response.text(), &options).await {

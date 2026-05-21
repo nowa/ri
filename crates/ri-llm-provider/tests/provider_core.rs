@@ -1594,9 +1594,16 @@ struct RecordingImagesResponseHook {
 }
 
 impl ImagesResponseHook for RecordingImagesResponseHook {
-    fn on_response(&self, _model: &ImagesModel, response: ProviderResponse) -> Result<(), String> {
-        self.seen.lock().expect("seen responses").push(response);
-        Ok(())
+    fn on_response(
+        &self,
+        _model: ImagesModel,
+        response: ProviderResponse,
+    ) -> BoxFuture<'static, Result<(), String>> {
+        let seen = self.seen.clone();
+        Box::pin(async move {
+            seen.lock().expect("seen responses").push(response);
+            Ok(())
+        })
     }
 }
 
@@ -1605,8 +1612,34 @@ struct ErrorImagesResponseHook {
 }
 
 impl ImagesResponseHook for ErrorImagesResponseHook {
-    fn on_response(&self, _model: &ImagesModel, _response: ProviderResponse) -> Result<(), String> {
-        Err(self.message.to_owned())
+    fn on_response(
+        &self,
+        _model: ImagesModel,
+        _response: ProviderResponse,
+    ) -> BoxFuture<'static, Result<(), String>> {
+        let message = self.message.to_owned();
+        Box::pin(async move { Err(message) })
+    }
+}
+
+struct DelayedImagesResponseHook {
+    seen: Arc<Mutex<Vec<String>>>,
+}
+
+impl ImagesResponseHook for DelayedImagesResponseHook {
+    fn on_response(
+        &self,
+        model: ImagesModel,
+        response: ProviderResponse,
+    ) -> BoxFuture<'static, Result<(), String>> {
+        let seen = self.seen.clone();
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            seen.lock()
+                .expect("seen delayed responses")
+                .push(format!("{}:{}", model.id, response.status));
+            Ok(())
+        })
     }
 }
 
@@ -1778,6 +1811,42 @@ async fn builtin_openrouter_images_provider_maps_nonretryable_http_errors() {
         Some("Invalid OpenRouter key")
     );
     assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+}
+
+#[tokio::test]
+async fn builtin_openrouter_images_provider_waits_for_async_response_hooks() {
+    let body = concat!(
+        "{\"id\":\"img-async-hook\",\"choices\":[{\"message\":{\"content\":\"Async hook\",",
+        "\"images\":[{\"image_url\":\"data:image/png;base64,YXN5bmM=\"}]}}]}"
+    );
+    let (base_url, request_task) = mock_json_server(body).await;
+    let mut model =
+        get_image_model("openrouter", "google/gemini-3.1-flash-image-preview").expect("model");
+    model.base_url = base_url;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+
+    let output = generate_images(
+        &model,
+        ImagesContext {
+            input: vec![ImagesContent::text("Generate async hook image")],
+        },
+        ImagesOptions {
+            api_key: Some("openrouter-key".to_owned()),
+            response_hooks: vec![Arc::new(DelayedImagesResponseHook { seen: seen.clone() })],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("generate images");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(output.stop_reason, ImagesStopReason::Stop);
+    assert_eq!(output.response_id.as_deref(), Some("img-async-hook"));
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+    assert_eq!(
+        *seen.lock().expect("seen delayed responses"),
+        vec![format!("{}:200", model.id)]
+    );
 }
 
 #[tokio::test]

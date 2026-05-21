@@ -510,7 +510,11 @@ impl std::fmt::Debug for dyn ImagesPayloadHook {
 }
 
 pub trait ImagesResponseHook: Send + Sync {
-    fn on_response(&self, model: &ImagesModel, response: ProviderResponse) -> Result<(), String>;
+    fn on_response(
+        &self,
+        model: ImagesModel,
+        response: ProviderResponse,
+    ) -> BoxFuture<'static, Result<(), String>>;
 }
 
 impl std::fmt::Debug for dyn ImagesResponseHook {
@@ -568,13 +572,13 @@ impl ImagesOptions {
         Ok(payload)
     }
 
-    pub fn emit_response_hooks(
+    pub async fn emit_response_hooks(
         &self,
         model: &ImagesModel,
         response: ProviderResponse,
     ) -> Result<(), String> {
         for hook in &self.response_hooks {
-            hook.on_response(model, response.clone())?;
+            hook.on_response(model.clone(), response.clone()).await?;
         }
         Ok(())
     }

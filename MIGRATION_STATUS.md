@@ -179,7 +179,7 @@ counterparts that pass.
     the full 28-model OpenRouter image model registry from the source generated
     catalog and image payload/response helpers for chat-completions image
     generation, inline data URLs, caller-supplied authorization/header
-    preservation, usage, payload/response hooks,
+    preservation, usage, payload hooks and async-settled response hooks,
     request timeout behavior, retry/backoff handling for retryable HTTP/network
     failures, non-retryable HTTP errors, invalid JSON responses, and
     aborted/error result mapping.
@@ -355,10 +355,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1127 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1128 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 931 tests: 1 library test, 299 `provider_core` tests, and
-  631 `provider_live` tests. This is 210 above the 721 direct simple source
+- `ri-llm-provider`: 932 tests: 1 library test, 300 `provider_core` tests, and
+  631 `provider_live` tests. This is 211 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -393,7 +393,7 @@ Current Rust tests: 1127 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1127-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1128-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -417,6 +417,19 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning Pi
+  `ImagesOptions.onResponse` async settlement from `types.ts` and
+  `providers/images/openrouter.ts`: OpenRouter Images response hooks now return
+  futures and are awaited before the response body is consumed, matching the
+  source `await options?.onResponse?.(...)` behavior while preserving hook error
+  mapping to `AssistantImages` error results:
+  `cargo test -p ri-llm-provider --test provider_core builtin_openrouter_images_provider_waits_for_async_response_hooks -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_openrouter_images_provider_maps_response_hook_errors_after_response -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1128 tests.
+- Previous local verification on 2026-05-21 after aligning Pi
   `registerBuiltInApiProviders` / `resetApiProviders` behavior from
   `providers/register-builtins.ts` and making image built-in registration
   robust after Ri's public image-registry clear/reset APIs: Rust now exposes
@@ -769,6 +782,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1127 Rust tests cover the
+- Test parity is not certified by raw count alone: 1128 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
