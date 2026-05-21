@@ -399,6 +399,16 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning Pi low-level
+  `agentLoopContinue` empty-context validation from `agent-loop.ts`: Rust now
+  returns `Cannot continue: no messages in context`, matching the source
+  thrown error instead of using the older Rust-only wording:
+  `cargo fmt`, `cargo fmt --check`, `git diff --check`,
+  `cargo test -p ri-agent-core --test agent_core agent_loop_continue_validates_context_tail -- --exact`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1118 tests.
+- Previous local verification on 2026-05-21 after aligning Pi low-level
   `Agent.abort()` queue behavior from `agent.ts`: Rust `Agent::abort()` now
   only cancels the active run and preserves queued steering/follow-up messages;
   explicit clear helpers and `reset` still clear queues, while high-level

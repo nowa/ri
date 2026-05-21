@@ -2896,11 +2896,11 @@ async fn agent_loop_continue_validates_context_tail() {
         messages: Vec::new(),
         tools: Vec::new(),
     };
-    assert!(
+    assert_eq!(
         agent_loop_continue(empty, config.clone())
             .await
-            .expect_err("empty context")
-            .contains("without existing messages")
+            .expect_err("empty context"),
+        "Cannot continue: no messages in context"
     );
 
     let assistant_tail = AgentContext {

@@ -230,7 +230,7 @@ pub async fn agent_loop_continue(
     config: AgentLoopConfig,
 ) -> Result<(Vec<AgentMessage>, Vec<AgentEvent>), String> {
     if context.messages.is_empty() {
-        return Err("Cannot continue without existing messages".to_owned());
+        return Err("Cannot continue: no messages in context".to_owned());
     }
     if matches!(context.messages.last(), Some(AgentMessage::Assistant(_))) {
         return Err("Cannot continue from message role: assistant".to_owned());
