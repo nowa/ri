@@ -1698,7 +1698,7 @@ async fn stream_anthropic_sse_json(
             if push_abort_if_requested(sender, options, output) {
                 return Ok(());
             }
-            processor.process_event(event, output, sender)?;
+            processor.process_event(model, event, output, sender)?;
             if push_abort_if_requested(sender, options, output) {
                 return Ok(());
             }
@@ -1710,7 +1710,7 @@ async fn stream_anthropic_sse_json(
         if push_abort_if_requested(sender, options, output) {
             return Ok(());
         }
-        processor.process_event(event, output, sender)?;
+        processor.process_event(model, event, output, sender)?;
     }
     if push_abort_if_requested(sender, options, output) {
         return Ok(());

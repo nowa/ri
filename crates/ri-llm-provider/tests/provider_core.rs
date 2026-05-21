@@ -323,6 +323,13 @@ fn assert_usage_total_matches_components(label: &str, usage: &Usage) {
     assert!(usage.total_tokens_match_components(), "{label}");
 }
 
+fn assert_cost_close(label: &str, actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1e-12,
+        "{label}: expected {expected}, got {actual}"
+    );
+}
+
 fn empty_assistant(stop_reason: StopReason) -> AssistantMessage {
     faux_assistant_message(
         Vec::<AssistantContent>::new(),
@@ -7752,7 +7759,13 @@ fn anthropic_sse_parser_ignores_unknown_events_after_message_stop() {
 
 #[test]
 fn anthropic_sse_parser_preserves_response_id_and_initial_input_usage() {
-    let model = get_model("anthropic", "claude-haiku-4-5").expect("anthropic model");
+    let mut model = get_model("anthropic", "claude-haiku-4-5").expect("anthropic model");
+    model.cost = ModelCost {
+        input: 2.0,
+        output: 4.0,
+        cache_read: 0.5,
+        cache_write: 3.0,
+    };
     let body = anthropic_sse_body(vec![
         (
             "message_start",
@@ -7816,6 +7829,19 @@ fn anthropic_sse_parser_preserves_response_id_and_initial_input_usage() {
     assert_eq!(result.usage.cache_read, 3);
     assert_eq!(result.usage.cache_write, 2);
     assert_usage_total_matches_components("anthropic initial input usage", &result.usage);
+    assert_cost_close("anthropic input cost", result.usage.cost.input, 0.000042);
+    assert_cost_close("anthropic output cost", result.usage.cost.output, 0.00002);
+    assert_cost_close(
+        "anthropic cache read cost",
+        result.usage.cost.cache_read,
+        0.0000015,
+    );
+    assert_cost_close(
+        "anthropic cache write cost",
+        result.usage.cost.cache_write,
+        0.000006,
+    );
+    assert_cost_close("anthropic total cost", result.usage.cost.total, 0.0000695);
 }
 
 #[test]
@@ -8899,6 +8925,7 @@ async fn anthropic_oauth_stream_processor_restores_source_tool_name() {
 
     processor
         .process_event(
+            &model,
             json!({
                 "type": "content_block_start",
                 "index": 0,
@@ -8915,6 +8942,7 @@ async fn anthropic_oauth_stream_processor_restores_source_tool_name() {
         .expect("content block start");
     processor
         .process_event(
+            &model,
             json!({
                 "type": "content_block_delta",
                 "index": 0,
@@ -8929,6 +8957,7 @@ async fn anthropic_oauth_stream_processor_restores_source_tool_name() {
         .expect("content block delta");
     processor
         .process_event(
+            &model,
             json!({ "type": "content_block_stop", "index": 0 }),
             &mut output,
             &sender,
@@ -8964,6 +8993,7 @@ fn anthropic_stream_processor_returns_error_for_provider_stop_reason_errors() {
 
     let error = processor
         .process_event(
+            &model,
             json!({
                 "type": "message_delta",
                 "delta": { "stop_reason": "refusal" },
@@ -8982,6 +9012,7 @@ fn anthropic_stream_processor_returns_error_for_provider_stop_reason_errors() {
 
     let unknown = processor
         .process_event(
+            &model,
             json!({
                 "type": "message_delta",
                 "delta": { "stop_reason": "provider_added_reason" },
@@ -15686,6 +15717,12 @@ async fn builtin_anthropic_provider_posts_json_and_parses_sse() {
     let (base_url, request_task) = mock_sse_server(sse).await;
     let mut model = Model::faux("anthropic-messages", "anthropic", "claude-test");
     model.base_url = base_url;
+    model.cost = ModelCost {
+        input: 10.0,
+        output: 20.0,
+        cache_read: 1.0,
+        cache_write: 5.0,
+    };
     let mut options = SimpleStreamOptions::default();
     options.stream.api_key = Some("anthropic-key".to_owned());
     options
@@ -15720,6 +15757,21 @@ async fn builtin_anthropic_provider_posts_json_and_parses_sse() {
     assert_eq!(message.response_id.as_deref(), Some("msg_http"));
     assert_eq!(message.usage.input, 3);
     assert_eq!(message.usage.output, 1);
+    assert_cost_close(
+        "anthropic http input cost",
+        message.usage.cost.input,
+        0.00003,
+    );
+    assert_cost_close(
+        "anthropic http output cost",
+        message.usage.cost.output,
+        0.00002,
+    );
+    assert_cost_close(
+        "anthropic http total cost",
+        message.usage.cost.total,
+        0.00005,
+    );
     assert!(request.starts_with("POST /messages HTTP/1.1"));
     assert!(
         request

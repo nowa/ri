@@ -113,7 +113,7 @@ counterparts that pass.
   - Cross-provider message transform helpers: image downgrade, thinking cleanup,
     tool-call ID normalization, orphaned tool-result synthesis.
   - Anthropic raw SSE parsing helpers with malformed JSON repair, streamed
-    tool-argument parsing, response IDs, usage mapping, partial usage
+    tool-argument parsing, response IDs, usage and cost mapping, partial usage
     preservation, and unknown event filtering.
   - Anthropic Messages payload helpers for eager tool input streaming compatibility,
     fine-grained streaming beta headers, thinking disable/adaptive payloads, and
@@ -863,6 +863,13 @@ This migration is not complete.
   `cargo test --workspace -- --test-threads=1`,
   `cargo test --workspace -- --list` (1154 tests enumerated), and
   `cargo fmt --check` and `git diff --check` passed.
+- Latest local verification on 2026-05-22 after aligning
+  `providers/anthropic.ts` usage-cost parity: Anthropic raw SSE parsing and
+  the HTTP streaming processor now calculate model-priced usage costs when
+  `message_start` or `message_delta` usage arrives, while preserving partial
+  usage fields across deltas:
+  `cargo test -p ri-llm-provider --test provider_core anthropic -- --test-threads=1`,
+  `cargo fmt --check`, and `git diff --check` passed.
 - Latest local verification on 2026-05-21 after aligning
   `providers/anthropic.ts` stop-reason parity: Anthropic SSE parsing and the
   streaming processor now map `refusal` and `sensitive` to provider error

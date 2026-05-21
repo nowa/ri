@@ -7,6 +7,7 @@ use crate::{
     github_copilot_headers::build_copilot_dynamic_headers,
     json_repair::{parse_json_with_repair, parse_streaming_json, sanitize_surrogates},
     message_transform::transform_messages,
+    models::calculate_cost,
     simple_options::{adjust_max_tokens_for_thinking, apply_simple_stream_defaults},
 };
 use serde_json::{Map, Value, json};
@@ -105,7 +106,7 @@ pub fn process_anthropic_sse_body(model: &Model, body: &str) -> Result<Assistant
                     output.response_id = Some(id.to_owned());
                 }
                 if let Some(usage) = event.pointer("/message/usage") {
-                    output.usage = parse_anthropic_usage(usage, &output.usage);
+                    output.usage = parse_anthropic_usage(model, usage, &output.usage);
                 }
             }
             Some("content_block_start") => {
@@ -193,7 +194,7 @@ pub fn process_anthropic_sse_body(model: &Model, body: &str) -> Result<Assistant
                     output.stop_reason = stop_reason;
                 }
                 if let Some(usage) = event.get("usage") {
-                    output.usage = parse_anthropic_usage(usage, &output.usage);
+                    output.usage = parse_anthropic_usage(model, usage, &output.usage);
                 }
                 if let Some((raw_stop_reason, StopReason::Error)) = mapped_stop_reason {
                     output.error_message = Some(format!("Provider stop_reason: {raw_stop_reason}"));
@@ -242,6 +243,7 @@ impl AnthropicStreamProcessor {
 
     pub fn process_event(
         &mut self,
+        model: &Model,
         event: Value,
         output: &mut AssistantMessage,
         sender: &AssistantMessageEventSender,
@@ -269,7 +271,7 @@ impl AnthropicStreamProcessor {
                     output.response_id = Some(id.to_owned());
                 }
                 if let Some(usage) = event.pointer("/message/usage") {
-                    output.usage = parse_anthropic_usage(usage, &output.usage);
+                    output.usage = parse_anthropic_usage(model, usage, &output.usage);
                 }
             }
             "content_block_start" => {
@@ -461,7 +463,7 @@ impl AnthropicStreamProcessor {
                     output.stop_reason = stop_reason;
                 }
                 if let Some(usage) = event.get("usage") {
-                    output.usage = parse_anthropic_usage(usage, &output.usage);
+                    output.usage = parse_anthropic_usage(model, usage, &output.usage);
                 }
                 if let Some((raw_stop_reason, StopReason::Error)) = mapped_stop_reason {
                     let message = format!("Provider stop_reason: {raw_stop_reason}");
@@ -518,7 +520,7 @@ fn push_anthropic_thinking_delta(
     });
 }
 
-fn parse_anthropic_usage(usage: &Value, previous: &Usage) -> Usage {
+fn parse_anthropic_usage(model: &Model, usage: &Value, previous: &Usage) -> Usage {
     let input = usage
         .get("input_tokens")
         .and_then(Value::as_u64)
@@ -535,14 +537,16 @@ fn parse_anthropic_usage(usage: &Value, previous: &Usage) -> Usage {
         .get("cache_creation_input_tokens")
         .and_then(Value::as_u64)
         .unwrap_or(previous.cache_write);
-    Usage {
+    let mut usage = Usage {
         input,
         output,
         cache_read,
         cache_write,
         total_tokens: input + output + cache_read + cache_write,
         cost: Default::default(),
-    }
+    };
+    calculate_cost(model, &mut usage);
+    usage
 }
 
 fn map_anthropic_stop_reason(reason: &str) -> Result<StopReason, String> {
