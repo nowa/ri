@@ -346,7 +346,7 @@ pub fn parse_openai_codex_oauth_token_response(
     Ok(OAuthCredentials {
         refresh: refresh.to_owned(),
         access: access.to_owned(),
-        expires: now_millis + expires_in * 1000 - 5 * 60 * 1000,
+        expires: now_millis + expires_in * 1000,
         extra: BTreeMap::from([("accountId".to_owned(), Value::String(account_id))]),
     })
 }

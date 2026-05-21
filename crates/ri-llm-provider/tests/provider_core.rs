@@ -2597,6 +2597,7 @@ async fn openai_codex_oauth_login_flow_falls_back_to_manual_input_when_callback_
 
     assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "codex-manual-fallback-refresh");
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000);
     assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
     assert!(request.contains("grant_type=authorization_code"));
     assert!(request.contains("code=manual-code"));
@@ -2649,7 +2650,7 @@ async fn openai_codex_oauth_login_flow_callback_exchanges_code() {
     assert!(callback_response.starts_with("HTTP/1.1 200 OK"));
     assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "codex-refresh");
-    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000);
     assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
     assert!(request.contains("grant_type=authorization_code"));
     assert!(request.contains("code=callback-code"));
@@ -2699,7 +2700,7 @@ async fn openai_codex_oauth_login_flow_callback_routes_token_exchange_through_pr
     assert!(callback_response.starts_with("HTTP/1.1 200 OK"));
     assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "proxy-codex-refresh");
-    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000);
     assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
     assert!(
         proxy_request.starts_with("POST http://auth.example/oauth/token HTTP/1.1"),
@@ -2750,7 +2751,7 @@ async fn openai_codex_oauth_login_flow_manual_input_routes_token_exchange_throug
 
     assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "proxy-codex-manual-refresh");
-    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000);
     assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
     assert!(
         proxy_request.starts_with("POST http://auth.example/oauth/token HTTP/1.1"),
@@ -2838,6 +2839,7 @@ fn openai_codex_oauth_token_response_requires_account_id_and_preserves_extra() {
 
     assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "codex-refresh");
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000);
     assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
 
     let error = parse_openai_codex_oauth_token_response(
@@ -3481,10 +3483,7 @@ async fn openai_codex_oauth_callback_login_persists_auth_storage_and_resolves_ac
         stored_credentials.extra.get("accountId"),
         Some(&json!("acc_test"))
     );
-    assert_eq!(
-        stored_credentials.expires,
-        2_000_000 + 7200 * 1000 - 5 * 60 * 1000
-    );
+    assert_eq!(stored_credentials.expires, 2_000_000 + 7200 * 1000);
     assert!(request.contains("grant_type=authorization_code"));
     assert!(request.contains("code=callback-code"));
     assert!(request.contains("code_verifier=verifier-value"));
@@ -3572,10 +3571,7 @@ async fn openai_codex_oauth_manual_input_login_persists_auth_storage_and_resolve
         stored_credentials.extra.get("accountId"),
         Some(&json!("acc_test"))
     );
-    assert_eq!(
-        stored_credentials.expires,
-        2_000_000 + 7200 * 1000 - 5 * 60 * 1000
-    );
+    assert_eq!(stored_credentials.expires, 2_000_000 + 7200 * 1000);
     assert!(request.contains("grant_type=authorization_code"));
     assert!(request.contains("code=manual-code"));
     assert!(request.contains("code_verifier=verifier-value"));
@@ -3846,7 +3842,7 @@ async fn openai_codex_oauth_refresh_posts_form_and_maps_responses() {
 
     assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "codex-refresh");
-    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000);
     assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
     assert!(request.starts_with("POST / HTTP/1.1"));
     assert!(
@@ -3899,7 +3895,7 @@ async fn openai_codex_oauth_refresh_routes_token_request_through_resolved_proxy(
 
     assert_eq!(credentials.access, codex_access);
     assert_eq!(credentials.refresh, "proxy-codex-refresh");
-    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000 - 5 * 60 * 1000);
+    assert_eq!(credentials.expires, 2_000_000 + 7200 * 1000);
     assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
     assert!(
         proxy_request.starts_with("POST http://auth.example/oauth/token HTTP/1.1"),

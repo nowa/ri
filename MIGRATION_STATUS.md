@@ -146,8 +146,9 @@ counterparts that pass.
     manual redirect input parsing parity, manual-code fallback when the local
     callback port is unavailable, form-encoded token/refresh requests, refresh
     failure message formatting, proxy-aware async authorization-code/refresh
-    token exchange primitives, ChatGPT JWT account-id validation, and
-    source-style `accountId` credential preservation.
+    token exchange primitives, source-style Codex token expiry without the
+    Anthropic/GitHub 5-minute early-refresh offset, ChatGPT JWT account-id
+    validation, and source-style `accountId` credential preservation.
   - OpenAI Codex Responses helpers for ChatGPT JWT account-id extraction,
     SSE/WebSocket headers, request-body construction, URL resolution, reasoning
     effort mapping, cached WebSocket input-delta continuation, SSE frame parsing
@@ -647,6 +648,14 @@ This migration is not complete.
   Codex OAuth login setup now preserves the authorization URL and redirect URI
   and falls back to manual authorization-code input when the local callback port
   is already in use, matching Pi's no-op server fallback:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth -- --test-threads=1`,
+  `cargo fmt --check`, and `git diff --check` passed.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `utils/oauth/openai-codex.ts` token expiry mapping: Codex OAuth
+  authorization-code and refresh responses now store `Date.now() + expires_in *
+  1000` without the 5-minute early-refresh offset used by Anthropic and GitHub
+  Copilot:
   `cargo fmt`,
   `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth -- --test-threads=1`,
   `cargo fmt --check`, and `git diff --check` passed.
