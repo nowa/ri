@@ -48,8 +48,10 @@ counterparts that pass.
     generated-catalog metadata parity for the current M2.7 model slice, xAI
     generated-catalog metadata parity for the current Grok 2/3/4/code/vision
     model slice, Cloudflare Workers AI generated-catalog metadata parity for
-    the current Workers model slice, Zai generated-catalog metadata parity for
-    the current GLM coding model slice, plus
+    the current Workers model slice, GitHub Copilot generated-catalog metadata
+    parity for the current Claude/Gemini/GPT/Grok model slice, Zai
+    generated-catalog metadata parity for the current GLM coding model slice,
+    plus
     OpenAI and Azure OpenAI Responses generated-catalog metadata parity for the
     current GPT-4/GPT-4.1/GPT-4o, GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5,
     and o-series model slices, plus OpenAI Codex generated-catalog metadata
@@ -440,10 +442,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1196 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1197 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 989 tests: 2 library tests, 356 `provider_core` tests, and
-  631 `provider_live` tests. This is 268 above the 721 direct simple source
+- `ri-llm-provider`: 990 tests: 2 library tests, 357 `provider_core` tests, and
+  631 `provider_live` tests. This is 269 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -478,7 +480,7 @@ Current Rust tests: 1196 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1196-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1197-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -844,6 +846,23 @@ This migration is not complete.
   `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
   `cargo fmt --check`, `git diff --check`, and
   `cargo test --workspace -- --list` passed; the list command enumerated 1196
+  tests.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` GitHub Copilot catalog metadata: Rust now exposes all
+  generated Copilot Claude/Gemini/GPT/Grok entries and maps the source API
+  type, base URL, Copilot headers, text/image input support, compat flags,
+  thinking-level maps, context/output windows, and zero usage cost table while
+  keeping the Copilot OpenAI-completions response-id provider path on a
+  catalog completions model:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core github_copilot_model_metadata_matches_generated_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core registered_model_apis_have_builtin_provider_implementations -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_responses_and_completions_apply_copilot_dynamic_headers -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_responses_payload_omits_default_reasoning_for_github_copilot -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_github_copilot_openai_provider_exposes_response_id -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed; the list command enumerated 1197
   tests.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
@@ -1784,6 +1803,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1196 Rust tests cover the
+- Test parity is not certified by raw count alone: 1197 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

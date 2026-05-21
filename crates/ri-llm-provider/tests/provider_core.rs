@@ -1199,6 +1199,300 @@ fn xai_model_metadata_matches_generated_catalog() {
 }
 
 #[test]
+fn github_copilot_model_metadata_matches_generated_catalog() {
+    let models = get_models("github-copilot");
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "claude-haiku-4.5",
+            "claude-opus-4.5",
+            "claude-opus-4.6",
+            "claude-opus-4.7",
+            "claude-sonnet-4.5",
+            "claude-sonnet-4.6",
+            "gemini-2.5-pro",
+            "gemini-3-flash-preview",
+            "gemini-3.1-pro-preview",
+            "gpt-4.1",
+            "gpt-4o",
+            "gpt-5-mini",
+            "gpt-5.2",
+            "gpt-5.2-codex",
+            "gpt-5.3-codex",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.5",
+            "grok-code-fast-1",
+        ]
+    );
+
+    let expected_headers = BTreeMap::from([
+        (
+            "Copilot-Integration-Id".to_owned(),
+            "vscode-chat".to_owned(),
+        ),
+        (
+            "Editor-Plugin-Version".to_owned(),
+            "copilot-chat/0.35.0".to_owned(),
+        ),
+        ("Editor-Version".to_owned(), "vscode/1.107.0".to_owned()),
+        (
+            "User-Agent".to_owned(),
+            "GitHubCopilotChat/0.35.0".to_owned(),
+        ),
+    ]);
+
+    for (model_id, api, reasoning, image_input, context_window, max_tokens, compat, thinking) in [
+        (
+            "claude-haiku-4.5",
+            "anthropic-messages",
+            true,
+            true,
+            144_000,
+            32_000,
+            Some("eager-off"),
+            None,
+        ),
+        (
+            "claude-opus-4.5",
+            "anthropic-messages",
+            true,
+            true,
+            160_000,
+            32_000,
+            None,
+            None,
+        ),
+        (
+            "claude-opus-4.6",
+            "anthropic-messages",
+            true,
+            true,
+            1_000_000,
+            64_000,
+            None,
+            Some("opus-max"),
+        ),
+        (
+            "claude-opus-4.7",
+            "anthropic-messages",
+            true,
+            true,
+            144_000,
+            64_000,
+            None,
+            Some("opus-xhigh"),
+        ),
+        (
+            "claude-sonnet-4.5",
+            "anthropic-messages",
+            true,
+            true,
+            144_000,
+            32_000,
+            Some("eager-off"),
+            None,
+        ),
+        (
+            "claude-sonnet-4.6",
+            "anthropic-messages",
+            true,
+            true,
+            1_000_000,
+            32_000,
+            None,
+            None,
+        ),
+        (
+            "gemini-2.5-pro",
+            "openai-completions",
+            false,
+            true,
+            128_000,
+            64_000,
+            Some("completions"),
+            None,
+        ),
+        (
+            "gemini-3-flash-preview",
+            "openai-completions",
+            true,
+            true,
+            128_000,
+            64_000,
+            Some("completions"),
+            None,
+        ),
+        (
+            "gemini-3.1-pro-preview",
+            "openai-completions",
+            true,
+            true,
+            128_000,
+            64_000,
+            Some("completions"),
+            None,
+        ),
+        (
+            "gpt-4.1",
+            "openai-completions",
+            false,
+            true,
+            128_000,
+            16_384,
+            Some("completions"),
+            None,
+        ),
+        (
+            "gpt-4o",
+            "openai-completions",
+            false,
+            true,
+            128_000,
+            4_096,
+            Some("completions"),
+            None,
+        ),
+        (
+            "gpt-5-mini",
+            "openai-responses",
+            true,
+            true,
+            264_000,
+            64_000,
+            None,
+            Some("gpt5-mini"),
+        ),
+        (
+            "gpt-5.2",
+            "openai-responses",
+            true,
+            true,
+            264_000,
+            64_000,
+            None,
+            Some("gpt5-xhigh"),
+        ),
+        (
+            "gpt-5.2-codex",
+            "openai-responses",
+            true,
+            true,
+            400_000,
+            128_000,
+            None,
+            Some("gpt5-xhigh"),
+        ),
+        (
+            "gpt-5.3-codex",
+            "openai-responses",
+            true,
+            true,
+            400_000,
+            128_000,
+            None,
+            Some("gpt5-xhigh"),
+        ),
+        (
+            "gpt-5.4",
+            "openai-responses",
+            true,
+            true,
+            400_000,
+            128_000,
+            None,
+            Some("gpt5-xhigh"),
+        ),
+        (
+            "gpt-5.4-mini",
+            "openai-responses",
+            true,
+            true,
+            400_000,
+            128_000,
+            None,
+            Some("gpt5-xhigh"),
+        ),
+        (
+            "gpt-5.5",
+            "openai-responses",
+            true,
+            true,
+            400_000,
+            128_000,
+            None,
+            Some("gpt5-xhigh"),
+        ),
+        (
+            "grok-code-fast-1",
+            "openai-completions",
+            true,
+            false,
+            128_000,
+            64_000,
+            Some("completions"),
+            None,
+        ),
+    ] {
+        let model = get_model("github-copilot", model_id).expect(model_id);
+        assert_eq!(model.api, api, "{model_id} api");
+        assert_eq!(model.provider, "github-copilot", "{model_id} provider");
+        assert_eq!(
+            model.base_url, "https://api.individual.githubcopilot.com",
+            "{model_id} base"
+        );
+        assert_eq!(model.headers, expected_headers, "{model_id} headers");
+        assert_eq!(model.reasoning, reasoning, "{model_id} reasoning");
+        let expected_input = if image_input {
+            vec![InputKind::Text, InputKind::Image]
+        } else {
+            vec![InputKind::Text]
+        };
+        assert_eq!(model.input, expected_input, "{model_id} input");
+        assert_eq!(model.cost, ModelCost::default(), "{model_id} cost");
+        assert_eq!(model.context_window, context_window, "{model_id} context");
+        assert_eq!(model.max_tokens, max_tokens, "{model_id} max tokens");
+
+        let expected_compat = match compat {
+            Some("completions") => Some(json!({
+                "supportsStore": false,
+                "supportsDeveloperRole": false,
+                "supportsReasoningEffort": false,
+            })),
+            Some("eager-off") => Some(json!({
+                "supportsEagerToolInputStreaming": false,
+            })),
+            _ => None,
+        };
+        assert_eq!(model.compat, expected_compat, "{model_id} compat");
+
+        let expected_thinking = match thinking {
+            Some("opus-max") => BTreeMap::from([(ThinkingLevel::XHigh, Some("max".to_owned()))]),
+            Some("opus-xhigh") => {
+                BTreeMap::from([(ThinkingLevel::XHigh, Some("xhigh".to_owned()))])
+            }
+            Some("gpt5-mini") => BTreeMap::from([
+                (ThinkingLevel::Off, None),
+                (ThinkingLevel::Minimal, Some("low".to_owned())),
+            ]),
+            Some("gpt5-xhigh") => BTreeMap::from([
+                (ThinkingLevel::Off, None),
+                (ThinkingLevel::Minimal, Some("low".to_owned())),
+                (ThinkingLevel::XHigh, Some("xhigh".to_owned())),
+            ]),
+            _ => BTreeMap::new(),
+        };
+        assert_eq!(
+            model.thinking_level_map, expected_thinking,
+            "{model_id} thinking"
+        );
+    }
+}
+
+#[test]
 fn openai_codex_model_metadata_matches_generated_catalog() {
     let models = get_models("openai-codex");
     assert_eq!(
@@ -17716,12 +18010,12 @@ async fn builtin_openai_responses_provider_respects_abort_flag_while_streaming()
 #[tokio::test]
 async fn builtin_github_copilot_openai_provider_exposes_response_id() {
     let sse = concat!(
-        "data: {\"id\":\"chatcmpl_copilot_openai\",\"model\":\"gpt-5.3-codex\",\"choices\":[{\"delta\":{\"content\":\"Copilot\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chatcmpl_copilot_openai\",\"model\":\"gpt-4.1\",\"choices\":[{\"delta\":{\"content\":\"Copilot\"},\"finish_reason\":null}]}\n\n",
         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1,\"total_tokens\":3}}\n\n",
         "data: [DONE]\n\n",
     );
     let (base_url, request_task) = mock_sse_server(sse).await;
-    let mut model = get_model("github-copilot", "gpt-5.3-codex").expect("copilot openai model");
+    let mut model = get_model("github-copilot", "gpt-4.1").expect("copilot openai model");
     assert_eq!(model.api, "openai-completions");
     model.base_url = base_url;
     let mut options = SimpleStreamOptions::default();
@@ -17743,7 +18037,7 @@ async fn builtin_github_copilot_openai_provider_exposes_response_id() {
     assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
     assert!(lower_request.contains("authorization: bearer copilot-openai-token"));
     assert!(lower_request.contains("copilot-integration-id: vscode-chat"));
-    assert!(request.contains("\"model\":\"gpt-5.3-codex\""));
+    assert!(request.contains("\"model\":\"gpt-4.1\""));
 }
 
 #[tokio::test]

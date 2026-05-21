@@ -292,11 +292,25 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("azure-openai-responses", "o3-pro"),
     ("azure-openai-responses", "o4-mini"),
     ("azure-openai-responses", "o4-mini-deep-research"),
+    ("github-copilot", "claude-haiku-4.5"),
+    ("github-copilot", "claude-opus-4.5"),
+    ("github-copilot", "claude-opus-4.6"),
+    ("github-copilot", "claude-opus-4.7"),
+    ("github-copilot", "claude-sonnet-4.5"),
+    ("github-copilot", "claude-sonnet-4.6"),
+    ("github-copilot", "gemini-2.5-pro"),
+    ("github-copilot", "gemini-3-flash-preview"),
+    ("github-copilot", "gemini-3.1-pro-preview"),
+    ("github-copilot", "gpt-4.1"),
     ("github-copilot", "gpt-4o"),
     ("github-copilot", "gpt-5-mini"),
+    ("github-copilot", "gpt-5.2"),
     ("github-copilot", "gpt-5.2-codex"),
     ("github-copilot", "gpt-5.3-codex"),
-    ("github-copilot", "claude-sonnet-4.6"),
+    ("github-copilot", "gpt-5.4"),
+    ("github-copilot", "gpt-5.4-mini"),
+    ("github-copilot", "gpt-5.5"),
+    ("github-copilot", "grok-code-fast-1"),
     ("google", "gemini-2.0-flash"),
     ("google", "gemini-2.5-flash"),
     ("google", "gemini-3-flash-preview"),
@@ -464,15 +478,12 @@ fn synthesize_model(provider: &str, model_id: &str) -> Model {
 
 fn apply_known_model_overrides(model: &mut Model) {
     if model.provider == "github-copilot" {
+        if apply_github_copilot_generated_metadata(model) {
+            return;
+        }
         model.base_url = "https://api.individual.githubcopilot.com".to_owned();
         model.headers = github_copilot_headers();
         model.cost = ModelCost::default();
-        if model.id == "claude-sonnet-4.6" {
-            model.context_window = 1_000_000;
-            model.max_tokens = 32_000;
-            model.reasoning = true;
-            ensure_image_input(model);
-        }
     }
 
     if model.provider == "cloudflare-workers-ai" {
@@ -2034,6 +2045,199 @@ fn github_copilot_headers() -> BTreeMap<String, String> {
             "vscode-chat".to_owned(),
         ),
     ])
+}
+
+fn apply_github_copilot_generated_metadata(model: &mut Model) -> bool {
+    let completions_compat = || {
+        Some(json!({
+            "supportsStore": false,
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": false,
+        }))
+    };
+    let eager_tool_compat = || {
+        Some(json!({
+            "supportsEagerToolInputStreaming": false,
+        }))
+    };
+
+    let metadata = match model.id.as_str() {
+        "claude-haiku-4.5" => Some((
+            "anthropic-messages",
+            true,
+            true,
+            144_000,
+            32_000,
+            eager_tool_compat(),
+            None,
+        )),
+        "claude-opus-4.5" => Some((
+            "anthropic-messages",
+            true,
+            true,
+            160_000,
+            32_000,
+            None,
+            None,
+        )),
+        "claude-opus-4.6" => Some((
+            "anthropic-messages",
+            true,
+            true,
+            1_000_000,
+            64_000,
+            None,
+            Some("opus-max"),
+        )),
+        "claude-opus-4.7" => Some((
+            "anthropic-messages",
+            true,
+            true,
+            144_000,
+            64_000,
+            None,
+            Some("opus-xhigh"),
+        )),
+        "claude-sonnet-4.5" => Some((
+            "anthropic-messages",
+            true,
+            true,
+            144_000,
+            32_000,
+            eager_tool_compat(),
+            None,
+        )),
+        "claude-sonnet-4.6" => Some((
+            "anthropic-messages",
+            true,
+            true,
+            1_000_000,
+            32_000,
+            None,
+            None,
+        )),
+        "gemini-2.5-pro" => Some((
+            "openai-completions",
+            false,
+            true,
+            128_000,
+            64_000,
+            completions_compat(),
+            None,
+        )),
+        "gemini-3-flash-preview" | "gemini-3.1-pro-preview" => Some((
+            "openai-completions",
+            true,
+            true,
+            128_000,
+            64_000,
+            completions_compat(),
+            None,
+        )),
+        "gpt-4.1" => Some((
+            "openai-completions",
+            false,
+            true,
+            128_000,
+            16_384,
+            completions_compat(),
+            None,
+        )),
+        "gpt-4o" => Some((
+            "openai-completions",
+            false,
+            true,
+            128_000,
+            4_096,
+            completions_compat(),
+            None,
+        )),
+        "gpt-5-mini" => Some((
+            "openai-responses",
+            true,
+            true,
+            264_000,
+            64_000,
+            None,
+            Some("gpt5-mini"),
+        )),
+        "gpt-5.2" => Some((
+            "openai-responses",
+            true,
+            true,
+            264_000,
+            64_000,
+            None,
+            Some("gpt5-xhigh"),
+        )),
+        "gpt-5.2-codex" | "gpt-5.3-codex" | "gpt-5.4" | "gpt-5.4-mini" | "gpt-5.5" => Some((
+            "openai-responses",
+            true,
+            true,
+            400_000,
+            128_000,
+            None,
+            Some("gpt5-xhigh"),
+        )),
+        "grok-code-fast-1" => Some((
+            "openai-completions",
+            true,
+            false,
+            128_000,
+            64_000,
+            completions_compat(),
+            None,
+        )),
+        _ => None,
+    };
+    let Some((api, reasoning, image_input, context_window, max_tokens, compat, thinking_profile)) =
+        metadata
+    else {
+        return false;
+    };
+
+    model.api = api.to_owned();
+    model.base_url = "https://api.individual.githubcopilot.com".to_owned();
+    model.headers = github_copilot_headers();
+    model.reasoning = reasoning;
+    model.thinking_level_map.clear();
+    match thinking_profile {
+        Some("opus-max") => {
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::XHigh, Some("max".to_owned()));
+        }
+        Some("opus-xhigh") => {
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+        }
+        Some("gpt5-mini") => {
+            model.thinking_level_map.insert(ThinkingLevel::Off, None);
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Minimal, Some("low".to_owned()));
+        }
+        Some("gpt5-xhigh") => {
+            model.thinking_level_map.insert(ThinkingLevel::Off, None);
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Minimal, Some("low".to_owned()));
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+        }
+        _ => {}
+    }
+    model.input = vec![crate::types::InputKind::Text];
+    if image_input {
+        ensure_image_input(model);
+    }
+    model.cost = ModelCost::default();
+    model.context_window = context_window;
+    model.max_tokens = max_tokens;
+    model.compat = compat;
+    true
 }
 
 fn ensure_image_input(model: &mut Model) {
