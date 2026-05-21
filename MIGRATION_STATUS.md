@@ -438,6 +438,16 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning
+  `providers/cloudflare.ts` base-URL placeholder semantics: only source-style
+  uppercase env placeholders such as `{CLOUDFLARE_ACCOUNT_ID}` are substituted,
+  while non-matching or malformed brace segments remain literal:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core cloudflare_ -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  and `cargo test --workspace -- --test-threads=1` passed.
+- Previous local verification on 2026-05-21 after aligning
   `providers/transform-messages.ts` thinking-signature truthiness: same-model
   empty thinking blocks now replay only when `thinkingSignature` is non-empty
   like the TypeScript source, while non-empty thinking still replays even with

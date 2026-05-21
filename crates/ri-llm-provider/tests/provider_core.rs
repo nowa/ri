@@ -698,6 +698,13 @@ fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
         resolve_cloudflare_base_url(&gateway_workers).expect("resolved gateway url"),
         "https://gateway.ai.cloudflare.com/v1/account-id/gateway-id/compat"
     );
+    let mut custom_placeholders = gateway_workers.clone();
+    custom_placeholders.base_url =
+        "https://example.test/{lower}/{1BAD}/{}/{CLOUDFLARE_ACCOUNT_ID}/{BROKEN".to_owned();
+    assert_eq!(
+        resolve_cloudflare_base_url(&custom_placeholders).expect("resolved custom placeholders"),
+        "https://example.test/{lower}/{1BAD}/{}/account-id/{BROKEN"
+    );
 
     let workers = get_model("cloudflare-workers-ai", "@cf/moonshotai/kimi-k2.6")
         .expect("cloudflare workers model");

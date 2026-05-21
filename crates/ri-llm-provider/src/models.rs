@@ -967,6 +967,11 @@ pub fn resolve_cloudflare_base_url(model: &Model) -> Result<String, String> {
             return Ok(resolved);
         };
         let name = &after_start[..end];
+        if !is_cloudflare_env_placeholder(name) {
+            resolved.push_str(&remaining[start..start + end + 2]);
+            remaining = &after_start[end + 1..];
+            continue;
+        }
         let value = std::env::var(name).map_err(|_| {
             format!(
                 "{name} is required for provider {} but is not set.",
@@ -978,4 +983,13 @@ pub fn resolve_cloudflare_base_url(model: &Model) -> Result<String, String> {
     }
     resolved.push_str(remaining);
     Ok(resolved)
+}
+
+fn is_cloudflare_env_placeholder(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_uppercase())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_uppercase() || ch.is_ascii_digit())
 }
