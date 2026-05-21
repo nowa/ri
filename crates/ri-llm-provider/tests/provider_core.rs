@@ -11006,6 +11006,45 @@ fn openai_completions_payload_applies_anthropic_cache_control_format() {
         json!({ "type": "ephemeral" })
     );
 
+    let long_payload = build_openai_completions_payload(
+        &model,
+        &context,
+        OpenAICompletionsPayloadOptions {
+            cache_retention: Some(CacheRetention::Long),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        long_payload["messages"][0]["content"][0]["cache_control"],
+        json!({ "type": "ephemeral", "ttl": "1h" })
+    );
+    assert_eq!(
+        long_payload["tools"][0]["cache_control"],
+        json!({ "type": "ephemeral", "ttl": "1h" })
+    );
+    assert_eq!(
+        long_payload["messages"][1]["content"][0]["cache_control"],
+        json!({ "type": "ephemeral", "ttl": "1h" })
+    );
+
+    let mut no_long_cache_model = model.clone();
+    no_long_cache_model.compat = Some(json!({
+        "cacheControlFormat": "anthropic",
+        "supportsLongCacheRetention": false,
+    }));
+    let long_payload = build_openai_completions_payload(
+        &no_long_cache_model,
+        &context,
+        OpenAICompletionsPayloadOptions {
+            cache_retention: Some(CacheRetention::Long),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        long_payload["messages"][0]["content"][0]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+
     let payload = build_openai_completions_payload(
         &model,
         &context,

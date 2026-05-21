@@ -27,10 +27,9 @@ pub fn build_openai_completions_payload(
     options: OpenAICompletionsPayloadOptions,
 ) -> Value {
     let cache_retention = resolve_openai_completions_cache_retention(options.cache_retention);
-    let anthropic_cache_markers =
-        uses_anthropic_cache_control(model) && cache_retention != CacheRetention::None;
+    let cache_control = openai_completions_cache_control(model, cache_retention);
     let messages =
-        convert_openai_completions_messages_with_cache(model, context, anthropic_cache_markers);
+        convert_openai_completions_messages_with_cache(model, context, cache_control.as_ref());
 
     let mut payload = json!({
         "model": model.id,
@@ -50,7 +49,7 @@ pub fn build_openai_completions_payload(
             context
                 .tools
                 .iter()
-                .map(|tool| format_tool(tool, model, anthropic_cache_markers))
+                .map(|tool| format_tool(tool, model, cache_control.as_ref()))
                 .collect(),
         );
     } else if has_tool_history(&context.messages) {
@@ -92,13 +91,13 @@ pub fn build_openai_completions_payload(
 }
 
 pub fn convert_openai_completions_messages(model: &Model, context: &Context) -> Vec<Value> {
-    convert_openai_completions_messages_with_cache(model, context, false)
+    convert_openai_completions_messages_with_cache(model, context, None)
 }
 
 fn convert_openai_completions_messages_with_cache(
     model: &Model,
     context: &Context,
-    anthropic_cache_markers: bool,
+    cache_control: Option<&Value>,
 ) -> Vec<Value> {
     let mut messages = Vec::new();
     if let Some(system_prompt) = &context.system_prompt {
@@ -109,7 +108,7 @@ fn convert_openai_completions_messages_with_cache(
         };
         messages.push(json!({
             "role": role,
-            "content": format_text_content(system_prompt, anthropic_cache_markers),
+            "content": format_text_content(system_prompt, cache_control),
         }));
     }
 
@@ -137,7 +136,7 @@ fn convert_openai_completions_messages_with_cache(
 
         match message {
             Message::User(user) => {
-                let cache = anthropic_cache_markers && Some(index) == last_user_index;
+                let cache = cache_control.filter(|_| Some(index) == last_user_index);
                 if let Some(content) = format_user_content(&user.content, cache) {
                     messages.push(json!({
                         "role": "user",
@@ -152,7 +151,7 @@ fn convert_openai_completions_messages_with_cache(
                     .iter()
                     .filter_map(|content| match content {
                         AssistantContent::Text(block) if !block.text.trim().is_empty() => {
-                            Some(text_part(&block.text, false))
+                            Some(text_part(&block.text, None))
                         }
                         _ => None,
                     })
@@ -201,7 +200,7 @@ fn convert_openai_completions_messages_with_cache(
                             .map(|block| block.thinking.as_str())
                             .collect::<Vec<_>>()
                             .join("\n\n");
-                        let mut parts = vec![text_part(&thinking_text, false)];
+                        let mut parts = vec![text_part(&thinking_text, None)];
                         parts.extend(assistant_text_parts);
                         Value::Array(parts)
                     } else {
@@ -852,7 +851,7 @@ pub fn parse_openai_completions_chunk_usage(raw_usage: &Value, model: &Model) ->
     usage
 }
 
-fn format_user_content(content: &UserContentValue, cache_control: bool) -> Option<Value> {
+fn format_user_content(content: &UserContentValue, cache_control: Option<&Value>) -> Option<Value> {
     match content {
         UserContentValue::Plain(text) => Some(format_text_content(text, cache_control)),
         UserContentValue::Blocks(blocks) => {
@@ -873,23 +872,23 @@ fn format_user_content(content: &UserContentValue, cache_control: bool) -> Optio
     }
 }
 
-fn format_text_content(text: &str, cache_control: bool) -> Value {
-    if cache_control {
-        Value::Array(vec![text_part(text, true)])
+fn format_text_content(text: &str, cache_control: Option<&Value>) -> Value {
+    if cache_control.is_some() {
+        Value::Array(vec![text_part(text, cache_control)])
     } else {
         Value::String(text.to_owned())
     }
 }
 
-fn text_part(text: &str, cache_control: bool) -> Value {
+fn text_part(text: &str, cache_control: Option<&Value>) -> Value {
     let mut part = json!({ "type": "text", "text": text });
-    if cache_control {
-        part["cache_control"] = json!({ "type": "ephemeral" });
+    if let Some(cache_control) = cache_control {
+        part["cache_control"] = cache_control.clone();
     }
     part
 }
 
-fn format_tool(tool: &Tool, model: &Model, cache_control: bool) -> Value {
+fn format_tool(tool: &Tool, model: &Model, cache_control: Option<&Value>) -> Value {
     let mut function = json!({
         "name": tool.name,
         "description": tool.description,
@@ -902,8 +901,8 @@ fn format_tool(tool: &Tool, model: &Model, cache_control: bool) -> Value {
         "type": "function",
         "function": function,
     });
-    if cache_control {
-        formatted["cache_control"] = json!({ "type": "ephemeral" });
+    if let Some(cache_control) = cache_control {
+        formatted["cache_control"] = cache_control.clone();
     }
     formatted
 }
@@ -1023,6 +1022,21 @@ fn uses_anthropic_cache_control(model: &Model) -> bool {
         .and_then(Value::as_str)
         == Some("anthropic")
         || (model.provider == "openrouter" && model.id.contains("anthropic/"))
+}
+
+fn openai_completions_cache_control(
+    model: &Model,
+    cache_retention: CacheRetention,
+) -> Option<Value> {
+    if !uses_anthropic_cache_control(model) || cache_retention == CacheRetention::None {
+        return None;
+    }
+
+    let mut cache_control = json!({ "type": "ephemeral" });
+    if cache_retention == CacheRetention::Long && supports_long_cache_retention(model) {
+        cache_control["ttl"] = Value::String("1h".to_owned());
+    }
+    Some(cache_control)
 }
 
 fn should_enable_zai_tool_stream(model: &Model) -> bool {

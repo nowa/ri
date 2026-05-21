@@ -451,7 +451,9 @@ This migration is not complete.
   DeepSeek, OpenRouter, Together, qwen, and qwen-chat-template formats, and
   align Zai/Groq/OpenRouter reasoning-model metadata used by those transforms,
   and forward OpenRouter plus Vercel AI Gateway routing preferences only for
-  matching gateway base URLs:
+  matching gateway base URLs. Anthropic-format cache-control markers now carry
+  Pi's `ttl: "1h"` on long retention when supported while still omitting TTL
+  when long cache retention is disabled:
   `cargo test -p ri-llm-provider --test provider_core openai_completions_system_prompt_uses_developer_role_for_standard_reasoning_models -- --exact`,
   `cargo test -p ri-llm-provider --test provider_core openai_completions_ -- --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
