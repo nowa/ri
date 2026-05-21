@@ -391,7 +391,20 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after adding Rust-native
+- Latest local verification on 2026-05-21 after aligning harness
+  compaction/branch-summary error classification with
+  `harness/agent-harness.ts` and `harness/types.ts`: `session_before_compact`
+  cancellation now returns a `Compaction` harness error instead of conflating
+  cancellation with "nothing to compact", generated compaction failures map to
+  `Compaction`, generated branch-summary failures map to `BranchSummary`, and
+  caller-provided hook errors keep the caller's classification while pending
+  session writes still flush with save points:
+  `cargo fmt`,
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_summary_hook_cancel_and_skip_flush_jsonl_pending_writes_without_summary -- --exact`,
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_compaction_generation_errors_flush_pending_writes_without_summary -- --exact`, and
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_branch_summary_generation_errors_flush_pending_writes_without_move -- --exact`
+  passed; the workspace test count remains 1109.
+- Previous local verification on 2026-05-21 after adding Rust-native
   `after_provider_response` parity from `harness/agent-harness.ts`: simple
   stream providers can emit response metadata hooks for HTTP/faux responses,
   built-in OpenAI-compatible HTTP streaming records status/headers before

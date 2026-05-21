@@ -51,6 +51,10 @@ pub enum AgentHarnessErrorCode {
     InvalidArgument,
     InvalidState,
     Session,
+    Hook,
+    Auth,
+    Compaction,
+    BranchSummary,
     Unknown,
 }
 
@@ -71,6 +75,14 @@ impl AgentHarnessError {
 
     fn session(error: impl Display) -> Self {
         Self::new(AgentHarnessErrorCode::Session, error.to_string())
+    }
+
+    fn compaction(error: impl Display) -> Self {
+        Self::new(AgentHarnessErrorCode::Compaction, error.to_string())
+    }
+
+    fn branch_summary(error: impl Display) -> Self {
+        Self::new(AgentHarnessErrorCode::BranchSummary, error.to_string())
     }
 
     fn unknown(error: impl Into<String>) -> Self {
@@ -1212,7 +1224,7 @@ impl AgentHarness {
 
             let entries = self.session.entries();
             let Some(preparation) = prepare_compaction(&entries, options.settings)
-                .map_err(|error| AgentHarnessError::unknown(error.to_string()))?
+                .map_err(AgentHarnessError::compaction)?
             else {
                 if had_pending_mutations || self.has_pending_session_writes() {
                     self.flush_pending_session_writes_and_emit_savepoint(had_pending_mutations)
@@ -1238,11 +1250,12 @@ impl AgentHarness {
                 .map(|result| result.cancel)
                 .unwrap_or(false)
             {
-                if had_pending_mutations || self.has_pending_session_writes() {
-                    self.flush_pending_session_writes_and_emit_savepoint(had_pending_mutations)
-                        .await?;
-                }
-                return Ok(None);
+                self.flush_pending_session_writes_and_emit_savepoint(had_pending_mutations)
+                    .await?;
+                return Err(AgentHarnessError::new(
+                    AgentHarnessErrorCode::Compaction,
+                    "Compaction cancelled",
+                ));
             }
 
             let provided = hook_result.and_then(|result| result.compaction);
@@ -1270,7 +1283,7 @@ impl AgentHarness {
                                 had_pending_mutations,
                             )
                             .await?;
-                            return Err(AgentHarnessError::unknown(error.to_string()));
+                            return Err(AgentHarnessError::compaction(error));
                         }
                     }
                 }
@@ -1375,7 +1388,7 @@ impl AgentHarness {
                                             had_pending_mutations,
                                         )
                                         .await?;
-                                        return Err(AgentHarnessError::unknown(error.to_string()));
+                                        return Err(AgentHarnessError::branch_summary(error));
                                     }
                                 }
                             }
@@ -1504,7 +1517,7 @@ impl AgentHarness {
                     options.reserve_tokens,
                 )
                 .await
-                .map_err(|error| AgentHarnessError::unknown(error.to_string()))?;
+                .map_err(AgentHarnessError::branch_summary)?;
                 summary_text = Some(result.summary.clone());
                 summary_details = branch_summary_details_value(&result);
             }
@@ -2125,7 +2138,7 @@ fn collect_branch_summary_entries_for_target(
 ) -> Result<CollectEntriesResult, AgentHarnessError> {
     match target_id {
         Some(target_id) => collect_entries_for_branch_summary(session, old_leaf_id, target_id)
-            .map_err(|error| AgentHarnessError::unknown(error.to_string())),
+            .map_err(AgentHarnessError::branch_summary),
         None => {
             let entries = match old_leaf_id {
                 Some(old_leaf_id) => session

@@ -123,6 +123,8 @@ credentials, local model services where applicable, and manual OAuth flows.
   session, and local environment context.
 - Provider request, payload, and after-response events for harness subscribers
   and hooks.
+- Pi-style harness error classifications for session, hook/auth, compaction,
+  branch-summary, and unknown failures.
 - Skills and prompt template loading.
 - Branch summary and context compaction helpers.
 - Local execution environment utilities for file and shell operations.

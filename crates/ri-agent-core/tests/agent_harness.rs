@@ -2131,7 +2131,7 @@ async fn agent_harness_summary_hook_cancel_and_skip_flush_jsonl_pending_writes_w
         }))
     });
 
-    let compact_result = compact_harness
+    let compact_error = compact_harness
         .compact_session(AgentHarnessCompactionOptions {
             settings: CompactionThresholdSettings {
                 enabled: true,
@@ -2141,9 +2141,10 @@ async fn agent_harness_summary_hook_cancel_and_skip_flush_jsonl_pending_writes_w
             custom_instructions: None,
         })
         .await
-        .expect("compact cancel");
+        .expect_err("compact cancel");
 
-    assert!(compact_result.is_none());
+    assert_eq!(compact_error.code, AgentHarnessErrorCode::Compaction);
+    assert_eq!(compact_error.message, "Compaction cancelled");
     assert_eq!(
         *compact_events.lock().expect("compact events"),
         vec!["save:true"]
@@ -2375,7 +2376,7 @@ async fn agent_harness_session_before_compact_hook_can_cancel() {
         }))
     });
 
-    let result = harness
+    let error = harness
         .compact_session(AgentHarnessCompactionOptions {
             settings: CompactionThresholdSettings {
                 enabled: true,
@@ -2385,9 +2386,10 @@ async fn agent_harness_session_before_compact_hook_can_cancel() {
             custom_instructions: None,
         })
         .await
-        .expect("compact");
+        .expect_err("compact cancel");
 
-    assert!(result.is_none());
+    assert_eq!(error.code, AgentHarnessErrorCode::Compaction);
+    assert_eq!(error.message, "Compaction cancelled");
     assert_eq!(harness.phase(), AgentHarnessPhase::Idle);
     assert!(
         session
@@ -2562,7 +2564,7 @@ async fn agent_harness_compaction_generation_errors_flush_pending_writes_without
         .await
         .expect_err("compaction generation error");
 
-    assert_eq!(error.code, AgentHarnessErrorCode::Unknown);
+    assert_eq!(error.code, AgentHarnessErrorCode::Compaction);
     assert!(error.message.contains("summary provider failed"));
     assert_eq!(harness.phase(), AgentHarnessPhase::Idle);
     assert_eq!(*events.lock().expect("events"), vec!["save:true"]);
@@ -3213,7 +3215,7 @@ async fn agent_harness_branch_summary_generation_errors_flush_pending_writes_wit
         .await
         .expect_err("branch generation error");
 
-    assert_eq!(error.code, AgentHarnessErrorCode::Unknown);
+    assert_eq!(error.code, AgentHarnessErrorCode::BranchSummary);
     assert!(error.message.contains("branch provider failed"));
     assert_eq!(harness.phase(), AgentHarnessPhase::Idle);
     assert_eq!(*events.lock().expect("events"), vec!["save:true"]);
