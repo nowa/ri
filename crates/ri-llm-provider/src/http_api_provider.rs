@@ -1138,12 +1138,8 @@ async fn stream_openai_codex_websocket_json(
     let transport = options.stream.transport.unwrap_or(Transport::Auto);
     let use_cached_context = matches!(transport, Transport::Auto | Transport::WebsocketCached);
     let session_id = options.stream.session_id.clone();
-    let cached = if use_cached_context {
-        if let Some(session_id) = session_id.as_deref() {
-            codex_ws_cache().lock().await.remove(session_id)
-        } else {
-            None
-        }
+    let cached = if let Some(session_id) = session_id.as_deref() {
+        codex_ws_cache().lock().await.remove(session_id)
     } else {
         None
     };
@@ -1192,23 +1188,19 @@ async fn stream_openai_codex_websocket_json(
         processor.process_event(event, output, sender, model)?;
         if processor.is_terminal() {
             processor.finish(output, sender);
-            if use_cached_context {
-                if let Some(session_id) = session_id {
-                    let continuation = build_openai_codex_cached_websocket_continuation(
-                        model,
-                        payload.clone(),
-                        output,
-                    );
-                    codex_ws_cache().lock().await.insert(
-                        session_id,
-                        CachedCodexWebSocket {
-                            socket,
-                            continuation,
-                        },
-                    );
+            if let Some(session_id) = session_id {
+                let continuation = if use_cached_context {
+                    build_openai_codex_cached_websocket_continuation(model, payload.clone(), output)
                 } else {
-                    let _ = socket.close().await;
-                }
+                    continuation
+                };
+                codex_ws_cache().lock().await.insert(
+                    session_id,
+                    CachedCodexWebSocket {
+                        socket,
+                        continuation,
+                    },
+                );
             } else {
                 let _ = socket.close().await;
             }

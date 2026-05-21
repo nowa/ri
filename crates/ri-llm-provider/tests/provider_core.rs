@@ -16909,6 +16909,116 @@ async fn builtin_openai_codex_provider_reuses_websocket_cached_context_for_sessi
 }
 
 #[tokio::test]
+async fn builtin_openai_codex_provider_reuses_plain_websocket_without_cached_context() {
+    reset_openai_codex_websocket_debug_stats(Some("ws-plain-reuse-session"));
+    let responses = vec![
+        vec![
+            json!({ "type": "response.created", "response": { "id": "resp_plain_1" } }),
+            json!({
+                "type": "response.output_item.added",
+                "item": { "type": "message", "id": "msg_plain_1", "role": "assistant", "content": [] }
+            }),
+            json!({ "type": "response.output_text.delta", "delta": "Plain one" }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "id": "msg_plain_1",
+                    "content": [{ "type": "output_text", "text": "Plain one" }]
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_plain_1",
+                    "status": "completed",
+                    "usage": { "input_tokens": 5, "output_tokens": 3, "total_tokens": 8 }
+                }
+            }),
+        ],
+        vec![
+            json!({ "type": "response.created", "response": { "id": "resp_plain_2" } }),
+            json!({
+                "type": "response.output_item.added",
+                "item": { "type": "message", "id": "msg_plain_2", "role": "assistant", "content": [] }
+            }),
+            json!({ "type": "response.output_text.delta", "delta": "Plain two" }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "id": "msg_plain_2",
+                    "content": [{ "type": "output_text", "text": "Plain two" }]
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_plain_2",
+                    "status": "completed",
+                    "usage": { "input_tokens": 7, "output_tokens": 3, "total_tokens": 10 }
+                }
+            }),
+        ],
+    ];
+    let (base_url, request_task) = mock_reusable_websocket_server(responses).await;
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.session_id = Some("ws-plain-reuse-session".to_owned());
+    options.stream.transport = Some(Transport::Websocket);
+
+    let first = complete_simple(&model, user_context("First"), options.clone())
+        .await
+        .expect("first complete");
+    assert_eq!(text_of(&first), Some("Plain one"));
+    assert_eq!(first.response_id.as_deref(), Some("resp_plain_1"));
+
+    let second_context = Context {
+        messages: vec![
+            Message::User(UserMessage::text("First")),
+            Message::Assistant(first),
+            Message::User(UserMessage::text("Second")),
+        ],
+        ..Default::default()
+    };
+    let second = complete_simple(&model, second_context, options)
+        .await
+        .expect("second complete");
+    assert_eq!(text_of(&second), Some("Plain two"));
+    assert_eq!(second.response_id.as_deref(), Some("resp_plain_2"));
+
+    let request = request_task.await.expect("request task");
+    assert!(
+        request
+            .handshake
+            .starts_with("GET /codex/responses HTTP/1.1")
+    );
+    assert_eq!(request.messages.len(), 2);
+    let first_body: Value = serde_json::from_str(&request.messages[0]).expect("first body");
+    let second_body: Value = serde_json::from_str(&request.messages[1]).expect("second body");
+    assert!(first_body.get("previous_response_id").is_none());
+    assert!(second_body.get("previous_response_id").is_none());
+    assert!(
+        second_body["input"]
+            .as_array()
+            .is_some_and(|input| input.len() > 1),
+        "plain websocket transport should reuse the socket but keep sending full context"
+    );
+
+    let stats = get_openai_codex_websocket_debug_stats("ws-plain-reuse-session")
+        .expect("websocket debug stats");
+    assert_eq!(stats.requests, 2);
+    assert_eq!(stats.connections_created, 1);
+    assert_eq!(stats.connections_reused, 1);
+    assert_eq!(stats.cached_context_requests, 0);
+    assert_eq!(stats.full_context_requests, 2);
+    assert_eq!(stats.delta_requests, 0);
+    assert_eq!(stats.last_previous_response_id, None);
+}
+
+#[tokio::test]
 async fn session_resource_cleanup_removes_openai_codex_websocket_cache_for_session() {
     let session_id = "ws-cleanup-session";
     let (first_base_url, first_request_task) = mock_reusable_websocket_server(vec![vec![

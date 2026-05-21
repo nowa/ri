@@ -454,20 +454,25 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning
-  `providers/openai-codex-responses.ts` session-scoped WebSocket fallback
-  behavior: a Codex WebSocket transport failure now marks the request
-  `session_id` for direct SSE on later non-SSE requests, matching Pi's
-  `websocketSseFallbackSessions` path; the Rust provider now also exposes and
-  updates source-style WebSocket debug stats/reset state for real provider
-  requests, including created/reused connections, cached-context requests,
-  full/delta request counts, fallback counts, and sticky fallback reset,
-  while preserving the original provider-transport diagnostic only on the
-  failed WebSocket attempt:
+  `providers/openai-codex-responses.ts` session-scoped WebSocket connection and
+  fallback behavior: plain `transport: "websocket"` requests now reuse the
+  session WebSocket while still sending full-context request bodies, matching
+  Pi's `acquireWebSocket`/`useCachedContext` split; a Codex WebSocket transport
+  failure now marks the request `session_id` for direct SSE on later non-SSE
+  requests, matching Pi's `websocketSseFallbackSessions` path; the Rust
+  provider now also exposes and updates source-style WebSocket debug
+  stats/reset state for real provider requests, including created/reused
+  connections, cached-context requests, full/delta request counts, fallback
+  counts, and sticky fallback reset, while preserving the original
+  provider-transport diagnostic only on the failed WebSocket attempt:
+  `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_reuses_plain_websocket_without_cached_context -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_ -- --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core session_resource_cleanup_removes_openai_codex_websocket_cache_for_session -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_auto_falls_back_to_sse_when_websocket_fails_before_events -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_reuses_websocket_cached_context_for_session -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
   `cargo test --workspace -- --test-threads=1`,
-  `cargo test --workspace -- --list` (1161 tests enumerated), and
+  `cargo test --workspace -- --list` (1162 tests enumerated), and
   `cargo fmt --check` and `git diff --check` passed.
 - Latest local verification on 2026-05-21 after aligning
   `providers/google.ts` and `providers/google-vertex.ts` native `thinking`
