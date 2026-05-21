@@ -1493,6 +1493,464 @@ fn github_copilot_model_metadata_matches_generated_catalog() {
 }
 
 #[test]
+fn google_model_metadata_matches_generated_catalog() {
+    let models = get_models("google");
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-1.5-pro",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-flash-lite-preview-06-17",
+            "gemini-2.5-flash-lite-preview-09-2025",
+            "gemini-2.5-flash-preview-04-17",
+            "gemini-2.5-flash-preview-05-20",
+            "gemini-2.5-flash-preview-09-2025",
+            "gemini-2.5-pro",
+            "gemini-2.5-pro-preview-05-06",
+            "gemini-2.5-pro-preview-06-05",
+            "gemini-3-flash-preview",
+            "gemini-3-pro-preview",
+            "gemini-3.1-flash-lite",
+            "gemini-3.1-flash-lite-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-pro-preview-customtools",
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+            "gemini-live-2.5-flash",
+            "gemini-live-2.5-flash-preview-native-audio",
+            "gemma-3-27b-it",
+            "gemma-4-26b-a4b-it",
+            "gemma-4-31b-it",
+        ]
+    );
+
+    for (model_id, reasoning, thinking_map, input, cost, context_window, max_tokens) in [
+        (
+            "gemini-1.5-flash",
+            false,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.075,
+                output: 0.3,
+                cache_read: 0.01875,
+                cache_write: 0.0,
+            },
+            1_000_000,
+            8_192,
+        ),
+        (
+            "gemini-1.5-flash-8b",
+            false,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.0375,
+                output: 0.15,
+                cache_read: 0.01,
+                cache_write: 0.0,
+            },
+            1_000_000,
+            8_192,
+        ),
+        (
+            "gemini-1.5-pro",
+            false,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 1.25,
+                output: 5.0,
+                cache_read: 0.3125,
+                cache_write: 0.0,
+            },
+            1_000_000,
+            8_192,
+        ),
+        (
+            "gemini-2.0-flash",
+            false,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.1,
+                output: 0.4,
+                cache_read: 0.025,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            8_192,
+        ),
+        (
+            "gemini-2.0-flash-lite",
+            false,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.075,
+                output: 0.3,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            8_192,
+        ),
+        (
+            "gemini-2.5-flash",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.3,
+                output: 2.5,
+                cache_read: 0.03,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-2.5-flash-lite",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.1,
+                output: 0.4,
+                cache_read: 0.01,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-2.5-flash-lite-preview-06-17",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.1,
+                output: 0.4,
+                cache_read: 0.025,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-2.5-flash-lite-preview-09-2025",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.1,
+                output: 0.4,
+                cache_read: 0.025,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-2.5-flash-preview-04-17",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.15,
+                output: 0.6,
+                cache_read: 0.0375,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-2.5-flash-preview-05-20",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.15,
+                output: 0.6,
+                cache_read: 0.0375,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-2.5-flash-preview-09-2025",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.3,
+                output: 2.5,
+                cache_read: 0.075,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-2.5-pro",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-2.5-pro-preview-05-06",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.31,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-2.5-pro-preview-06-05",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.31,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-3-flash-preview",
+            true,
+            "flash3",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.5,
+                output: 3.0,
+                cache_read: 0.05,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-3-pro-preview",
+            true,
+            "pro3",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 2.0,
+                output: 12.0,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+            1_000_000,
+            64_000,
+        ),
+        (
+            "gemini-3.1-flash-lite",
+            true,
+            "flash3",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.25,
+                output: 1.5,
+                cache_read: 0.025,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-3.1-flash-lite-preview",
+            true,
+            "flash3",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.25,
+                output: 1.5,
+                cache_read: 0.025,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-3.1-pro-preview",
+            true,
+            "pro3",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 2.0,
+                output: 12.0,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-3.1-pro-preview-customtools",
+            true,
+            "pro3",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 2.0,
+                output: 12.0,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-flash-latest",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.3,
+                output: 2.5,
+                cache_read: 0.075,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-flash-lite-latest",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.1,
+                output: 0.4,
+                cache_read: 0.025,
+                cache_write: 0.0,
+            },
+            1_048_576,
+            65_536,
+        ),
+        (
+            "gemini-live-2.5-flash",
+            true,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost {
+                input: 0.5,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            128_000,
+            8_000,
+        ),
+        (
+            "gemini-live-2.5-flash-preview-native-audio",
+            true,
+            "none",
+            vec![InputKind::Text],
+            ModelCost {
+                input: 0.5,
+                output: 2.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            131_072,
+            65_536,
+        ),
+        (
+            "gemma-3-27b-it",
+            false,
+            "none",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost::default(),
+            131_072,
+            8_192,
+        ),
+        (
+            "gemma-4-26b-a4b-it",
+            true,
+            "gemma4",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost::default(),
+            256_000,
+            8_192,
+        ),
+        (
+            "gemma-4-31b-it",
+            true,
+            "gemma4",
+            vec![InputKind::Text, InputKind::Image],
+            ModelCost::default(),
+            256_000,
+            8_192,
+        ),
+    ] {
+        let model = get_model("google", model_id).expect(model_id);
+        assert_eq!(model.api, "google-generative-ai", "{model_id} api");
+        assert_eq!(model.provider, "google", "{model_id} provider");
+        assert_eq!(
+            model.base_url, "https://generativelanguage.googleapis.com/v1beta",
+            "{model_id} base URL"
+        );
+        assert_eq!(model.reasoning, reasoning, "{model_id} reasoning");
+        assert_eq!(model.input, input, "{model_id} input");
+        assert_eq!(model.cost, cost, "{model_id} cost");
+        assert_eq!(model.context_window, context_window, "{model_id} context");
+        assert_eq!(model.max_tokens, max_tokens, "{model_id} max tokens");
+        assert!(model.compat.is_none(), "{model_id} compat");
+
+        let expected_thinking = match thinking_map {
+            "flash3" => BTreeMap::from([(ThinkingLevel::Off, None)]),
+            "pro3" => BTreeMap::from([
+                (ThinkingLevel::Off, None),
+                (ThinkingLevel::Minimal, None),
+                (ThinkingLevel::Low, Some("LOW".to_owned())),
+                (ThinkingLevel::Medium, None),
+                (ThinkingLevel::High, Some("HIGH".to_owned())),
+            ]),
+            "gemma4" => BTreeMap::from([
+                (ThinkingLevel::Off, None),
+                (ThinkingLevel::Minimal, Some("MINIMAL".to_owned())),
+                (ThinkingLevel::Low, None),
+                (ThinkingLevel::Medium, None),
+                (ThinkingLevel::High, Some("HIGH".to_owned())),
+            ]),
+            _ => BTreeMap::new(),
+        };
+        assert_eq!(
+            model.thinking_level_map, expected_thinking,
+            "{model_id} thinking"
+        );
+    }
+}
+
+#[test]
 fn google_vertex_model_metadata_matches_generated_catalog() {
     let models = get_models("google-vertex");
     assert_eq!(
