@@ -270,32 +270,50 @@ fn substitute_slice_placeholders(input: &str, args: &[String]) -> String {
             return output;
         };
         let spec = &after_start[..end];
-        let mut parts = spec.split(':');
-        let start_index = parts
-            .next()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(1)
-            .saturating_sub(1);
-        let replacement =
-            if let Some(length) = parts.next().and_then(|value| value.parse::<usize>().ok()) {
-                args.iter()
-                    .skip(start_index)
-                    .take(length)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            } else {
-                args.iter()
-                    .skip(start_index)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            };
+        let Some((start_value, length_value)) = parse_slice_spec(spec) else {
+            output.push_str(&rest[start..start + 4 + end + 1]);
+            rest = &after_start[end + 1..];
+            continue;
+        };
+        let start_index = start_value.saturating_sub(1);
+        let replacement = if let Some(length) = length_value {
+            args.iter()
+                .skip(start_index)
+                .take(length)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            args.iter()
+                .skip(start_index)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         output.push_str(&replacement);
         rest = &after_start[end + 1..];
     }
     output.push_str(rest);
     output
+}
+
+fn parse_slice_spec(spec: &str) -> Option<(usize, Option<usize>)> {
+    let (start, length) = spec
+        .split_once(':')
+        .map(|(start, length)| (start, Some(length)))
+        .unwrap_or((spec, None));
+    if start.is_empty() || !start.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let start = start.parse::<usize>().ok()?;
+    let length = match length {
+        Some(length) if !length.is_empty() && length.chars().all(|ch| ch.is_ascii_digit()) => {
+            Some(length.parse::<usize>().ok()?)
+        }
+        Some(_) => return None,
+        None => None,
+    };
+    Some((start, length))
 }
 
 fn diagnostic(

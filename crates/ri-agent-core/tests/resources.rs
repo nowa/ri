@@ -497,6 +497,10 @@ fn prompt_template_argument_substitution_matches_pi_placeholders() {
     );
     assert_eq!(substitute_args("$10 $2 $99", &args), "ten test ");
     assert_eq!(
+        substitute_args("${@:2:x} ${@:} ${@:2:2}", &args),
+        "${@:2:x} ${@:} test three"
+    );
+    assert_eq!(
         parse_command_args("one 'two words' \"three words\""),
         vec!["one", "two words", "three words"]
     );

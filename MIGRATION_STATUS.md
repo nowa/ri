@@ -383,8 +383,9 @@ counterparts that pass.
     compaction turn-start handling.
   - Skill and prompt-template invocation formatting plus skill/prompt-template
     loading, pi-style numeric/slice/all-argument substitution including
-    multi-digit numeric placeholders, YAML frontmatter parsing semantics for
-    folded strings, inline comments, booleans, and non-string metadata fields,
+    multi-digit numeric placeholders and regex-style rejection of malformed
+    slice placeholders, YAML frontmatter parsing semantics for folded strings,
+    inline comments, booleans, and non-string metadata fields,
     skill ignore-file handling, and pi-style skill metadata validation
     diagnostics for name/description rules.
   - Local execution environment foundation for filesystem operations, shell
@@ -460,7 +461,17 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning stateful `Agent`
+- Latest local verification on 2026-05-21 after aligning
+  `prompt-templates.ts` placeholder matching: Rust now leaves malformed
+  `${@:...}` slice placeholders untouched unless the start and optional length
+  are all digits, matching Pi's regex replacement semantics while preserving
+  valid `$1`, `$10`, `$ARGUMENTS`, `$@`, `${@:N}`, and `${@:N:L}` behavior:
+  `cargo test -p ri-agent-core --test resources prompt_template_argument_substitution_matches_pi_placeholders -- --exact --test-threads=1`,
+  `cargo test -p ri-agent-core --test resources -- --test-threads=1`,
+  `cargo fmt`, `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --test-threads=1` passed.
+- Previous local verification on 2026-05-21 after aligning stateful `Agent`
   run-failure abort classification with Pi `Agent.handleRunFailure`:
   stream-provider failures observed after the active abort flag is set now
   persist the assistant failure message with `stop_reason: aborted` instead of
