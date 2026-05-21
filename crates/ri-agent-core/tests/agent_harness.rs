@@ -500,8 +500,8 @@ fn agent_harness_model_and_thinking_setters_emit_selection_events() {
     let events_ref = events.clone();
     harness.subscribe(move |event| match event {
         AgentHarnessEvent::ModelSelect(event) => events_ref.lock().expect("mutex").push(format!(
-            "model:{}->{}",
-            event.previous_model.id, event.model.id
+            "model:{}->{}/{:?}",
+            event.previous_model.id, event.model.id, event.source
         )),
         AgentHarnessEvent::ThinkingLevelSelect(event) => {
             events_ref.lock().expect("mutex").push(format!(
@@ -531,7 +531,7 @@ fn agent_harness_model_and_thinking_setters_emit_selection_events() {
     assert_eq!(
         *events.lock().expect("mutex"),
         vec![
-            "model:first->second".to_owned(),
+            "model:first->second/Set".to_owned(),
             "thinking:Off->High".to_owned()
         ]
     );

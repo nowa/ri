@@ -313,7 +313,8 @@ counterparts that pass.
     `resources_update` events, source-style resource `source` metadata
     preservation, direct skill and prompt-template invocation,
     stream-options accessors, model/thinking selection events with session
-    persistence, listener-safe pending `append_message`, custom-entry,
+    persistence and Pi-style model-select `source: "set"` payloads,
+    listener-safe pending `append_message`, custom-entry,
     custom-message, label, and session-name writes, dynamic system-prompt
     providers over resources, live listener events and
     prepare-next-turn refresh for model/thinking/system prompt/resources/tools,
@@ -420,7 +421,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after adding Rust-native
+- Latest local verification on 2026-05-21 after aligning Pi
+  `ModelSelectEvent.source` from `harness/types.ts` and
+  `AgentHarness.setModel` in `harness/agent-harness.ts`: Rust
+  `ModelSelectEvent` now exposes a `ModelSelectSource` enum and emits
+  `Set` for direct `set_model` calls while retaining model/thinking session
+  persistence in the existing selection-event behavior test:
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_model_and_thinking_setters_emit_selection_events -- --exact`,
+  `cargo fmt`, `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1132 tests.
+- Previous local verification on 2026-05-21 after adding Rust-native
   image-capable queue shortcuts matching `AgentHarness.steer`,
   `followUp`, and `nextTurn` image options from `harness/agent-harness.ts`:
   `steer_with_images`, `follow_up_with_images`, and `next_turn_with_images`

@@ -160,6 +160,13 @@ pub struct ResourcesUpdateEvent {
 pub struct ModelSelectEvent {
     pub model: Model,
     pub previous_model: Model,
+    pub source: ModelSelectSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelSelectSource {
+    Set,
+    Restore,
 }
 
 #[derive(Debug, Clone)]
@@ -801,6 +808,7 @@ impl AgentHarness {
         self.emit(AgentHarnessEvent::ModelSelect(ModelSelectEvent {
             model,
             previous_model,
+            source: ModelSelectSource::Set,
         }));
         Ok(())
     }
