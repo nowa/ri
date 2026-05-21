@@ -466,6 +466,18 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-22 after aligning
+  `session/jsonl-storage.ts` header and entry shallow validation: JSONL session
+  headers now reject non-string `parentSession` values, including JSON `null`,
+  before serde maps them to Rust `None`; JSONL entries now reject non-object JSON
+  values with the Pi `is not a valid session entry` path before checking typed
+  fields:
+  `cargo test -p ri-agent-core --test session_storage jsonl_storage_rejects_malformed_headers_and_entries -- --exact --test-threads=1`,
+  `cargo fmt`,
+  `cargo test -p ri-agent-core --test session_storage -- --test-threads=1`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --test-threads=1` passed.
+- Latest local verification on 2026-05-22 after aligning
   `session/jsonl-storage.ts` metadata loading: `load_jsonl_session_metadata`
   now reads only the first physical line like Pi's `readTextLines(...,
   { maxLines: 1 })` path, so a blank first line reports `invalid_session` even

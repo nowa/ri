@@ -1659,21 +1659,42 @@ fn parse_header_line(line: &str, file_path: &Path) -> Result<SessionHeader, Sess
     if parsed.get("version").and_then(Value::as_u64) != Some(3) {
         return Err(invalid_session(file_path, "unsupported session version"));
     }
-    let header: SessionHeader = serde_json::from_value(parsed).map_err(|error| {
-        invalid_session(file_path, "first line is not a valid session header").with_cause(error)
-    })?;
-    if header.id.is_empty() {
+    if !parsed
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
+    {
         return Err(invalid_session(file_path, "session header is missing id"));
     }
-    if header.timestamp.is_empty() {
+    if !parsed
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .is_some_and(|timestamp| !timestamp.is_empty())
+    {
         return Err(invalid_session(
             file_path,
             "session header is missing timestamp",
         ));
     }
-    if header.cwd.is_empty() {
+    if !parsed
+        .get("cwd")
+        .and_then(Value::as_str)
+        .is_some_and(|cwd| !cwd.is_empty())
+    {
         return Err(invalid_session(file_path, "session header is missing cwd"));
     }
+    if parsed
+        .get("parentSession")
+        .is_some_and(|parent_session| !parent_session.is_string())
+    {
+        return Err(invalid_session(
+            file_path,
+            "session header parentSession must be a string",
+        ));
+    }
+    let header: SessionHeader = serde_json::from_value(parsed).map_err(|error| {
+        invalid_session(file_path, "first line is not a valid session header").with_cause(error)
+    })?;
     Ok(header)
 }
 
@@ -1685,6 +1706,13 @@ fn parse_entry_line(
     let parsed: Value = serde_json::from_str(line).map_err(|error| {
         invalid_entry(file_path, line_number, "is not valid JSON").with_cause(error)
     })?;
+    if !parsed.is_object() {
+        return Err(invalid_entry(
+            file_path,
+            line_number,
+            "is not a valid session entry",
+        ));
+    }
     let entry_type = parsed
         .get("type")
         .and_then(Value::as_str)

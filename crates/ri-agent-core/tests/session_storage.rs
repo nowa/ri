@@ -412,9 +412,30 @@ fn jsonl_storage_rejects_malformed_headers_and_entries() {
         "timestamp": "2026-01-01T00:00:00.000Z",
         "cwd": dir.to_string_lossy()
     });
+    let header_with_null_parent = json!({
+        "type": "session",
+        "version": 3,
+        "id": "session-1",
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "cwd": dir.to_string_lossy(),
+        "parentSession": null
+    });
+    fs::write(&path, format!("{header_with_null_parent}\n")).expect("write null parentSession");
+    let err = JsonlSessionStorage::open(&path).expect_err("null parentSession");
+    assert_eq!(err.code, SessionErrorCode::InvalidSession);
+    assert!(
+        err.message
+            .contains("session header parentSession must be a string")
+    );
+
     fs::write(&path, format!("{header}\nnot json\n")).expect("write");
     let err = JsonlSessionStorage::open(&path).expect_err("bad entry");
     assert_eq!(err.code, SessionErrorCode::InvalidEntry);
+
+    fs::write(&path, format!("{header}\nnull\n")).expect("write null entry");
+    let err = JsonlSessionStorage::open(&path).expect_err("null entry");
+    assert_eq!(err.code, SessionErrorCode::InvalidEntry);
+    assert!(err.message.contains("is not a valid session entry"));
 
     let missing_parent = json!({
         "type": "message",
