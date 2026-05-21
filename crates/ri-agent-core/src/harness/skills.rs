@@ -2,6 +2,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use yaml_rust::{Yaml, YamlLoader};
 
 const MAX_NAME_LENGTH: usize = 64;
 const MAX_DESCRIPTION_LENGTH: usize = 1024;
@@ -521,32 +522,38 @@ fn parse_skill_frontmatter(content: &str) -> Result<ParsedSkill, String> {
     };
 
     let yaml = &normalized[4..end_index];
-    if yaml.contains("[unterminated") {
-        return Err("Failed to parse frontmatter".to_owned());
-    }
-
+    let docs = YamlLoader::load_from_str(yaml).map_err(|error| error.to_string())?;
+    let value = docs.first();
     let body = normalized[end_index + 4..].trim().to_owned();
-    let mut parsed = ParsedSkill {
-        name: None,
-        description: None,
-        disable_model_invocation: false,
+    Ok(ParsedSkill {
+        name: yaml_string_field(value, "name"),
+        description: yaml_string_field(value, "description"),
+        disable_model_invocation: yaml_bool_field(value, "disable-model-invocation")
+            .unwrap_or(false),
         body,
+    })
+}
+
+fn yaml_string_field(value: Option<&Yaml>, key: &str) -> Option<String> {
+    let Some(Yaml::Hash(mapping)) = value else {
+        return None;
     };
-    for line in yaml.lines() {
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim().trim_matches('"').trim_matches('\'').to_owned();
-        match key.trim() {
-            "name" if !value.is_empty() => parsed.name = Some(value),
-            "description" if !value.is_empty() => parsed.description = Some(value),
-            "disable-model-invocation" => {
-                parsed.disable_model_invocation = value == "true";
-            }
-            _ => {}
-        }
+    let key = Yaml::String(key.to_owned());
+    match mapping.get(&key) {
+        Some(Yaml::String(value)) => Some(value.clone()),
+        _ => None,
     }
-    Ok(parsed)
+}
+
+fn yaml_bool_field(value: Option<&Yaml>, key: &str) -> Option<bool> {
+    let Some(Yaml::Hash(mapping)) = value else {
+        return None;
+    };
+    let key = Yaml::String(key.to_owned());
+    match mapping.get(&key) {
+        Some(Yaml::Boolean(value)) => Some(*value),
+        _ => None,
+    }
 }
 
 fn display_path(path: &Path) -> String {

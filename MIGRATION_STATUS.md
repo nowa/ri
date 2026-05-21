@@ -342,8 +342,10 @@ counterparts that pass.
     compaction turn-start handling.
   - Skill and prompt-template invocation formatting plus skill/prompt-template
     loading, pi-style numeric/slice/all-argument substitution including
-    multi-digit numeric placeholders, skill ignore-file handling, and
-    pi-style skill metadata validation diagnostics for name/description rules.
+    multi-digit numeric placeholders, YAML frontmatter parsing semantics for
+    folded strings, inline comments, booleans, and non-string metadata fields,
+    skill ignore-file handling, and pi-style skill metadata validation
+    diagnostics for name/description rules.
   - Local execution environment foundation for filesystem operations, shell
     execution with per-command working-directory overrides and shell
     environment overrides, stdout/stderr callbacks, callback error propagation
@@ -355,16 +357,16 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1128 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1130 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 932 tests: 1 library test, 300 `provider_core` tests, and
   631 `provider_live` tests. This is 211 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 196 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 198 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 46 above the 150 direct simple
+  `resources`, and `session_storage`. This is 48 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -393,7 +395,7 @@ Current Rust tests: 1128 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1128-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1130-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -416,7 +418,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning Pi
+- Latest local verification on 2026-05-21 after replacing the hand-written
+  harness skill/prompt-template frontmatter scanner with a YAML parser to match
+  `harness/skills.ts` and `harness/prompt-templates.ts`: folded block
+  descriptions, inline-comment booleans, and non-string metadata fields now
+  follow Pi's YAML parse plus `typeof` checks instead of ad hoc
+  `key: value` parsing:
+  `cargo test -p ri-agent-core --test resources -- --test-threads=1`,
+  `cargo fmt`, `cargo fmt --check`,
+  `cargo test -p ri-agent-core -- --test-threads=1`, `git diff --check`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1130 tests.
+- Previous local verification on 2026-05-21 after aligning Pi
   `ImagesOptions.onResponse` async settlement from `types.ts` and
   `providers/images/openrouter.ts`: OpenRouter Images response hooks now return
   futures and are awaited before the response body is consumed, matching the
@@ -782,6 +796,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1128 Rust tests cover the
+- Test parity is not certified by raw count alone: 1130 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

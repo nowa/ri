@@ -19,6 +19,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+yaml-rust.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

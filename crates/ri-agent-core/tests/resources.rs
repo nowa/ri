@@ -308,6 +308,37 @@ fn load_skills_reports_pi_metadata_validation_warnings_without_dropping_skill() 
 }
 
 #[test]
+fn load_skills_uses_yaml_frontmatter_semantics() {
+    let root = temp_dir();
+    fs::create_dir_all(root.join("skills/folded")).expect("skill dir");
+    fs::write(
+        root.join("skills/folded/SKILL.md"),
+        "---\nname: folded\ndescription: >-\n  Folded skill\n  description\ndisable-model-invocation: true # visible to YAML as boolean true\n---\nUse it.",
+    )
+    .expect("skill");
+    fs::create_dir_all(root.join("skills/numeric")).expect("numeric dir");
+    fs::write(
+        root.join("skills/numeric/SKILL.md"),
+        "---\nname: numeric\ndescription: 123\n---\nShould not load.",
+    )
+    .expect("numeric skill");
+
+    let (skills, diagnostics) = load_skills([root.join("skills")]);
+
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].name, "folded");
+    assert_eq!(skills[0].description, "Folded skill description");
+    assert!(skills[0].disable_model_invocation);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, SkillDiagnosticCode::InvalidMetadata);
+    assert_eq!(diagnostics[0].message, "description is required");
+    assert_eq!(
+        diagnostics[0].path,
+        root.join("skills/numeric/SKILL.md").to_string_lossy()
+    );
+}
+
+#[test]
 fn loads_prompt_templates_non_recursively_from_dirs_and_files() {
     let root = temp_dir();
     fs::create_dir_all(root.join("a/nested")).expect("a");
@@ -342,6 +373,32 @@ fn loads_prompt_templates_non_recursively_from_dirs_and_files() {
 
     let (explicit, _) = load_prompt_templates([root.join("a/one.md")]);
     assert_eq!(explicit[0].name, "one");
+}
+
+#[test]
+fn load_prompt_templates_uses_yaml_frontmatter_semantics() {
+    let root = temp_dir();
+    fs::create_dir_all(root.join("prompts")).expect("prompts");
+    fs::write(
+        root.join("prompts/folded.md"),
+        "---\ndescription: >-\n  Folded template\n  description\n---\nBody",
+    )
+    .expect("folded");
+    fs::write(
+        root.join("prompts/numeric.md"),
+        "---\ndescription: 123\n---\nFirst line fallback\nBody",
+    )
+    .expect("numeric");
+
+    let (templates, diagnostics) = load_prompt_templates([root.join("prompts")]);
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(templates.len(), 2);
+    assert_eq!(templates[0].name, "folded");
+    assert_eq!(templates[0].description, "Folded template description");
+    assert_eq!(templates[1].name, "numeric");
+    assert_eq!(templates[1].description, "First line fallback");
+    assert_eq!(templates[1].content, "First line fallback\nBody");
 }
 
 #[cfg(unix)]

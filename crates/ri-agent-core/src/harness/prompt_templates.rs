@@ -3,6 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use yaml_rust::{Yaml, YamlLoader};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptTemplate {
@@ -173,15 +174,21 @@ fn parse_frontmatter(content: &str) -> Result<ParsedFrontmatter, String> {
         });
     };
     let yaml = normalized[4..end_index].trim();
-    if yaml.contains("[unterminated") {
-        return Err("invalid frontmatter".to_owned());
-    }
-    let description = yaml.lines().find_map(|line| {
-        let (key, value) = line.split_once(':')?;
-        (key.trim() == "description").then(|| value.trim().trim_matches('"').to_owned())
-    });
+    let docs = YamlLoader::load_from_str(yaml).map_err(|error| error.to_string())?;
+    let description = yaml_string_field(docs.first(), "description");
     let body = normalized[end_index + 4..].trim().to_owned();
     Ok(ParsedFrontmatter { description, body })
+}
+
+fn yaml_string_field(value: Option<&Yaml>, key: &str) -> Option<String> {
+    let Some(Yaml::Hash(mapping)) = value else {
+        return None;
+    };
+    let key = Yaml::String(key.to_owned());
+    match mapping.get(&key) {
+        Some(Yaml::String(value)) => Some(value.clone()),
+        _ => None,
+    }
 }
 
 pub fn parse_command_args(args: &str) -> Vec<String> {
