@@ -6854,7 +6854,7 @@ async fn google_stream_chunks_preserve_response_id_signatures_usage_and_tool_cal
         &output.content[1],
         AssistantContent::Text(text)
             if text.text == "Answer"
-                && text.text_signature.as_ref().and_then(Value::as_str) == Some("text-sig")
+                && text.text_signature.as_deref() == Some("text-sig")
     ));
     let AssistantContent::ToolCall(tool_call) = &output.content[2] else {
         panic!("tool call");
@@ -9939,6 +9939,29 @@ fn openai_responses_payload_skips_aborted_reasoning_only_history() {
 }
 
 #[test]
+fn text_signature_serializes_as_pi_string_and_reads_legacy_object_shape() {
+    let signature = r#"{"v":1,"id":"msg_1","phase":"commentary"}"#;
+    let content = TextContent {
+        text: "hello".to_owned(),
+        text_signature: Some(signature.to_owned()),
+    };
+
+    let serialized = serde_json::to_value(&content).expect("serialize text content");
+    assert_eq!(serialized["textSignature"], signature);
+
+    let decoded: TextContent = serde_json::from_value(json!({
+        "text": "hello",
+        "textSignature": {
+            "v": 1,
+            "id": "msg_1",
+            "phase": "commentary"
+        }
+    }))
+    .expect("decode legacy object signature");
+    assert_eq!(decoded.text_signature.as_deref(), Some(signature));
+}
+
+#[test]
 fn openai_responses_payload_omits_function_call_item_id_for_same_provider_model_handoff() {
     let target_model = get_model("openai", "gpt-5.2-codex").expect("target model");
     let reasoning_item = json!({
@@ -10236,7 +10259,10 @@ fn openai_responses_stream_maps_text_deltas_and_replays_text_signature() {
         panic!("text block");
     };
     assert_eq!(text.text, "Hello");
-    assert_eq!(text.text_signature, Some(json!({ "v": 1, "id": "msg_1" })));
+    assert_eq!(
+        text.text_signature.as_deref(),
+        Some(r#"{"v":1,"id":"msg_1"}"#)
+    );
 
     let replay_items = openai_codex_response_items_for_continuation(&model, &output);
     assert_eq!(replay_items[0]["id"], "msg_1");
@@ -10404,8 +10430,8 @@ fn openai_responses_stream_preserves_text_phase_and_refusal_content() {
     };
     assert_eq!(text.text, "No.");
     assert_eq!(
-        text.text_signature,
-        Some(json!({ "v": 1, "id": "msg_refusal", "phase": "final_answer" }))
+        text.text_signature.as_deref(),
+        Some(r#"{"v":1,"id":"msg_refusal","phase":"final_answer"}"#)
     );
 
     let replay_items = openai_codex_response_items_for_continuation(&model, &output);
@@ -10421,11 +10447,9 @@ fn openai_responses_message_conversion_preserves_text_phase_and_hashes_long_ids(
     let mut assistant = empty_assistant_for_model(&model);
     assistant.content.push(AssistantContent::Text(TextContent {
         text: "Visible commentary".to_owned(),
-        text_signature: Some(json!({
-            "v": 1,
-            "id": long_id,
-            "phase": "commentary",
-        })),
+        text_signature: Some(format!(
+            r#"{{"v":1,"id":"{long_id}","phase":"commentary"}}"#
+        )),
     }));
 
     let input = convert_openai_responses_messages(

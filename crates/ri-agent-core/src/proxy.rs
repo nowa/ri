@@ -329,7 +329,7 @@ fn process_proxy_event(
             let Some(AssistantContent::Text(text)) = partial.content.get_mut(content_index) else {
                 return Err("Received text_end for non-text content".to_owned());
             };
-            text.text_signature = content_signature.map(Value::String);
+            text.text_signature = content_signature;
             let content = text.text.clone();
             sender.push(AssistantMessageEvent::TextEnd {
                 content_index,

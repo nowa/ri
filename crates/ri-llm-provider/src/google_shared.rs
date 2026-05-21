@@ -497,11 +497,10 @@ fn process_google_text_part(
         }
         Some(GoogleActiveBlock::Text(content_index)) => {
             if let Some(AssistantContent::Text(block)) = output.content.get_mut(content_index) {
-                let existing = block.text_signature.as_ref().and_then(Value::as_str);
+                let existing = block.text_signature.as_deref();
                 block.text.push_str(text);
                 block.text_signature =
-                    retain_google_thought_signature(existing, incoming_signature)
-                        .map(Value::String);
+                    retain_google_thought_signature(existing, incoming_signature);
             }
             sender.push(AssistantMessageEvent::TextDelta {
                 content_index,
@@ -942,12 +941,7 @@ fn resolve_google_text_signature(
     is_same_provider_and_model: bool,
     text: &TextContent,
 ) -> Option<String> {
-    let signature = text
-        .text_signature
-        .as_ref()
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    resolve_google_thought_signature(is_same_provider_and_model, signature.as_deref())
+    resolve_google_thought_signature(is_same_provider_and_model, text.text_signature.as_deref())
 }
 
 fn resolve_google_thought_signature(

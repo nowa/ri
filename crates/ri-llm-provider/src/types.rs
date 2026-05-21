@@ -1,5 +1,5 @@
 use futures::future::BoxFuture;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use std::{
     collections::BTreeMap,
@@ -159,8 +159,12 @@ pub struct TextSignatureV1 {
 #[serde(rename_all = "camelCase")]
 pub struct TextContent {
     pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_signature: Option<Value>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_text_signature",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub text_signature: Option<String>,
 }
 
 impl TextContent {
@@ -170,6 +174,17 @@ impl TextContent {
             text_signature: None,
         }
     }
+}
+
+fn deserialize_optional_text_signature<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(match Option::<Value>::deserialize(deserializer)? {
+        None | Some(Value::Null) => None,
+        Some(Value::String(signature)) => Some(signature),
+        Some(signature) => Some(signature.to_string()),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

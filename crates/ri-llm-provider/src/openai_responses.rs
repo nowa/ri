@@ -1,9 +1,9 @@
 use crate::{
     AssistantContent, AssistantMessage, AssistantMessageEvent, AssistantMessageEventSender,
-    CacheRetention, Context, InputKind, Model, StopReason, TextContent, ThinkingLevel, Tool,
-    ToolCall, ToolResultContent, Usage, UsageCost, UserContent, UserContentValue,
-    github_copilot_headers::build_copilot_dynamic_headers, parse_json_with_repair, short_hash,
-    transform_messages,
+    CacheRetention, Context, InputKind, Model, StopReason, TextContent, TextSignatureV1,
+    ThinkingLevel, Tool, ToolCall, ToolResultContent, Usage, UsageCost, UserContent,
+    UserContentValue, github_copilot_headers::build_copilot_dynamic_headers,
+    parse_json_with_repair, short_hash, transform_messages,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -442,42 +442,35 @@ struct OpenAIResponsesTextSignature {
 fn openai_responses_text_signature_parts(
     text: &TextContent,
 ) -> Option<OpenAIResponsesTextSignature> {
-    match &text.text_signature {
-        Some(Value::Object(signature)) => {
-            let valid_version = signature.get("v").and_then(Value::as_u64) == Some(1);
-            if valid_version {
-                signature.get("id").and_then(Value::as_str).map(|id| {
-                    let phase = signature
-                        .get("phase")
-                        .and_then(Value::as_str)
-                        .filter(|phase| *phase == "commentary" || *phase == "final_answer")
-                        .map(ToOwned::to_owned);
-                    OpenAIResponsesTextSignature {
-                        id: id.to_owned(),
-                        phase,
-                    }
-                })
-            } else {
-                None
-            }
-        }
-        Some(Value::String(id)) => Some(OpenAIResponsesTextSignature {
-            id: id.clone(),
-            phase: None,
-        }),
-        _ => None,
+    let signature = text.text_signature.as_deref()?;
+    if signature.starts_with('{')
+        && let Ok(parsed) = serde_json::from_str::<TextSignatureV1>(signature)
+        && parsed.v == 1
+    {
+        let phase = parsed
+            .phase
+            .filter(|phase| phase == "commentary" || phase == "final_answer");
+        return Some(OpenAIResponsesTextSignature {
+            id: parsed.id,
+            phase,
+        });
     }
+    Some(OpenAIResponsesTextSignature {
+        id: signature.to_owned(),
+        phase: None,
+    })
 }
 
-fn openai_responses_text_signature(id: Option<&str>, phase: Option<&str>) -> Option<Value> {
+fn openai_responses_text_signature(id: Option<&str>, phase: Option<&str>) -> Option<String> {
     id.map(|id| {
-        let mut signature = json!({ "v": 1, "id": id });
-        if let Some(phase) =
-            phase.filter(|phase| *phase == "commentary" || *phase == "final_answer")
-        {
-            signature["phase"] = Value::String(phase.to_owned());
-        }
-        signature
+        serde_json::to_string(&TextSignatureV1 {
+            v: 1,
+            id: id.to_owned(),
+            phase: phase
+                .filter(|phase| *phase == "commentary" || *phase == "final_answer")
+                .map(ToOwned::to_owned),
+        })
+        .expect("serialize text signature")
     })
 }
 

@@ -78,10 +78,7 @@ async fn stream_proxy_posts_serializable_options_and_rebuilds_partial_events() {
     match &message.content[0] {
         AssistantContent::Text(text) => {
             assert_eq!(text.text, "Hello");
-            assert_eq!(
-                text.text_signature.as_ref().and_then(Value::as_str),
-                Some("sig_text")
-            );
+            assert_eq!(text.text_signature.as_deref(), Some("sig_text"));
         }
         other => panic!("expected text, got {other:?}"),
     }
