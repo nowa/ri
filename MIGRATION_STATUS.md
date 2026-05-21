@@ -378,10 +378,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1148 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1149 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 947 tests: 1 library test, 315 `provider_core` tests, and
-  631 `provider_live` tests. This is 226 above the 721 direct simple source
+- `ri-llm-provider`: 948 tests: 1 library test, 316 `provider_core` tests, and
+  631 `provider_live` tests. This is 227 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -416,7 +416,7 @@ Current Rust tests: 1148 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1148-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1149-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -453,12 +453,15 @@ This migration is not complete.
   and forward OpenRouter plus Vercel AI Gateway routing preferences only for
   matching gateway base URLs. Anthropic-format cache-control markers now carry
   Pi's `ttl: "1h"` on long retention when supported while still omitting TTL
-  when long cache retention is disabled:
+  when long cache retention is disabled, and standard assistant tool-call turns
+  now preserve Pi's `content: null` while compatibility providers that require
+  assistant bridge text continue to use an empty string:
+  `cargo test -p ri-llm-provider --test provider_core openai_completions_messages_keep_null_content_for_standard_tool_call_turns -- --exact`,
   `cargo test -p ri-llm-provider --test provider_core openai_completions_system_prompt_uses_developer_role_for_standard_reasoning_models -- --exact`,
   `cargo test -p ri-llm-provider --test provider_core openai_completions_ -- --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
   `cargo test --workspace -- --test-threads=1`, `cargo fmt --check`,
-  `git diff --check`, and `cargo test --workspace -- --list` (1148 tests
+  `git diff --check`, and `cargo test --workspace -- --list` (1149 tests
   enumerated) passed.
 - Previous local verification on 2026-05-21 after tightening
   `providers/openai-responses.ts` payload/header truthiness parity: zero
@@ -1091,6 +1094,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1148 Rust tests cover the
+- Test parity is not certified by raw count alone: 1149 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

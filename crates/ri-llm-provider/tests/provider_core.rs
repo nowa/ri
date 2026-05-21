@@ -11987,6 +11987,46 @@ fn openai_completions_chunk_metadata_sets_response_model_without_changing_reques
 }
 
 #[test]
+fn openai_completions_messages_keep_null_content_for_standard_tool_call_turns() {
+    let mut model = get_model("openai", "gpt-4o-mini").expect("openai model");
+    model.api = "openai-completions".to_owned();
+    let context = |model: &Model| Context {
+        messages: vec![
+            Message::User(UserMessage::text("Read README.md")),
+            Message::Assistant(AssistantMessage {
+                content: vec![AssistantContent::ToolCall(ToolCall {
+                    id: "call_1".to_owned(),
+                    name: "read".to_owned(),
+                    arguments: object(json!({ "path": "README.md" })),
+                    thought_signature: None,
+                })],
+                api: model.api.clone(),
+                provider: model.provider.clone(),
+                model: model.id.clone(),
+                response_model: None,
+                response_id: None,
+                diagnostics: Vec::new(),
+                usage: Usage::zero(),
+                stop_reason: StopReason::ToolUse,
+                error_message: None,
+                timestamp: 2,
+            }),
+        ],
+        ..Default::default()
+    };
+
+    let messages = convert_openai_completions_messages(&model, &context(&model));
+    assert!(messages[1]["content"].is_null());
+    assert_eq!(messages[1]["tool_calls"][0]["id"], "call_1");
+
+    let mut bridge_model = model.clone();
+    bridge_model.compat = Some(json!({ "requiresAssistantAfterToolResult": true }));
+    let messages = convert_openai_completions_messages(&bridge_model, &context(&bridge_model));
+    assert_eq!(messages[1]["content"], "");
+    assert_eq!(messages[1]["tool_calls"][0]["id"], "call_1");
+}
+
+#[test]
 fn openai_completions_messages_batch_tool_result_images_after_tool_results() {
     let mut model = get_model("openai", "gpt-4o-mini").expect("model");
     model.api = "openai-completions".to_owned();

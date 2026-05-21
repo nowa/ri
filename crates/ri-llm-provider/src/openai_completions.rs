@@ -192,20 +192,25 @@ fn convert_openai_completions_messages_with_cache(
                         _ => {}
                     }
                 }
+                let content = if requires_thinking_as_text(model) && !thinking_blocks.is_empty() {
+                    let thinking_text = thinking_blocks
+                        .iter()
+                        .map(|block| block.thinking.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    let mut parts = vec![text_part(&thinking_text, None)];
+                    parts.extend(assistant_text_parts);
+                    Value::Array(parts)
+                } else if !assistant_text.is_empty() {
+                    Value::String(assistant_text)
+                } else if requires_assistant_after_tool_result(model) {
+                    Value::String(String::new())
+                } else {
+                    Value::Null
+                };
                 let mut message = json!({
                     "role": "assistant",
-                    "content": if requires_thinking_as_text(model) && !thinking_blocks.is_empty() {
-                        let thinking_text = thinking_blocks
-                            .iter()
-                            .map(|block| block.thinking.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n\n");
-                        let mut parts = vec![text_part(&thinking_text, None)];
-                        parts.extend(assistant_text_parts);
-                        Value::Array(parts)
-                    } else {
-                        Value::String(assistant_text)
-                    },
+                    "content": content,
                 });
                 if !requires_thinking_as_text(model) && !thinking_blocks.is_empty() {
                     if let Some(signature) = thinking_blocks
@@ -226,9 +231,6 @@ fn convert_openai_completions_messages_with_cache(
                                 .join("\n"),
                         );
                     }
-                }
-                if requires_assistant_after_tool_result(model) && message["content"] == "" {
-                    message["content"] = Value::String(String::new());
                 }
                 if !tool_calls.is_empty() {
                     message["tool_calls"] = Value::Array(tool_calls);
