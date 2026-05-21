@@ -2156,6 +2156,21 @@ fn oauth_pkce_generation_matches_source_shape_and_challenge_derivation() {
     assert_eq!(pkce.challenge, expected_challenge);
 }
 
+#[test]
+fn oauth_callback_pages_match_source_shell_and_escape_content() {
+    let success = oauth_success_html("Done <now>");
+    assert!(success.contains(r#"<div class="logo"><svg"#));
+    assert!(success.contains("--page-bg: #09090b"));
+    assert!(success.contains("<title>Authentication successful</title>"));
+    assert!(success.contains("Done &lt;now&gt;"));
+    assert!(!success.contains(r#"<div class="details">"#));
+
+    let error = oauth_error_html("Bad <message>", Some("token & state"));
+    assert!(error.contains("<title>Authentication failed</title>"));
+    assert!(error.contains("Bad &lt;message&gt;"));
+    assert!(error.contains(r#"<div class="details">token &amp; state</div>"#));
+}
+
 fn is_base64url_no_pad_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'
 }

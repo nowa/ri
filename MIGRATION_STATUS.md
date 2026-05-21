@@ -136,11 +136,11 @@ counterparts that pass.
     restoration, and built-in provider wiring integration.
   - Anthropic OAuth helpers for PKCE generation, authorization URL
     construction, local callback server/state validation with pi-style
-    success/error HTML pages and escaped details, manual redirect input login
-    flow with source-style mixed-case callback URL and `code#state` parsing,
-    token/refresh JSON requests, localhost callback preservation, token response
-    parsing, and proxy-aware async authorization-code/refresh token exchange
-    primitives.
+    success/error HTML pages, including the source logo/CSS shell and escaped
+    content/details, manual redirect input login flow with source-style
+    mixed-case callback URL and `code#state` parsing, token/refresh JSON
+    requests, localhost callback preservation, token response parsing, and
+    proxy-aware async authorization-code/refresh token exchange primitives.
   - OpenAI Codex OAuth helpers for authorization URL construction,
     local callback server/state validation, callback-driven login flow, shared
     manual redirect input parsing parity, manual-code fallback when the local
@@ -667,6 +667,13 @@ This migration is not complete.
   `cargo fmt`,
   `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth -- --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core pi_ai_cli -- --test-threads=1`,
+  `cargo fmt --check`, and `git diff --check` passed.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `utils/oauth/oauth-page.ts` callback HTML shell: Rust OAuth success/error
+  pages now include the source logo/CSS layout, escape message/details content,
+  and omit empty details blocks:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core oauth_ -- --test-threads=1`,
   `cargo fmt --check`, and `git diff --check` passed.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
