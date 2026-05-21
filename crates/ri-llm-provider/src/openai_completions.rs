@@ -86,6 +86,7 @@ pub fn build_openai_completions_payload(
     if should_enable_zai_tool_stream(model) && !context.tools.is_empty() {
         payload["tool_stream"] = Value::Bool(true);
     }
+    apply_provider_routing_options(&mut payload, model);
 
     payload
 }
@@ -1196,6 +1197,36 @@ fn thinking_format(model: &Model) -> &str {
         "openrouter"
     } else {
         "openai"
+    }
+}
+
+fn apply_provider_routing_options(payload: &mut Value, model: &Model) {
+    let Some(compat) = model.compat.as_ref() else {
+        return;
+    };
+
+    if model.base_url.contains("openrouter.ai")
+        && let Some(routing) = compat.get("openRouterRouting")
+        && routing.is_object()
+    {
+        payload["provider"] = routing.clone();
+    }
+
+    if model.base_url.contains("ai-gateway.vercel.sh")
+        && let Some(routing) = compat
+            .get("vercelGatewayRouting")
+            .and_then(Value::as_object)
+    {
+        let mut gateway_options = Map::new();
+        if let Some(only) = routing.get("only").filter(|value| !value.is_null()) {
+            gateway_options.insert("only".to_owned(), only.clone());
+        }
+        if let Some(order) = routing.get("order").filter(|value| !value.is_null()) {
+            gateway_options.insert("order".to_owned(), order.clone());
+        }
+        if !gateway_options.is_empty() {
+            payload["providerOptions"] = json!({ "gateway": gateway_options });
+        }
     }
 }
 

@@ -10706,6 +10706,89 @@ fn openai_completions_detects_openai_compatible_payload_defaults_from_base_url()
 }
 
 #[test]
+fn openai_completions_payload_forwards_provider_routing_for_matching_gateways() {
+    let context = user_context("Hi");
+    let openrouter_routing = json!({
+        "only": ["anthropic"],
+        "allow_fallbacks": false,
+        "sort": { "by": "latency", "partition": "none" },
+    });
+    let mut openrouter_model = Model {
+        id: "custom-openrouter".to_owned(),
+        name: "Custom OpenRouter".to_owned(),
+        api: "openai-completions".to_owned(),
+        provider: "openrouter".to_owned(),
+        base_url: "https://openrouter.ai/api/v1".to_owned(),
+        reasoning: false,
+        thinking_level_map: Default::default(),
+        input: vec![InputKind::Text],
+        cost: ModelCost::default(),
+        context_window: 128_000,
+        max_tokens: 32_000,
+        headers: Default::default(),
+        compat: Some(json!({ "openRouterRouting": openrouter_routing.clone() })),
+    };
+
+    let payload = build_openai_completions_payload(
+        &openrouter_model,
+        &context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert_eq!(payload["provider"], openrouter_routing);
+
+    openrouter_model.base_url = "https://proxy.example.com/v1".to_owned();
+    let payload = build_openai_completions_payload(
+        &openrouter_model,
+        &context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert!(payload.get("provider").is_none());
+
+    let mut vercel_model = Model {
+        id: "custom-vercel".to_owned(),
+        name: "Custom Vercel".to_owned(),
+        api: "openai-completions".to_owned(),
+        provider: "vercel-ai-gateway".to_owned(),
+        base_url: "https://ai-gateway.vercel.sh/v1".to_owned(),
+        reasoning: false,
+        thinking_level_map: Default::default(),
+        input: vec![InputKind::Text],
+        cost: ModelCost::default(),
+        context_window: 128_000,
+        max_tokens: 32_000,
+        headers: Default::default(),
+        compat: Some(json!({
+            "vercelGatewayRouting": {
+                "only": ["anthropic"],
+                "order": ["anthropic", "openai"],
+            },
+        })),
+    };
+    let payload = build_openai_completions_payload(
+        &vercel_model,
+        &context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert_eq!(
+        payload["providerOptions"],
+        json!({
+            "gateway": {
+                "only": ["anthropic"],
+                "order": ["anthropic", "openai"],
+            },
+        })
+    );
+
+    vercel_model.compat = Some(json!({ "vercelGatewayRouting": {} }));
+    let payload = build_openai_completions_payload(
+        &vercel_model,
+        &context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert!(payload.get("providerOptions").is_none());
+}
+
+#[test]
 fn openai_completions_payload_maps_detected_and_explicit_thinking_formats() {
     let context = Context {
         messages: vec![Message::User(UserMessage::text("Hi"))],
