@@ -30,6 +30,9 @@ counterparts that pass.
 
 - `ri-llm-provider`
   - Core message/content/model/event types.
+  - `AssistantMessageEventStream` source parity for terminal-event result
+    settlement, ignored post-terminal pushes, and explicit `end(result)`
+    closure without a terminal event.
   - API provider registry.
   - `stream`, `complete`, `stream_simple`, `complete_simple`.
   - Built-in model registry seed and thinking-level helpers.
@@ -255,6 +258,9 @@ counterparts that pass.
     hooks for LLM request context. Prepare-next-turn hooks can
     replace the next-turn context/model/thinking state after `turn_end`, and
     should-stop-after-turn hooks can stop before the next provider request.
+    Provider streams that close via `end(result)` without an explicit
+    `done`/`error` terminal event use the final stream result before ending the
+    assistant message, matching `streamAssistantResponse`.
     Terminal assistant responses with `error` or `aborted` stop immediately
     after `turn_end`, without running next-turn hooks or polling
     steering/follow-up queues, matching `agent-loop.ts`.
@@ -342,16 +348,16 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1120 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1123 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 926 tests: 1 library test, 294 `provider_core` tests, and
-  631 `provider_live` tests. This is 205 above the 721 direct simple source
+- `ri-llm-provider`: 928 tests: 1 library test, 296 `provider_core` tests, and
+  631 `provider_live` tests. This is 207 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 194 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 195 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 44 above the 150 direct simple
+  `resources`, and `session_storage`. This is 45 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -380,7 +386,7 @@ Current Rust tests: 1120 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1120-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1123-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -403,7 +409,21 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning Pi low-level
+- Latest local verification on 2026-05-21 after aligning Pi
+  `utils/event-stream.ts` and low-level `streamAssistantResponse` EOF result
+  behavior from `agent-loop.ts`: Rust event streams now ignore pushes after a
+  terminal `done`/`error` event, close iteration on `end(result)`, and the
+  low-level agent loop uses the stream result when a provider closes without an
+  explicit terminal event:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core assistant_event_stream_ignores_pushes_after_terminal_event -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core assistant_event_stream_end_closes_without_terminal_event -- --exact`,
+  `cargo test -p ri-agent-core --test agent_core agent_loop_uses_stream_result_when_provider_ends_without_terminal_event -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test -p ri-agent-core -- --test-threads=1`, and
+  `cargo test --workspace -- --list` passed; the list command enumerated 1123
+  tests.
+- Previous local verification on 2026-05-21 after aligning Pi low-level
   `afterToolCall` field-level patch semantics from `agent-loop.ts`: Rust hook
   results can now patch only `content`, `details`, `terminate`, or `isError`
   while preserving omitted fields, so a Pi-style `{ terminate: true }` result
@@ -702,6 +722,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1120 Rust tests cover the
+- Test parity is not certified by raw count alone: 1123 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

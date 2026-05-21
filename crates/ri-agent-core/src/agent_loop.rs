@@ -507,9 +507,9 @@ async fn run_one_turn(
             .map_err(|error| error.to_string())?,
     };
 
-    let mut stream = Box::pin(stream);
     let mut final_message: Option<AssistantMessage> = None;
     let mut emitted_message_start = false;
+    let mut stream = stream;
     while let Some(event) = stream.next().await {
         if let Some(message) = current_partial_message(&event) {
             match &event {
@@ -543,8 +543,10 @@ async fn run_one_turn(
         }
     }
 
-    let assistant =
-        final_message.ok_or_else(|| "Provider stream ended without final message".to_owned())?;
+    let assistant = match final_message {
+        Some(message) => message,
+        None => stream.try_result().await?,
+    };
     let assistant_message = AgentMessage::Assistant(assistant.clone());
     let mut new_messages = Vec::new();
     if !emitted_message_start {

@@ -199,6 +199,23 @@ impl AgentStreamProvider for RecordingOptionsStreamProvider {
     }
 }
 
+struct EndOnlyStreamProvider {
+    response: AssistantMessage,
+}
+
+impl AgentStreamProvider for EndOnlyStreamProvider {
+    fn stream(
+        &self,
+        _model: &Model,
+        _context: Context,
+        _options: SimpleStreamOptions,
+    ) -> Result<AssistantMessageEventStream, String> {
+        let (sender, stream) = assistant_message_event_stream();
+        sender.end(self.response.clone());
+        Ok(stream)
+    }
+}
+
 struct ConditionalTerminateExecutor;
 
 #[async_trait]
@@ -847,6 +864,43 @@ async fn agent_loop_emits_lifecycle_events_and_messages() {
     assert!(event_names.contains(&"turn_end"));
     assert_eq!(event_names.last(), Some(&"agent_end"));
     registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_loop_uses_stream_result_when_provider_ends_without_terminal_event() {
+    let model = Model::faux("end-only-api", "end-only-provider", "end-only-model");
+    let mut config = AgentLoopConfig::new(model.clone());
+    config.stream_provider = Some(Arc::new(EndOnlyStreamProvider {
+        response: faux_assistant_message("final from result", Default::default()),
+    }));
+
+    let (messages, events) = agent_loop_prompt(context_with_model(&model), "Hello", config)
+        .await
+        .expect("loop");
+
+    assert_eq!(
+        messages.iter().map(role_of).collect::<Vec<_>>(),
+        vec!["user", "assistant"]
+    );
+    assert_eq!(text_of(&messages[1]), Some("final from result"));
+    assert!(matches!(
+        &messages[1],
+        AgentMessage::Assistant(assistant)
+            if assistant.stop_reason == StopReason::Stop && assistant.error_message.is_none()
+    ));
+    assert_eq!(
+        events.iter().map(event_name).collect::<Vec<_>>(),
+        vec![
+            "agent_start",
+            "turn_start",
+            "message_start",
+            "message_end",
+            "message_start",
+            "message_end",
+            "turn_end",
+            "agent_end",
+        ]
+    );
 }
 
 #[tokio::test]

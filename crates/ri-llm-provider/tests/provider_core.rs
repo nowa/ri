@@ -267,6 +267,44 @@ async fn collect_events(mut stream: AssistantMessageEventStream) -> Vec<Assistan
     events
 }
 
+#[tokio::test]
+async fn assistant_event_stream_ignores_pushes_after_terminal_event() {
+    let (sender, stream) = assistant_message_event_stream();
+    let done = empty_assistant(StopReason::Stop);
+    let late = error_assistant("late error");
+
+    sender.push(AssistantMessageEvent::Done {
+        reason: StopReason::Stop,
+        message: done.clone(),
+    });
+    sender.push(AssistantMessageEvent::Error {
+        reason: StopReason::Error,
+        error: late,
+    });
+    drop(sender);
+
+    let events = tokio::time::timeout(Duration::from_millis(50), collect_events(stream))
+        .await
+        .expect("stream should close after terminal event");
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        &events[0],
+        AssistantMessageEvent::Done { message, .. } if message == &done
+    ));
+}
+
+#[tokio::test]
+async fn assistant_event_stream_end_closes_without_terminal_event() {
+    let (sender, mut stream) = assistant_message_event_stream();
+
+    sender.end(empty_assistant(StopReason::Stop));
+
+    let next = tokio::time::timeout(Duration::from_millis(50), stream.next())
+        .await
+        .expect("stream should close when sender is ended");
+    assert!(next.is_none());
+}
+
 fn empty_assistant_for_model(model: &Model) -> AssistantMessage {
     AssistantMessage {
         content: Vec::new(),
