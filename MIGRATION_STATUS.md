@@ -438,6 +438,18 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after tightening
+  `utils/validation.ts` plain JSON-schema primitive coercion parity: integer
+  schemas now accept JS `Number()`-style integer strings such as `"42.0"` and
+  `"1e3"`, integer-like JSON numbers are normalized, and numeric `1.0`/`0.0`
+  match the source boolean/null coercion behavior:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core validation_matches_ajv_style_plain_schema_coercions -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core validation_ -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`, and
+  `cargo test --workspace -- --list` (1136 tests enumerated) passed.
+- Previous local verification on 2026-05-21 after tightening
   `utils/json-parse.ts` `parseStreamingJson` parity: incomplete trailing
   object fields/values and array elements now preserve already-complete
   prefixes like the source `partial-json` fallback instead of dropping the

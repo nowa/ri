@@ -192,7 +192,10 @@ fn matches_schema_type(value: &Value, schema_type: &Value) -> bool {
 fn matches_one_type(value: &Value, schema_type: &str) -> bool {
     match schema_type {
         "number" => value.as_f64().is_some(),
-        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "integer" => value
+            .as_number()
+            .map(json_number_is_integer)
+            .unwrap_or(false),
         "boolean" => value.as_bool().is_some(),
         "string" => value.as_str().is_some(),
         "null" => value.is_null(),
@@ -420,6 +423,10 @@ fn coerce_with_schema(value: &mut Value, schema: &Value) {
         }
     }
 
+    if schema_allows_type(schema_type, "integer") {
+        normalize_integer_value(value);
+    }
+
     if schema_allows_type(schema_type, "object") {
         if let Some(object) = value.as_object_mut() {
             coerce_object(object, schema);
@@ -506,7 +513,7 @@ fn coerce_primitive(value: &mut Value, schema_type: &str) -> bool {
         },
         "integer" => match value {
             Value::Null => Some(Value::from(0)),
-            Value::String(text) => text.trim().parse::<i64>().ok().map(Value::from),
+            Value::String(text) => coerce_integer_string(text),
             Value::Bool(flag) => Some(Value::from(if *flag { 1 } else { 0 })),
             _ => None,
         },
@@ -514,19 +521,19 @@ fn coerce_primitive(value: &mut Value, schema_type: &str) -> bool {
             Value::Null => Some(Value::Bool(false)),
             Value::String(text) if text == "true" => Some(Value::Bool(true)),
             Value::String(text) if text == "false" => Some(Value::Bool(false)),
-            Value::Number(number) if number.as_i64() == Some(1) => Some(Value::Bool(true)),
-            Value::Number(number) if number.as_i64() == Some(0) => Some(Value::Bool(false)),
+            Value::Number(number) if json_number_is_one(number) => Some(Value::Bool(true)),
+            Value::Number(number) if json_number_is_zero(number) => Some(Value::Bool(false)),
             _ => None,
         },
         "string" => match value {
             Value::Null => Some(Value::String(String::new())),
             Value::Bool(flag) => Some(Value::String(flag.to_string())),
-            Value::Number(number) => Some(Value::String(number.to_string())),
+            Value::Number(number) => Some(Value::String(number_to_js_like_string(number))),
             _ => None,
         },
         "null" => match value {
             Value::String(text) if text.is_empty() => Some(Value::Null),
-            Value::Number(number) if number.as_i64() == Some(0) => Some(Value::Null),
+            Value::Number(number) if json_number_is_zero(number) => Some(Value::Null),
             Value::Bool(false) => Some(Value::Null),
             _ => None,
         },
@@ -539,4 +546,76 @@ fn coerce_primitive(value: &mut Value, schema_type: &str) -> bool {
     } else {
         false
     }
+}
+
+fn coerce_integer_string(text: &str) -> Option<Value> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parsed = trimmed.parse::<f64>().ok()?;
+    integer_value_from_f64(parsed)
+}
+
+fn normalize_integer_value(value: &mut Value) {
+    let Some(number) = value.as_number() else {
+        return;
+    };
+    if number.as_i64().is_some() || number.as_u64().is_some() {
+        return;
+    }
+    let Some(parsed) = number.as_f64() else {
+        return;
+    };
+    if let Some(next) = integer_value_from_f64(parsed) {
+        *value = next;
+    }
+}
+
+fn integer_value_from_f64(value: f64) -> Option<Value> {
+    if !value.is_finite() || value.fract() != 0.0 {
+        return None;
+    }
+    if value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+        return Some(Value::from(value as i64));
+    }
+    if value >= 0.0 && value <= u64::MAX as f64 {
+        return Some(Value::from(value as u64));
+    }
+    serde_json::Number::from_f64(value).map(Value::Number)
+}
+
+fn json_number_is_integer(number: &serde_json::Number) -> bool {
+    number.as_i64().is_some()
+        || number.as_u64().is_some()
+        || number
+            .as_f64()
+            .map(|value| value.is_finite() && value.fract() == 0.0)
+            .unwrap_or(false)
+}
+
+fn json_number_is_one(number: &serde_json::Number) -> bool {
+    number.as_f64().map(|value| value == 1.0).unwrap_or(false)
+}
+
+fn json_number_is_zero(number: &serde_json::Number) -> bool {
+    number.as_f64().map(|value| value == 0.0).unwrap_or(false)
+}
+
+fn number_to_js_like_string(number: &serde_json::Number) -> String {
+    if let Some(value) = number.as_i64() {
+        return value.to_string();
+    }
+    if let Some(value) = number.as_u64() {
+        return value.to_string();
+    }
+    if let Some(value) = number.as_f64() {
+        if value == 0.0 {
+            return "0".to_owned();
+        }
+        if value.is_finite() && value.fract() == 0.0 && value.abs() < 1e21 {
+            return format!("{value:.0}");
+        }
+    }
+    number.to_string()
 }

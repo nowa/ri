@@ -85,8 +85,9 @@ credentials, local model services where applicable, and manual OAuth flows.
 - Conservative parsing for common incomplete streamed tool-argument JSON,
   including recovery of completed object/array prefixes when the trailing
   field or value is still incomplete.
-- Tool-call argument validation with pi-style JSON-schema coercion for plain
-  serialized schemas and TypeBox-like object/array/combinator constraints.
+- Tool-call argument validation with pi-style JSON-schema coercion, including
+  JS-number-like primitive coercions for plain serialized schemas and
+  TypeBox-like object/array/combinator constraints.
 - Reasoning levels including `off`, `minimal`, `low`, `medium`, `high`, and
   `xhigh`, with provider-specific wire mappings.
 - Pi-style simple stream defaults for output token limits and budget-based
