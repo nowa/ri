@@ -48,7 +48,7 @@ pub fn build_openai_responses_payload(
     {
         payload["prompt_cache_retention"] = Value::String("24h".to_owned());
     }
-    if let Some(max_tokens) = options.max_tokens {
+    if let Some(max_tokens) = options.max_tokens.filter(|value| *value > 0) {
         payload["max_output_tokens"] = Value::Number(max_tokens.into());
     }
     if let Some(temperature) = options.temperature {
@@ -61,14 +61,17 @@ pub fn build_openai_responses_payload(
         payload["service_tier"] = Value::String(service_tier);
     }
     if model.reasoning {
-        if options.reasoning_effort.is_some() || options.reasoning_summary.is_some() {
+        let reasoning_summary = options
+            .reasoning_summary
+            .filter(|summary| !summary.is_empty());
+        if options.reasoning_effort.is_some() || reasoning_summary.is_some() {
             let effort = options
                 .reasoning_effort
                 .map(|level| openai_responses_reasoning_effort(model, level))
                 .unwrap_or_else(|| "medium".to_owned());
             payload["reasoning"] = json!({
                 "effort": effort,
-                "summary": options.reasoning_summary.unwrap_or_else(|| "auto".to_owned()),
+                "summary": reasoning_summary.unwrap_or_else(|| "auto".to_owned()),
             });
             payload["include"] = json!(["reasoning.encrypted_content"]);
         } else if model.provider != "github-copilot" {
@@ -144,7 +147,7 @@ pub fn build_openai_responses_default_headers_with_context(
     {
         headers.extend(build_copilot_dynamic_headers(context));
     }
-    if let Some(session_id) = session_id
+    if let Some(session_id) = session_id.filter(|value| !value.is_empty())
         && cache_retention != CacheRetention::None
     {
         if send_openai_responses_session_id_header(model) {

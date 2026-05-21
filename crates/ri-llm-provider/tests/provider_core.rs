@@ -9100,6 +9100,15 @@ fn openai_responses_default_headers_apply_session_affinity_and_overrides() {
 
     let headers = build_openai_responses_default_headers(
         &model,
+        Some(""),
+        CacheRetention::Long,
+        &BTreeMap::new(),
+    );
+    assert!(headers.get("session_id").is_none());
+    assert!(headers.get("x-client-request-id").is_none());
+
+    let headers = build_openai_responses_default_headers(
+        &model,
         Some("session-responses"),
         CacheRetention::Long,
         &BTreeMap::from([
@@ -9254,6 +9263,28 @@ fn openai_responses_payload_maps_explicit_reasoning_and_includes_encrypted_conte
     assert_eq!(
         payload["reasoning"],
         json!({ "effort": "xhigh", "summary": "detailed" })
+    );
+    assert_eq!(payload["include"], json!(["reasoning.encrypted_content"]));
+}
+
+#[test]
+fn openai_responses_payload_omits_zero_max_tokens_and_defaults_empty_reasoning_summary() {
+    let model = get_model("openai", "gpt-5.5").expect("model");
+    let payload = build_openai_responses_payload(
+        &model,
+        &user_context("hi"),
+        OpenAIResponsesPayloadOptions {
+            max_tokens: Some(0),
+            reasoning_effort: Some(ThinkingLevel::High),
+            reasoning_summary: Some(String::new()),
+            ..Default::default()
+        },
+    );
+
+    assert!(payload.get("max_output_tokens").is_none());
+    assert_eq!(
+        payload["reasoning"],
+        json!({ "effort": "high", "summary": "auto" })
     );
     assert_eq!(payload["include"], json!(["reasoning.encrypted_content"]));
 }
