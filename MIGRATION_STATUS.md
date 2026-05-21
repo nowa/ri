@@ -59,6 +59,8 @@ counterparts that pass.
     Thinking model slice, Hugging Face generated-catalog metadata parity for the
     source-tested Kimi K2.5 model, Together generated-catalog metadata parity
     for the current source-tested Kimi/GPT OSS/DeepSeek/MiniMax model slice,
+    Vercel AI Gateway generated-catalog metadata parity for the current
+    source-tested Google Gemini, Claude Opus, and GPT Codex Max model slice,
     Zai generated-catalog metadata parity for the current GLM coding model
     slice, Groq generated-catalog metadata parity for the current DeepSeek,
     Gemma, Compound, Llama, Mistral, Kimi, GPT OSS, and Qwen model slice,
@@ -935,6 +937,18 @@ This migration is not complete.
   `cargo fmt --check`, `git diff --check`, and
   `cargo test --workspace -- --list` passed; the list command enumerated 1201
   tests.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` / `stream.test.ts` metadata for the source-tested
+  Vercel AI Gateway Google Gemini 2.5 Flash, Claude Opus 4.5, and GPT 5.1
+  Codex Max models: Rust now keeps all three on the Anthropic Messages gateway
+  route while preserving the source text+image input shape, reasoning flag,
+  cost table, context window, and max output tokens:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core openai_compatible_provider_base_urls_match_provider_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed. This extends existing provider
+  metadata behavior coverage, so the enumerated Rust test count remains 1201.
 - Latest local verification on 2026-05-22 after aligning Pi
   `models.generated.ts` / `together-models.test.ts` metadata for the
   source-tested Together GPT OSS, DeepSeek V4 Pro, and MiniMax M2.7 models:

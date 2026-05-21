@@ -710,6 +710,9 @@ fn apply_known_model_overrides(model: &mut Model) {
     }
 
     if model.provider == "vercel-ai-gateway" {
+        if apply_vercel_ai_gateway_generated_metadata(model) {
+            return;
+        }
         model.reasoning = true;
         ensure_image_input(model);
     }
@@ -1890,6 +1893,58 @@ fn apply_minimax_generated_metadata(model: &mut Model) -> bool {
     model.cost = cost;
     model.context_window = 204_800;
     model.max_tokens = 131_072;
+    true
+}
+
+fn apply_vercel_ai_gateway_generated_metadata(model: &mut Model) -> bool {
+    let Some((cost, context_window, max_tokens)) = (match model.id.as_str() {
+        "google/gemini-2.5-flash" => Some((
+            ModelCost {
+                input: 0.3,
+                output: 2.5,
+                cache_read: 0.03,
+                cache_write: 0.0,
+            },
+            1_000_000,
+            65_536,
+        )),
+        "anthropic/claude-opus-4.5" => Some((
+            ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+            200_000,
+            64_000,
+        )),
+        "openai/gpt-5.1-codex-max" => Some((
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+            400_000,
+            128_000,
+        )),
+        _ => None,
+    }) else {
+        return false;
+    };
+
+    model.api = "anthropic-messages".to_owned();
+    model.base_url = base_url_for_provider("vercel-ai-gateway").to_owned();
+    model.reasoning = true;
+    model.thinking_level_map.clear();
+    model.input = vec![
+        crate::types::InputKind::Text,
+        crate::types::InputKind::Image,
+    ];
+    model.cost = cost;
+    model.context_window = context_window;
+    model.max_tokens = max_tokens;
+    model.compat = None;
     true
 }
 

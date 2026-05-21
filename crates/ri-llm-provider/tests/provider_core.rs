@@ -4476,6 +4476,18 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
             "https://ai-gateway.vercel.sh",
         ),
         (
+            "vercel-ai-gateway",
+            "anthropic/claude-opus-4.5",
+            "anthropic-messages",
+            "https://ai-gateway.vercel.sh",
+        ),
+        (
+            "vercel-ai-gateway",
+            "openai/gpt-5.1-codex-max",
+            "anthropic-messages",
+            "https://ai-gateway.vercel.sh",
+        ),
+        (
             "xiaomi",
             "mimo-v2.5-pro",
             "openai-completions",
@@ -4510,6 +4522,55 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
             model.base_url, "https://example.invalid",
             "{provider}/{model_id} should have a live provider endpoint"
         );
+    }
+
+    let vercel_models = [
+        (
+            "google/gemini-2.5-flash",
+            ModelCost {
+                input: 0.3,
+                output: 2.5,
+                cache_read: 0.03,
+                cache_write: 0.0,
+            },
+            1_000_000,
+            65_536,
+        ),
+        (
+            "anthropic/claude-opus-4.5",
+            ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+            200_000,
+            64_000,
+        ),
+        (
+            "openai/gpt-5.1-codex-max",
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+            400_000,
+            128_000,
+        ),
+    ];
+    for (model_id, cost, context_window, max_tokens) in vercel_models {
+        let vercel = get_model("vercel-ai-gateway", model_id).expect(model_id);
+        assert!(vercel.reasoning, "{model_id}");
+        assert_eq!(
+            vercel.input,
+            vec![InputKind::Text, InputKind::Image],
+            "{model_id}"
+        );
+        assert_eq!(vercel.cost, cost, "{model_id}");
+        assert_eq!(vercel.context_window, context_window, "{model_id}");
+        assert_eq!(vercel.max_tokens, max_tokens, "{model_id}");
+        assert_eq!(vercel.compat, None, "{model_id}");
     }
 
     let huggingface_kimi =
