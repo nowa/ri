@@ -212,6 +212,21 @@ pub async fn start_oauth_callback_server(
     })
 }
 
+pub fn noop_oauth_callback_server(
+    redirect_uri: String,
+    local_addr: SocketAddr,
+) -> OAuthCallbackServer {
+    let (callback_tx, callback_rx) = oneshot::channel::<Option<OAuthCallback>>();
+    let _ = callback_tx.send(None);
+    OAuthCallbackServer {
+        redirect_uri,
+        local_addr,
+        shutdown: None,
+        callback: callback_rx,
+        task: tokio::spawn(async {}),
+    }
+}
+
 pub fn build_anthropic_authorize_url(code_challenge: &str, state: &str) -> String {
     build_anthropic_authorize_url_with_redirect_uri(
         code_challenge,

@@ -2557,6 +2557,57 @@ async fn openai_codex_oauth_callback_server_rejects_state_mismatch_then_accepts_
 }
 
 #[tokio::test]
+async fn openai_codex_oauth_login_flow_falls_back_to_manual_input_when_callback_port_is_busy() {
+    let occupied = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("occupy callback port");
+    let port = occupied.local_addr().expect("occupied local addr").port();
+    let codex_access = codex_test_token();
+    let (token_url, request_task) = mock_json_server(codex_oauth_token_response(
+        &codex_access,
+        "codex-manual-fallback-refresh",
+        7200,
+    ))
+    .await;
+
+    let flow = start_openai_codex_oauth_login_flow_with_pkce(
+        "verifier-value",
+        "challenge-value",
+        "state-value",
+        None,
+        port,
+    )
+    .await
+    .expect("login flow should continue without callback server");
+    assert_eq!(
+        flow.redirect_uri,
+        format!("http://localhost:{port}/auth/callback")
+    );
+    assert!(flow.auth_url.contains(&format!(
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2Fauth%2Fcallback"
+    )));
+
+    let credentials = finish_openai_codex_oauth_login_from_manual_input_at(
+        flow,
+        "HTTP://LOCALHOST/auth/callback?code=manual-code&state=state-value",
+        &token_url,
+        2_000_000,
+    )
+    .await
+    .expect("manual fallback credentials");
+    let request = request_task.await.expect("token request");
+
+    assert_eq!(credentials.access, codex_access);
+    assert_eq!(credentials.refresh, "codex-manual-fallback-refresh");
+    assert_eq!(credentials.extra.get("accountId"), Some(&json!("acc_test")));
+    assert!(request.contains("grant_type=authorization_code"));
+    assert!(request.contains("code=manual-code"));
+    assert!(request.contains("code_verifier=verifier-value"));
+    assert!(request.contains(&format!(
+        "redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2Fauth%2Fcallback"
+    )));
+    drop(occupied);
+}
+
+#[tokio::test]
 async fn openai_codex_oauth_login_flow_callback_exchanges_code() {
     let codex_access = codex_test_token();
     let (token_url, request_task) = mock_json_server(codex_oauth_token_response(

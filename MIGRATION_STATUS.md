@@ -143,10 +143,11 @@ counterparts that pass.
     primitives.
   - OpenAI Codex OAuth helpers for authorization URL construction,
     local callback server/state validation, callback-driven login flow, shared
-    manual redirect input parsing parity, form-encoded token/refresh requests,
-    refresh failure message formatting, proxy-aware async
-    authorization-code/refresh token exchange primitives, ChatGPT JWT account-id
-    validation, and source-style `accountId` credential preservation.
+    manual redirect input parsing parity, manual-code fallback when the local
+    callback port is unavailable, form-encoded token/refresh requests, refresh
+    failure message formatting, proxy-aware async authorization-code/refresh
+    token exchange primitives, ChatGPT JWT account-id validation, and
+    source-style `accountId` credential preservation.
   - OpenAI Codex Responses helpers for ChatGPT JWT account-id extraction,
     SSE/WebSocket headers, request-body construction, URL resolution, reasoning
     effort mapping, cached WebSocket input-delta continuation, SSE frame parsing
@@ -639,6 +640,14 @@ This migration is not complete.
   `cargo fmt`,
   `cargo test -p ri-llm-provider --test provider_core anthropic_oauth -- --test-threads=1`,
   and
+  `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth -- --test-threads=1`,
+  `cargo fmt --check`, and `git diff --check` passed.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `utils/oauth/openai-codex.ts` callback-server bind failure behavior: OpenAI
+  Codex OAuth login setup now preserves the authorization URL and redirect URI
+  and falls back to manual authorization-code input when the local callback port
+  is already in use, matching Pi's no-op server fallback:
+  `cargo fmt`,
   `cargo test -p ri-llm-provider --test provider_core openai_codex_oauth -- --test-threads=1`,
   `cargo fmt --check`, and `git diff --check` passed.
 - Latest local verification on 2026-05-22 after aligning

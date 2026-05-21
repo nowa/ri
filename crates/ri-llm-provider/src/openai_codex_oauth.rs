@@ -1,14 +1,14 @@
 use crate::{
     anthropic_oauth::{
         OAuthCallbackServer, OAuthCallbackServerOptions, OAuthCredentials, OAuthHttpRequest,
-        OAuthLoginFlow, generate_pkce, parse_authorization_input, send_oauth_http_request,
-        start_oauth_callback_server,
+        OAuthLoginFlow, generate_pkce, noop_oauth_callback_server, parse_authorization_input,
+        send_oauth_http_request, start_oauth_callback_server,
     },
     openai_codex_responses::extract_openai_codex_account_id,
     types::now_millis,
 };
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, net::SocketAddr};
 
 pub const OPENAI_CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_CODEX_OAUTH_AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
@@ -79,10 +79,12 @@ pub async fn start_openai_codex_oauth_login_flow_with_pkce(
     originator: Option<&str>,
     port: u16,
 ) -> Result<OAuthLoginFlow, String> {
-    let callback_server = start_oauth_callback_server(
-        openai_codex_oauth_callback_server_options_with_port(state, port),
-    )
-    .await?;
+    let callback_options = openai_codex_oauth_callback_server_options_with_port(state, port);
+    let fallback_redirect_uri = callback_options.redirect_uri.clone();
+    let fallback_addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let callback_server = start_oauth_callback_server(callback_options)
+        .await
+        .unwrap_or_else(|_| noop_oauth_callback_server(fallback_redirect_uri, fallback_addr));
     let redirect_uri = callback_server.redirect_uri.clone();
     let local_addr = callback_server.local_addr;
     Ok(OAuthLoginFlow {
