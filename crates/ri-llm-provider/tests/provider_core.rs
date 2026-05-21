@@ -823,6 +823,153 @@ fn anthropic_model_metadata_matches_generated_catalog() {
 }
 
 #[test]
+fn cerebras_model_metadata_matches_generated_catalog() {
+    let models = get_models("cerebras");
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "gpt-oss-120b",
+            "llama3.1-8b",
+            "qwen-3-235b-a22b-instruct-2507",
+            "zai-glm-4.7",
+        ]
+    );
+
+    for (model_id, reasoning, context_window, max_tokens, cost) in [
+        (
+            "gpt-oss-120b",
+            true,
+            131_072,
+            32_768,
+            ModelCost {
+                input: 0.25,
+                output: 0.69,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "llama3.1-8b",
+            false,
+            32_000,
+            8_000,
+            ModelCost {
+                input: 0.1,
+                output: 0.1,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "qwen-3-235b-a22b-instruct-2507",
+            false,
+            131_000,
+            32_000,
+            ModelCost {
+                input: 0.6,
+                output: 1.2,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "zai-glm-4.7",
+            false,
+            131_072,
+            40_000,
+            ModelCost {
+                input: 2.25,
+                output: 2.75,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+    ] {
+        let model = get_model("cerebras", model_id).expect(model_id);
+        assert_eq!(model.api, "openai-completions", "{model_id} api");
+        assert_eq!(model.provider, "cerebras", "{model_id} provider");
+        assert_eq!(
+            model.base_url, "https://api.cerebras.ai/v1",
+            "{model_id} base URL"
+        );
+        assert_eq!(model.reasoning, reasoning, "{model_id} reasoning");
+        assert!(model.thinking_level_map.is_empty(), "{model_id} thinking");
+        assert_eq!(model.input, vec![InputKind::Text], "{model_id} input");
+        assert_eq!(model.cost, cost, "{model_id} cost");
+        assert_eq!(model.context_window, context_window, "{model_id} context");
+        assert_eq!(model.max_tokens, max_tokens, "{model_id} max tokens");
+        assert!(model.compat.is_none(), "{model_id} compat");
+    }
+}
+
+#[test]
+fn minimax_model_metadata_matches_generated_catalog() {
+    for (provider, base_url) in [
+        ("minimax", "https://api.minimax.io/anthropic"),
+        ("minimax-cn", "https://api.minimaxi.com/anthropic"),
+    ] {
+        let models = get_models(provider);
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["MiniMax-M2.7", "MiniMax-M2.7-highspeed"],
+            "{provider} catalog"
+        );
+
+        for (model_id, cost) in [
+            (
+                "MiniMax-M2.7",
+                ModelCost {
+                    input: 0.3,
+                    output: 1.2,
+                    cache_read: 0.06,
+                    cache_write: 0.375,
+                },
+            ),
+            (
+                "MiniMax-M2.7-highspeed",
+                ModelCost {
+                    input: 0.6,
+                    output: 2.4,
+                    cache_read: 0.06,
+                    cache_write: 0.375,
+                },
+            ),
+        ] {
+            let model = get_model(provider, model_id).expect(model_id);
+            assert_eq!(model.api, "anthropic-messages", "{provider} api");
+            assert_eq!(model.provider, provider, "{provider} provider");
+            assert_eq!(model.base_url, base_url, "{provider} base URL");
+            assert!(model.reasoning, "{provider}/{model_id} reasoning");
+            assert!(
+                model.thinking_level_map.is_empty(),
+                "{provider}/{model_id} thinking"
+            );
+            assert_eq!(
+                model.input,
+                vec![InputKind::Text],
+                "{provider}/{model_id} input"
+            );
+            assert_eq!(model.cost, cost, "{provider}/{model_id} cost");
+            assert_eq!(
+                model.context_window, 204_800,
+                "{provider}/{model_id} context"
+            );
+            assert_eq!(
+                model.max_tokens, 131_072,
+                "{provider}/{model_id} max tokens"
+            );
+            assert!(model.compat.is_none(), "{provider}/{model_id} compat");
+        }
+    }
+}
+
+#[test]
 fn openai_codex_model_metadata_matches_generated_catalog() {
     let models = get_models("openai-codex");
     assert_eq!(

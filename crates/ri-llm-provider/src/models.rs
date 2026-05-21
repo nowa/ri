@@ -337,7 +337,9 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("groq", "openai/gpt-oss-120b"),
     ("groq", "qwen/qwen3-32b"),
     ("cerebras", "gpt-oss-120b"),
+    ("cerebras", "llama3.1-8b"),
     ("cerebras", "qwen-3-235b-a22b-instruct-2507"),
+    ("cerebras", "zai-glm-4.7"),
     ("xai", "grok-3"),
     ("xai", "grok-3-fast"),
     ("xai", "grok-code-fast-1"),
@@ -347,6 +349,9 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("mistral", "mistral-small-2603"),
     ("mistral", "pixtral-12b"),
     ("minimax", "MiniMax-M2.7"),
+    ("minimax", "MiniMax-M2.7-highspeed"),
+    ("minimax-cn", "MiniMax-M2.7"),
+    ("minimax-cn", "MiniMax-M2.7-highspeed"),
     ("kimi-coding", "kimi-for-coding"),
     ("kimi-coding", "kimi-k2-thinking"),
     ("huggingface", "moonshotai/Kimi-K2.5"),
@@ -576,6 +581,9 @@ fn apply_known_model_overrides(model: &mut Model) {
     }
 
     if matches!(model.provider.as_str(), "minimax" | "minimax-cn") {
+        if apply_minimax_generated_metadata(model) {
+            return;
+        }
         model.reasoning = true;
         model.context_window = 204_800;
         model.max_tokens = 131_072;
@@ -587,6 +595,9 @@ fn apply_known_model_overrides(model: &mut Model) {
     }
 
     if model.provider == "deepseek" && apply_deepseek_generated_metadata(model) {
+        return;
+    }
+    if model.provider == "cerebras" && apply_cerebras_generated_metadata(model) {
         return;
     }
     if model.provider == "zai" && apply_zai_generated_metadata(model) {
@@ -873,6 +884,98 @@ fn apply_deepseek_generated_metadata(model: &mut Model) -> bool {
         "requiresReasoningContentOnAssistantMessages": true,
         "thinkingFormat": "deepseek",
     }));
+    true
+}
+
+fn apply_cerebras_generated_metadata(model: &mut Model) -> bool {
+    let Some((reasoning, context_window, max_tokens, cost)) = (match model.id.as_str() {
+        "gpt-oss-120b" => Some((
+            true,
+            131_072,
+            32_768,
+            ModelCost {
+                input: 0.25,
+                output: 0.69,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        )),
+        "llama3.1-8b" => Some((
+            false,
+            32_000,
+            8_000,
+            ModelCost {
+                input: 0.1,
+                output: 0.1,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        )),
+        "qwen-3-235b-a22b-instruct-2507" => Some((
+            false,
+            131_000,
+            32_000,
+            ModelCost {
+                input: 0.6,
+                output: 1.2,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        )),
+        "zai-glm-4.7" => Some((
+            false,
+            131_072,
+            40_000,
+            ModelCost {
+                input: 2.25,
+                output: 2.75,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        )),
+        _ => None,
+    }) else {
+        return false;
+    };
+
+    model.api = "openai-completions".to_owned();
+    model.base_url = base_url_for_provider("cerebras").to_owned();
+    model.reasoning = reasoning;
+    model.thinking_level_map.clear();
+    model.input = vec![crate::types::InputKind::Text];
+    model.cost = cost;
+    model.context_window = context_window;
+    model.max_tokens = max_tokens;
+    true
+}
+
+fn apply_minimax_generated_metadata(model: &mut Model) -> bool {
+    let Some(cost) = (match model.id.as_str() {
+        "MiniMax-M2.7" => Some(ModelCost {
+            input: 0.3,
+            output: 1.2,
+            cache_read: 0.06,
+            cache_write: 0.375,
+        }),
+        "MiniMax-M2.7-highspeed" => Some(ModelCost {
+            input: 0.6,
+            output: 2.4,
+            cache_read: 0.06,
+            cache_write: 0.375,
+        }),
+        _ => None,
+    }) else {
+        return false;
+    };
+
+    model.api = "anthropic-messages".to_owned();
+    model.base_url = base_url_for_provider(&model.provider).to_owned();
+    model.reasoning = true;
+    model.thinking_level_map.clear();
+    model.input = vec![crate::types::InputKind::Text];
+    model.cost = cost;
+    model.context_window = 204_800;
+    model.max_tokens = 131_072;
     true
 }
 
