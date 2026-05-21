@@ -921,13 +921,18 @@ fn has_tool_history(messages: &[Message]) -> bool {
 }
 
 fn supports_strict_mode(model: &Model) -> bool {
-    !model
+    if let Some(enabled) = model
         .compat
         .as_ref()
         .and_then(|compat| compat.get("supportsStrictMode"))
         .and_then(Value::as_bool)
-        .map(|enabled| !enabled)
-        .unwrap_or(false)
+    {
+        return enabled;
+    }
+
+    !(is_moonshot_openai_completions_model(model)
+        || is_together_openai_completions_model(model)
+        || is_cloudflare_ai_gateway_model(model))
 }
 
 fn supports_usage_in_streaming(model: &Model) -> bool {

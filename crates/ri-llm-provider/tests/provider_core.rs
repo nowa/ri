@@ -10473,6 +10473,18 @@ fn openai_completions_payload_forwards_tool_choice_and_strict_compat() {
     assert_eq!(payload["tool_choice"], "required");
     assert_eq!(payload["tools"][0]["function"]["strict"], false);
 
+    let together_model = get_model("together", "openai/gpt-oss-120b").expect("together model");
+    let payload = build_openai_completions_payload(
+        &together_model,
+        &Context {
+            messages: vec![Message::User(UserMessage::text("Call ping"))],
+            tools: vec![tool.clone()],
+            ..Default::default()
+        },
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert!(payload["tools"][0]["function"].get("strict").is_none());
+
     model.compat = Some(json!({ "supportsStrictMode": false }));
     let payload = build_openai_completions_payload(
         &model,
