@@ -986,6 +986,42 @@ fn jsonl_repo_stores_lists_opens_deletes_and_forks_by_metadata() {
         vec!["other-session".to_owned(), "source-session".to_owned()]
     );
 
+    let offset_cwd = "/tmp/offset-project";
+    let offset_dir = root.join(JsonlSessionRepo::encoded_cwd(offset_cwd));
+    fs::create_dir_all(&offset_dir).expect("offset session dir");
+    let older_offset_header = json!({
+        "type": "session",
+        "version": 3,
+        "id": "older-offset",
+        "timestamp": "2026-01-01T00:30:00+01:00",
+        "cwd": offset_cwd
+    });
+    let newer_utc_header = json!({
+        "type": "session",
+        "version": 3,
+        "id": "newer-utc",
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "cwd": offset_cwd
+    });
+    fs::write(
+        offset_dir.join("older.jsonl"),
+        format!("{older_offset_header}\n"),
+    )
+    .expect("older offset session");
+    fs::write(
+        offset_dir.join("newer.jsonl"),
+        format!("{newer_utc_header}\n"),
+    )
+    .expect("newer utc session");
+    assert_eq!(
+        repo.list(Some(offset_cwd))
+            .expect("list offset cwd")
+            .iter()
+            .map(|metadata| metadata.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["newer-utc", "older-offset"]
+    );
+
     let mut opened = repo.open(&source_metadata).expect("open");
     let user1 = opened
         .append_message(user_message_text("one"))

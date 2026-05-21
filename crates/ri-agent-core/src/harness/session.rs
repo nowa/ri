@@ -1188,7 +1188,7 @@ impl JsonlSessionRepo {
                 }
             }
         }
-        sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        sessions.sort_by(jsonl_session_metadata_newest_first);
         Ok(sessions)
     }
 
@@ -1787,4 +1787,23 @@ fn parse_timestamp_millis(timestamp: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(timestamp)
         .map(|value| value.timestamp_millis())
         .unwrap_or_else(|_| now_millis())
+}
+
+fn jsonl_session_metadata_newest_first(
+    left: &JsonlSessionMetadata,
+    right: &JsonlSessionMetadata,
+) -> std::cmp::Ordering {
+    match (
+        parse_jsonl_metadata_timestamp_millis(&left.created_at),
+        parse_jsonl_metadata_timestamp_millis(&right.created_at),
+    ) {
+        (Some(left), Some(right)) => right.cmp(&left),
+        _ => std::cmp::Ordering::Equal,
+    }
+}
+
+fn parse_jsonl_metadata_timestamp_millis(timestamp: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|value| value.timestamp_millis())
+        .ok()
 }
