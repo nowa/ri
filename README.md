@@ -26,6 +26,12 @@ The workspace contains the Rust implementation and local test coverage for the
 core pi-ai and pi-agent-core behavior that is practical to verify without live
 provider credentials.
 
+As of the latest local verification, `cargo test --workspace -- --list`
+enumerates 1155 Rust tests: 954 under `ri-llm-provider` and 201 under
+`ri-agent-core`. Those numbers are tracked in detail in
+[MIGRATION_STATUS.md](MIGRATION_STATUS.md), including why the Rust count is not
+a one-to-one completion proof against the 871 direct source test-case baseline.
+
 The test suite covers provider metadata, payload generation, streaming parsers,
 SSE and eventstream behavior, abort handling, response IDs, usage accounting,
 message transforms, simple stream option defaults, tool calling,
@@ -77,6 +83,8 @@ credentials, local model services where applicable, and manual OAuth flows.
 
 - Built-in model lookup with `get_model(provider, model_id)`.
 - `stream`, `complete`, `stream_simple`, and `complete_simple` APIs.
+- A `ri-ai` CLI counterpart for listing providers and running supported OAuth
+  login flows.
 - OpenAI, Azure OpenAI Responses, OpenAI Codex, Anthropic, Google, Vertex AI,
   Mistral, Amazon Bedrock, GitHub Copilot, OpenRouter, OpenAI-compatible, and
   related compatibility layers.
@@ -88,6 +96,8 @@ credentials, local model services where applicable, and manual OAuth flows.
 - Tool-call argument validation with pi-style JSON-schema coercion, including
   JS-number-like primitive coercions for plain serialized schemas and
   TypeBox-like object/array/combinator constraints.
+- A Rust-native `StringEnumOptions` / `string_enum_schema` helper for the
+  provider-friendly schema shape produced by pi-ai's `StringEnum` utility.
 - Reasoning levels including `off`, `minimal`, `low`, `medium`, `high`, and
   `xhigh`, with provider-specific wire mappings.
 - Pi-style simple stream defaults for output token limits and budget-based
@@ -100,8 +110,8 @@ credentials, local model services where applicable, and manual OAuth flows.
   requests across supported OpenAI/Anthropic-compatible paths.
 - OAuth helpers for providers such as OpenAI Codex, Anthropic, GitHub Copilot,
   and Google Vertex, including source display metadata, local callback pages
-  for browser-based flows, and OpenAI Codex `accountId` credential
-  preservation.
+  for browser-based flows, source-shaped `~/.pi/agent/auth.json` credential
+  storage, and OpenAI Codex `accountId` credential preservation.
 
 `ri-agent-core` includes:
 
