@@ -16593,6 +16593,93 @@ async fn builtin_openai_codex_provider_uses_websocket_transport_and_parses_frame
     assert_eq!(body["prompt_cache_key"], "ws-session");
 }
 
+#[tokio::test]
+async fn builtin_openai_codex_provider_keeps_websocket_protocol_errors_out_of_sse_fallback() {
+    reset_openai_codex_websocket_debug_stats(Some("ws-protocol-error-session"));
+    let (base_url, request_task) = mock_websocket_text_frame_server(vec!["{not json"]).await;
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.session_id = Some("ws-protocol-error-session".to_owned());
+    options.stream.transport = Some(Transport::Auto);
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete with protocol error");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(message.stop_reason, StopReason::Error);
+    assert!(
+        message
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("Invalid Codex WebSocket JSON")),
+        "{:?}",
+        message.error_message
+    );
+    assert!(
+        message
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic["type"] != "provider_transport_failure"),
+        "Codex protocol errors should not be reported as transport fallback diagnostics"
+    );
+    assert!(
+        request
+            .handshake
+            .starts_with("GET /codex/responses HTTP/1.1")
+    );
+    let stats = get_openai_codex_websocket_debug_stats("ws-protocol-error-session")
+        .expect("websocket debug stats");
+    assert_eq!(stats.requests, 1);
+    assert_eq!(stats.websocket_failures, 0);
+    assert_eq!(stats.sse_fallbacks, 0);
+    assert_eq!(stats.websocket_fallback_active, None);
+}
+
+#[tokio::test]
+async fn builtin_openai_codex_provider_keeps_websocket_provider_errors_out_of_sse_fallback() {
+    reset_openai_codex_websocket_debug_stats(Some("ws-provider-error-session"));
+    let (base_url, request_task) = mock_websocket_server(vec![json!({
+        "type": "error",
+        "code": "bad_request",
+        "message": "provider rejected request"
+    })])
+    .await;
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.session_id = Some("ws-provider-error-session".to_owned());
+    options.stream.transport = Some(Transport::Auto);
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete with provider error");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(message.stop_reason, StopReason::Error);
+    assert_eq!(
+        message.error_message.as_deref(),
+        Some("Error Code bad_request: provider rejected request")
+    );
+    assert!(
+        message
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic["type"] != "provider_transport_failure"),
+        "Codex provider errors should not be reported as transport fallback diagnostics"
+    );
+    assert_eq!(request.messages.len(), 1);
+    let stats = get_openai_codex_websocket_debug_stats("ws-provider-error-session")
+        .expect("websocket debug stats");
+    assert_eq!(stats.requests, 1);
+    assert_eq!(stats.websocket_failures, 0);
+    assert_eq!(stats.sse_fallbacks, 0);
+    assert_eq!(stats.websocket_fallback_active, None);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn builtin_openai_codex_websocket_routes_through_resolved_proxy() {
     let _lock = ENV_LOCK.lock().expect("env lock");
@@ -18044,6 +18131,58 @@ async fn mock_websocket_server(
                 .write_all(&server_websocket_text_frame(&event.to_string()))
                 .await
                 .expect("write websocket frame");
+        }
+        let _ = socket.shutdown().await;
+        MockWebSocketRequest {
+            handshake: String::from_utf8_lossy(&handshake).into_owned(),
+            message: message.clone(),
+            messages: vec![message],
+        }
+    });
+    (format!("http://{addr}"), task)
+}
+
+async fn mock_websocket_text_frame_server(
+    frames: Vec<&'static str>,
+) -> (String, tokio::task::JoinHandle<MockWebSocketRequest>) {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind websocket text frame mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept request");
+        let mut handshake = Vec::new();
+        let mut buf = [0u8; 1024];
+        loop {
+            let n = socket.read(&mut buf).await.expect("read handshake");
+            if n == 0 {
+                break;
+            }
+            handshake.extend_from_slice(&buf[..n]);
+            if request_is_complete(&handshake) {
+                break;
+            }
+        }
+        socket
+            .write_all(
+                b"HTTP/1.1 101 Switching Protocols\r\n\
+                  Upgrade: websocket\r\n\
+                  Connection: Upgrade\r\n\
+                  Sec-WebSocket-Accept: test\r\n\r\n",
+            )
+            .await
+            .expect("write handshake response");
+        let message = read_client_websocket_text_frame(&mut socket).await;
+        for frame in frames {
+            socket
+                .write_all(&server_websocket_text_frame(frame))
+                .await
+                .expect("write websocket text frame");
         }
         let _ = socket.shutdown().await;
         MockWebSocketRequest {

@@ -76,6 +76,31 @@ struct CachedCodexWebSocket {
     continuation: Option<OpenAICodexCachedWebSocketContinuation>,
 }
 
+enum CodexWebSocketStreamError {
+    Transport(String),
+    NonTransport(String),
+}
+
+impl CodexWebSocketStreamError {
+    fn transport(error: impl Into<String>) -> Self {
+        Self::Transport(error.into())
+    }
+
+    fn non_transport(error: impl Into<String>) -> Self {
+        Self::NonTransport(error.into())
+    }
+
+    fn is_non_transport(&self) -> bool {
+        matches!(self, Self::NonTransport(_))
+    }
+
+    fn into_message(self) -> String {
+        match self {
+            Self::Transport(error) | Self::NonTransport(error) => error,
+        }
+    }
+}
+
 pub async fn cleanup_openai_codex_websocket_sessions(session_id: Option<&str>) -> usize {
     let entries = {
         let mut cache = codex_ws_cache().lock().await;
@@ -875,7 +900,17 @@ fn spawn_openai_codex_responses_request(
             .await
             {
                 Ok(()) => return,
+                Err(error) if error.is_non_transport() => {
+                    push_provider_error(
+                        &sender,
+                        &mut output,
+                        StopReason::Error,
+                        error.into_message(),
+                    );
+                    return;
+                }
                 Err(error) if websocket_started => {
+                    let error = error.into_message();
                     record_openai_codex_websocket_failure_for_session(
                         session_id.as_deref(),
                         &error,
@@ -894,6 +929,7 @@ fn spawn_openai_codex_responses_request(
                     return;
                 }
                 Err(error) => {
+                    let error = error.into_message();
                     record_openai_codex_websocket_failure_for_session(
                         session_id.as_deref(),
                         &error,
@@ -1130,7 +1166,7 @@ async fn stream_openai_codex_websocket_json(
     sender: &crate::AssistantMessageEventSender,
     output: &mut AssistantMessage,
     websocket_started: &mut bool,
-) -> Result<(), String> {
+) -> Result<(), CodexWebSocketStreamError> {
     if push_abort_if_requested(sender, options, output) {
         return Ok(());
     }
@@ -1147,7 +1183,12 @@ async fn stream_openai_codex_websocket_json(
     let (mut socket, continuation) = if let Some(cached) = cached {
         (cached.socket, cached.continuation)
     } else {
-        (OpenAICodexWebSocket::connect(url, headers).await?, None)
+        (
+            OpenAICodexWebSocket::connect(url, headers)
+                .await
+                .map_err(CodexWebSocketStreamError::transport)?,
+            None,
+        )
     };
 
     let cached_request = if use_cached_context {
@@ -1167,7 +1208,10 @@ async fn stream_openai_codex_websocket_json(
         "type",
         Value::String("response.create".to_owned()),
     );
-    socket.send_json_text(&request_body).await?;
+    socket
+        .send_json_text(&request_body)
+        .await
+        .map_err(CodexWebSocketStreamError::transport)?;
 
     let mut processor = OpenAIResponsesStreamProcessor::new();
     loop {
@@ -1177,15 +1221,39 @@ async fn stream_openai_codex_websocket_json(
         }
         let event = socket
             .read_json_text()
-            .await?
-            .ok_or_else(|| "WebSocket stream closed before response.completed".to_owned())?;
+            .await
+            .map_err(|error| {
+                if error.starts_with("Invalid Codex WebSocket JSON:") {
+                    CodexWebSocketStreamError::non_transport(error)
+                } else {
+                    CodexWebSocketStreamError::transport(error)
+                }
+            })?
+            .ok_or_else(|| {
+                CodexWebSocketStreamError::transport(
+                    "WebSocket stream closed before response.completed",
+                )
+            })?;
         if !*websocket_started {
             *websocket_started = true;
             sender.push(AssistantMessageEvent::Start {
                 partial: output.clone(),
             });
         }
-        processor.process_event(event, output, sender, model)?;
+        let event_type = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        processor
+            .process_event(event, output, sender, model)
+            .map_err(|error| {
+                if matches!(event_type.as_str(), "error" | "response.failed") {
+                    CodexWebSocketStreamError::non_transport(error)
+                } else {
+                    CodexWebSocketStreamError::transport(error)
+                }
+            })?;
         if processor.is_terminal() {
             processor.finish(output, sender);
             if let Some(session_id) = session_id {
