@@ -40,12 +40,12 @@ use crate::{
     },
     openai_completions::{
         OpenAICompletionsPayloadOptions, OpenAICompletionsStreamProcessor,
-        build_openai_completions_default_headers, build_openai_completions_payload,
+        build_openai_completions_default_headers_with_context, build_openai_completions_payload,
         resolve_openai_completions_cache_retention,
     },
     openai_responses::{
         OpenAIResponsesPayloadOptions, OpenAIResponsesStreamProcessor,
-        build_openai_responses_default_headers, build_openai_responses_payload,
+        build_openai_responses_default_headers_with_context, build_openai_responses_payload,
         resolve_openai_responses_cache_retention,
     },
     types::{
@@ -179,8 +179,9 @@ impl ApiProvider for OpenAICompletionsHttpProvider {
             },
         );
         payload["stream"] = Value::Bool(true);
-        let headers = build_openai_completions_default_headers(
+        let headers = build_openai_completions_default_headers_with_context(
             model,
+            Some(&context),
             options.stream.session_id.as_deref(),
             cache_retention,
             &options.stream.headers,
@@ -250,8 +251,9 @@ impl ApiProvider for OpenAIResponsesHttpProvider {
                     .map(str::to_owned),
             },
         );
-        let headers = build_openai_responses_default_headers(
+        let headers = build_openai_responses_default_headers_with_context(
             model,
+            Some(&context),
             options.stream.session_id.as_deref(),
             cache_retention,
             &options.stream.headers,

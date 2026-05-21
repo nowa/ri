@@ -1839,6 +1839,25 @@ fn anthropic_oauth_authorize_url_uses_localhost_callback() {
 }
 
 #[test]
+fn oauth_pkce_generation_matches_source_shape_and_challenge_derivation() {
+    let pkce = generate_pkce().expect("pkce");
+    assert_eq!(pkce.verifier.len(), 43);
+    assert_eq!(pkce.challenge.len(), 43);
+    assert!(pkce.verifier.chars().all(is_base64url_no_pad_char));
+    assert!(pkce.challenge.chars().all(is_base64url_no_pad_char));
+
+    let expected_challenge = URL_SAFE_NO_PAD.encode(ring::digest::digest(
+        &ring::digest::SHA256,
+        pkce.verifier.as_bytes(),
+    ));
+    assert_eq!(pkce.challenge, expected_challenge);
+}
+
+fn is_base64url_no_pad_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'
+}
+
+#[test]
 fn anthropic_oauth_authorization_code_request_keeps_localhost_redirect_uri() {
     let request = build_anthropic_authorization_code_token_request(
         "manual-code",
@@ -7825,6 +7844,7 @@ fn openai_responses_message_conversion_hashes_foreign_tool_item_ids() {
         .expect("function call id");
     let expected_item_id =
         build_foreign_responses_item_id(raw_tool_call_id.split_once('|').expect("pipe").1);
+    assert_eq!(expected_item_id, "fc_ifd2c719fz6a9");
     assert_eq!(item_id, expected_item_id);
     assert!(item_id.len() <= 64);
     assert!(item_id.starts_with("fc_"));
@@ -8413,6 +8433,64 @@ fn openai_responses_default_headers_apply_session_affinity_and_overrides() {
     assert_eq!(
         headers.get("x-client-request-id").map(String::as_str),
         Some("override-request")
+    );
+}
+
+#[test]
+fn openai_responses_and_completions_apply_copilot_dynamic_headers() {
+    let mut responses_model = get_model("github-copilot", "gpt-5-mini").expect("copilot model");
+    responses_model.api = "openai-responses".to_owned();
+    let responses_headers = build_openai_responses_default_headers_with_context(
+        &responses_model,
+        Some(&user_context("hello")),
+        Some("session-responses"),
+        CacheRetention::Short,
+        &BTreeMap::new(),
+    );
+    assert_eq!(
+        responses_headers.get("X-Initiator").map(String::as_str),
+        Some("user")
+    );
+    assert_eq!(
+        responses_headers.get("Openai-Intent").map(String::as_str),
+        Some("conversation-edits")
+    );
+    assert!(responses_headers.get("Copilot-Vision-Request").is_none());
+
+    let completions_model = get_model("github-copilot", "gpt-5.3-codex").expect("copilot model");
+    let image_context = Context {
+        messages: vec![
+            Message::User(UserMessage {
+                content: UserContentValue::Blocks(vec![UserContent::Image(ImageContent {
+                    data: "red-circle".to_owned(),
+                    mime_type: "image/png".to_owned(),
+                })]),
+                timestamp: 1,
+            }),
+            Message::Assistant(empty_assistant(StopReason::Stop)),
+        ],
+        ..Default::default()
+    };
+    let completions_headers = build_openai_completions_default_headers_with_context(
+        &completions_model,
+        Some(&image_context),
+        Some("session-completions"),
+        CacheRetention::Short,
+        &BTreeMap::from([("X-Initiator".to_owned(), "override".to_owned())]),
+    );
+    assert_eq!(
+        completions_headers
+            .get("Copilot-Vision-Request")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        completions_headers.get("Openai-Intent").map(String::as_str),
+        Some("conversation-edits")
+    );
+    assert_eq!(
+        completions_headers.get("X-Initiator").map(String::as_str),
+        Some("override")
     );
 }
 
@@ -11891,6 +11969,146 @@ fn validation_matches_ajv_style_plain_schema_coercions() {
 }
 
 #[test]
+fn validation_enforces_json_schema_object_array_and_constraint_keywords() {
+    let tool = Tool {
+        name: "shape".to_owned(),
+        description: "Schema coverage".to_owned(),
+        parameters: json!({
+            "type": "object",
+            "required": ["name", "pair", "mode", "marker"],
+            "additionalProperties": false,
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 6,
+                    "pattern": "^[a-z]+$"
+                },
+                "pair": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": [
+                        { "type": "string" },
+                        { "type": "integer" }
+                    ],
+                    "additionalItems": false
+                },
+                "mode": { "enum": ["fast", "slow"] },
+                "marker": { "const": true }
+            }
+        }),
+    };
+    let valid = ToolCall {
+        id: "tool-1".to_owned(),
+        name: "shape".to_owned(),
+        arguments: object(json!({
+            "name": "valid",
+            "pair": ["left", "7"],
+            "mode": "fast",
+            "marker": true
+        })),
+        thought_signature: None,
+    };
+
+    let args = validate_tool_arguments(&tool, &valid).expect("valid");
+    assert_eq!(args["pair"][1], 7);
+
+    for (arguments, expected_error) in [
+        (
+            json!({
+                "name": "valid",
+                "pair": ["left", "7"],
+                "mode": "fast",
+                "marker": true,
+                "extra": true
+            }),
+            "extra: unexpected property",
+        ),
+        (
+            json!({
+                "name": "valid",
+                "pair": ["left", "7", "extra"],
+                "mode": "fast",
+                "marker": true
+            }),
+            "pair.2: unexpected item",
+        ),
+        (
+            json!({
+                "name": "Bad7",
+                "pair": ["left", "7"],
+                "mode": "medium",
+                "marker": false
+            }),
+            "mode: expected one of",
+        ),
+    ] {
+        let call = ToolCall {
+            id: "tool-1".to_owned(),
+            name: "shape".to_owned(),
+            arguments: object(arguments),
+            thought_signature: None,
+        };
+        let error = validate_tool_arguments(&tool, &call).expect_err("invalid");
+        assert!(
+            error.to_string().contains(expected_error),
+            "{error:?} should contain {expected_error}"
+        );
+    }
+}
+
+#[test]
+fn validation_enforces_combinators_and_additional_property_schemas() {
+    assert_eq!(
+        validate_single_value(
+            json!({ "allOf": [{ "type": "integer" }, { "minimum": 2 }, { "maximum": 4 }] }),
+            json!("3")
+        )
+        .expect("valid"),
+        json!(3)
+    );
+    assert!(
+        validate_single_value(
+            json!({ "allOf": [{ "type": "integer" }, { "maximum": 4 }] }),
+            json!("5")
+        )
+        .expect_err("invalid")
+        .to_string()
+        .contains("must be <= 4")
+    );
+    assert!(
+        validate_single_value(
+            json!({ "oneOf": [{ "type": "number" }, { "minimum": 0 }] }),
+            json!(3)
+        )
+        .expect_err("ambiguous oneOf")
+        .to_string()
+        .contains("instead of exactly one")
+    );
+
+    let tool = Tool {
+        name: "extras".to_owned(),
+        description: "Additional properties schema".to_owned(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "label": { "type": "string" }
+            },
+            "additionalProperties": { "type": "integer" }
+        }),
+    };
+    let call = ToolCall {
+        id: "tool-1".to_owned(),
+        name: "extras".to_owned(),
+        arguments: object(json!({ "label": "ok", "count": "9" })),
+        thought_signature: None,
+    };
+    let args = validate_tool_arguments(&tool, &call).expect("valid");
+    assert_eq!(args["count"], 9);
+}
+
+#[test]
 fn env_api_keys_ignore_generic_github_tokens_for_copilot() {
     let _lock = ENV_LOCK.lock().expect("env lock");
     let _guard = EnvGuard::clearing(&["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]);
@@ -12199,6 +12417,7 @@ fn overflow_matches_provider_error_shapes_without_rate_limit_false_positives() {
         "Service unavailable: The service is temporarily unavailable.",
         "Rate limit exceeded, please retry after 30 seconds.",
         "Too many requests. Please slow down.",
+        "429 status code (no body)",
     ] {
         assert!(
             !is_context_overflow(&error_assistant(error), Some(200_000)),
@@ -12296,7 +12515,6 @@ fn overflow_matches_context_overflow_provider_error_corpus() {
         ("generic token limit", "token limit exceeded"),
         ("cerebras 400", "400 status code (no body)"),
         ("cerebras 413", "413 (no body)"),
-        ("cerebras 429", "429 status code (no body)"),
     ] {
         assert!(
             is_context_overflow(&error_assistant(error), Some(200_000)),
@@ -12310,8 +12528,10 @@ fn json_repair_and_hash_match_core_semantics() {
     assert_eq!(repair_json("{\"x\":\"a\nb\"}"), "{\"x\":\"a\\nb\"}");
     let value: Value = parse_json_with_repair("{\"x\":\"a\nb\"}").expect("json");
     assert_eq!(value["x"], "a\nb");
-    assert_eq!(short_hash("hello"), short_hash("hello"));
-    assert_ne!(short_hash("hello"), short_hash("world"));
+    assert_eq!(short_hash(""), "k4n83c7h0j2b");
+    assert_eq!(short_hash("hello"), "1h6qa0qrowduu");
+    assert_eq!(short_hash("world"), "yoqfis1dkxj7l");
+    assert_eq!(short_hash("emoji 🙈"), "8f4fmk10p65ud");
 }
 
 #[test]

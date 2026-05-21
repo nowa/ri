@@ -81,12 +81,16 @@ credentials, local model services where applicable, and manual OAuth flows.
 - Tool calling with streamed partial arguments.
 - Text, image, thinking, and tool-result content blocks.
 - Conservative parsing for common incomplete streamed tool-argument JSON.
+- Tool-call argument validation with pi-style JSON-schema coercion for plain
+  serialized schemas and TypeBox-like object/array/combinator constraints.
 - Reasoning levels including `off`, `minimal`, `low`, `medium`, `high`, and
   `xhigh`, with provider-specific wire mappings.
 - Pi-style simple stream defaults for output token limits and budget-based
   thinking token adjustment.
 - Usage and cost accounting, response IDs, diagnostics, abort flags, retry
   configuration, session IDs, and provider-specific extra options.
+- GitHub Copilot dynamic headers for user/agent initiation and image-capable
+  requests across supported OpenAI/Anthropic-compatible paths.
 - OAuth helpers for providers such as OpenAI Codex, Anthropic, GitHub Copilot,
   and Google Vertex, including local callback pages for browser-based flows.
 

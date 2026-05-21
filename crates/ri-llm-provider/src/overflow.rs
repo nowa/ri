@@ -24,7 +24,7 @@ static OVERFLOW_PATTERNS: std::sync::LazyLock<Vec<Regex>> = std::sync::LazyLock:
         r"context[_ ]length[_ ]exceeded",
         r"too many tokens",
         r"token limit exceeded",
-        r"^4(?:00|13|29)\s*(?:status code)?\s*\(no body\)",
+        r"^4(?:00|13)\s*(?:status code)?\s*\(no body\)",
     ]
     .into_iter()
     .map(|pattern| Regex::new(&format!("(?i){pattern}")).expect("valid overflow regex"))

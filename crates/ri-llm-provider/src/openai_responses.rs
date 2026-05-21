@@ -2,7 +2,8 @@ use crate::{
     AssistantContent, AssistantMessage, AssistantMessageEvent, AssistantMessageEventSender,
     CacheRetention, Context, InputKind, Model, StopReason, TextContent, ThinkingLevel, Tool,
     ToolCall, ToolResultContent, Usage, UsageCost, UserContent, UserContentValue,
-    parse_json_with_repair, short_hash, transform_messages,
+    github_copilot_headers::build_copilot_dynamic_headers, parse_json_with_repair, short_hash,
+    transform_messages,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -121,7 +122,28 @@ pub fn build_openai_responses_default_headers(
     cache_retention: CacheRetention,
     option_headers: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
+    build_openai_responses_default_headers_with_context(
+        model,
+        None,
+        session_id,
+        cache_retention,
+        option_headers,
+    )
+}
+
+pub fn build_openai_responses_default_headers_with_context(
+    model: &Model,
+    context: Option<&Context>,
+    session_id: Option<&str>,
+    cache_retention: CacheRetention,
+    option_headers: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
     let mut headers = model.headers.clone();
+    if model.provider == "github-copilot"
+        && let Some(context) = context
+    {
+        headers.extend(build_copilot_dynamic_headers(context));
+    }
     if let Some(session_id) = session_id
         && cache_retention != CacheRetention::None
     {

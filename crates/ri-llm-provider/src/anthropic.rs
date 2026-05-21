@@ -4,6 +4,7 @@ use crate::{
     ThinkingContent, ThinkingLevel, Tool, ToolCall, ToolResultContent, Usage, UserContent,
     UserContentValue,
     anthropic_compat::{from_claude_code_tool_name, to_claude_code_tool_name},
+    github_copilot_headers::build_copilot_dynamic_headers,
     json_repair::{parse_json_with_repair, parse_streaming_json, sanitize_surrogates},
     message_transform::transform_messages,
     simple_options::{adjust_max_tokens_for_thinking, apply_simple_stream_defaults},
@@ -866,37 +867,6 @@ fn supports_anthropic_session_affinity(model: &Model) -> bool {
                 || (model.provider == "cloudflare-ai-gateway"
                     && model.base_url.contains("anthropic"))
         })
-}
-
-fn build_copilot_dynamic_headers(context: &Context) -> BTreeMap<String, String> {
-    let initiator = match context.messages.last() {
-        Some(Message::User(_)) | None => "user",
-        Some(_) => "agent",
-    };
-    let mut headers = BTreeMap::from([
-        ("X-Initiator".to_owned(), initiator.to_owned()),
-        ("Openai-Intent".to_owned(), "conversation-edits".to_owned()),
-    ]);
-    if has_copilot_vision_input(context) {
-        headers.insert("Copilot-Vision-Request".to_owned(), "true".to_owned());
-    }
-    headers
-}
-
-fn has_copilot_vision_input(context: &Context) -> bool {
-    context.messages.iter().any(|message| match message {
-        Message::User(user) => match &user.content {
-            crate::UserContentValue::Blocks(blocks) => blocks
-                .iter()
-                .any(|block| matches!(block, crate::UserContent::Image(_))),
-            crate::UserContentValue::Plain(_) => false,
-        },
-        Message::ToolResult(result) => result
-            .content
-            .iter()
-            .any(|block| matches!(block, crate::ToolResultContent::Image(_))),
-        Message::Assistant(_) => false,
-    })
 }
 
 fn convert_anthropic_messages(

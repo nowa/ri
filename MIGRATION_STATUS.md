@@ -45,15 +45,23 @@ counterparts that pass.
     reasoning models.
   - JSON repair/hash helpers, including malformed control-character repair,
     invalid escape repair, conservative partial streamed tool-argument parsing
-    for common incomplete object/array/string cases, and unpaired UTF-16
+    for common incomplete object/array/string cases, exact `shortHash` output
+    fixtures used for foreign OpenAI Responses item IDs, and unpaired UTF-16
     surrogate escape replacement.
   - Assistant-message diagnostics helpers mirroring `utils/diagnostics.ts`,
     represented as typed Rust structs that serialize to the pi
     `{ type, timestamp, error, details }` diagnostic shape.
-  - JSON-schema subset validation and coercion.
+  - JSON-schema subset validation and coercion, including pi-style primitive
+    coercion plus `allOf`/`anyOf`/`oneOf`, `enum`/`const`, object
+    `additionalProperties`, tuple array items, and common string/number/array
+    bounds used by TypeBox/plain JSON-schema tool parameters.
   - Context-overflow detection with provider-specific error-shape corpus and
     silent/length-stop overflow signals.
   - Environment API key lookup.
+  - GitHub Copilot dynamic request headers from `providers/github-copilot-headers.ts`:
+    user-vs-agent `X-Initiator`, `Openai-Intent`, vision-request detection for
+    user/tool-result images, and caller header overrides across Anthropic,
+    OpenAI Responses, and OpenAI Completions paths.
   - HTTP proxy URL resolution with `NO_PROXY` and `npm_config_*` handling,
     unsupported protocol errors, proxy-aware `reqwest` client construction for
     provider, image, Bedrock runtime ConverseStream, Google ADC token-refresh,
@@ -315,10 +323,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1098 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1102 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 921 tests: 1 library test, 289 `provider_core` tests, and
-  631 `provider_live` tests. This is 200 above the 721 direct simple source
+- `ri-llm-provider`: 925 tests: 1 library test, 293 `provider_core` tests, and
+  631 `provider_live` tests. This is 204 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -353,7 +361,7 @@ Current Rust tests: 1098 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1098-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1102-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -377,6 +385,31 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after adding Rust-native
+  `utils/validation.ts` parity for TypeBox/plain JSON-schema validation and
+  coercion keywords, including `allOf`/`oneOf`, object
+  `additionalProperties`, tuple array items, `enum`/`const`, and common
+  scalar/array bounds, plus `utils/overflow.ts` parity that keeps 400/413
+  no-body Cerebras errors as overflow while leaving 429 no-body responses as
+  non-overflow rate-limit candidates, exact `utils/hash.ts` `shortHash`
+  fixtures for ASCII/UTF-16 emoji/foreign Responses item IDs, and
+  `utils/oauth/pkce.ts` verifier/challenge shape plus SHA-256 derivation, and
+  `providers/github-copilot-headers.ts` dynamic headers for OpenAI
+  Responses/Completions while preserving Anthropic Copilot behavior:
+  `cargo fmt --check`,
+  `cargo test -p ri-llm-provider --test provider_core validation_enforces_json_schema_object_array_and_constraint_keywords -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core validation_enforces_combinators_and_additional_property_schemas -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core overflow_matches_provider_error_shapes_without_rate_limit_false_positives -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core overflow_matches_context_overflow_provider_error_corpus -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core json_repair_and_hash_match_core_semantics -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core openai_responses_message_conversion_hashes_foreign_tool_item_ids -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core oauth_pkce_generation_matches_source_shape_and_challenge_derivation -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core openai_responses_and_completions_apply_copilot_dynamic_headers -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core github_copilot_anthropic_client_config_matches_provider_headers -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`, and
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1102 tests.
+- Previous full local verification on 2026-05-21 after adding Rust-native
   `harness/env/nodejs.ts` parity for per-command cwd, shell env, file error
   mapping, callback-error termination, and streaming shell capture cancellation
   behavior, plus `harness/session/repo-utils.ts` fork-position/error case
@@ -435,6 +468,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1098 Rust tests cover the
+- Test parity is not certified by raw count alone: 1102 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
