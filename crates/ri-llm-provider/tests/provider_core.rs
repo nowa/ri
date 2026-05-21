@@ -587,6 +587,419 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
     assert_cost_close("gpt-5.5 total cost", cost.total, 35.5);
 }
 
+#[test]
+fn openai_model_metadata_matches_generated_gpt5_catalog() {
+    let expected_ids = [
+        "gpt-5",
+        "gpt-5-chat-latest",
+        "gpt-5-codex",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-5-pro",
+        "gpt-5.1",
+        "gpt-5.1-chat-latest",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex-mini",
+        "gpt-5.2",
+        "gpt-5.2-chat-latest",
+        "gpt-5.2-codex",
+        "gpt-5.2-pro",
+        "gpt-5.3-chat-latest",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-spark",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.4-pro",
+        "gpt-5.5",
+        "gpt-5.5-pro",
+    ];
+    let model_ids = get_models("openai")
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+    for model_id in expected_ids {
+        assert!(
+            model_ids.contains(&model_id.to_owned()),
+            "OpenAI catalog should expose {model_id}: {model_ids:?}"
+        );
+    }
+
+    for (model_id, reasoning, off_effort, supports_xhigh, context_window, max_tokens, cost) in [
+        (
+            "gpt-5",
+            true,
+            None,
+            false,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5-chat-latest",
+            false,
+            None,
+            false,
+            128_000,
+            16_384,
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5-codex",
+            true,
+            None,
+            false,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5-mini",
+            true,
+            None,
+            false,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 0.25,
+                output: 2.0,
+                cache_read: 0.025,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5-nano",
+            true,
+            None,
+            false,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 0.05,
+                output: 0.4,
+                cache_read: 0.005,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5-pro",
+            true,
+            None,
+            false,
+            400_000,
+            272_000,
+            ModelCost {
+                input: 15.0,
+                output: 120.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.1",
+            true,
+            Some("none"),
+            false,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.13,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.1-chat-latest",
+            true,
+            None,
+            false,
+            128_000,
+            16_384,
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.1-codex",
+            true,
+            None,
+            false,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.1-codex-max",
+            true,
+            None,
+            false,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.1-codex-mini",
+            true,
+            None,
+            false,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 0.25,
+                output: 2.0,
+                cache_read: 0.025,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.2",
+            true,
+            Some("none"),
+            true,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.2-chat-latest",
+            true,
+            None,
+            true,
+            128_000,
+            16_384,
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.2-codex",
+            true,
+            Some("none"),
+            true,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.2-pro",
+            true,
+            None,
+            true,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 21.0,
+                output: 168.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.3-chat-latest",
+            false,
+            None,
+            true,
+            128_000,
+            16_384,
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.3-codex",
+            true,
+            Some("none"),
+            true,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.3-codex-spark",
+            true,
+            None,
+            true,
+            128_000,
+            32_000,
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.4",
+            true,
+            Some("none"),
+            true,
+            272_000,
+            128_000,
+            ModelCost {
+                input: 2.5,
+                output: 15.0,
+                cache_read: 0.25,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.4-mini",
+            true,
+            Some("none"),
+            true,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 0.75,
+                output: 4.5,
+                cache_read: 0.075,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.4-nano",
+            true,
+            Some("none"),
+            true,
+            400_000,
+            128_000,
+            ModelCost {
+                input: 0.2,
+                output: 1.25,
+                cache_read: 0.02,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.4-pro",
+            true,
+            None,
+            true,
+            1_050_000,
+            128_000,
+            ModelCost {
+                input: 30.0,
+                output: 180.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.5",
+            true,
+            Some("none"),
+            true,
+            272_000,
+            128_000,
+            ModelCost {
+                input: 5.0,
+                output: 30.0,
+                cache_read: 0.5,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "gpt-5.5-pro",
+            true,
+            None,
+            true,
+            1_050_000,
+            128_000,
+            ModelCost {
+                input: 30.0,
+                output: 180.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+    ] {
+        let model = get_model("openai", model_id).expect(model_id);
+        assert_eq!(model.api, "openai-responses", "{model_id} api");
+        assert_eq!(model.base_url, "https://api.openai.com/v1");
+        assert_eq!(model.reasoning, reasoning, "{model_id} reasoning");
+        assert_eq!(model.input, vec![InputKind::Text, InputKind::Image]);
+        assert_eq!(model.context_window, context_window, "{model_id} context");
+        assert_eq!(model.max_tokens, max_tokens, "{model_id} output");
+        assert_eq!(model.cost, cost, "{model_id} cost");
+
+        let mut expected_thinking_map =
+            BTreeMap::from([(ThinkingLevel::Off, off_effort.map(str::to_owned))]);
+        if supports_xhigh {
+            expected_thinking_map.insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+        }
+        assert_eq!(
+            model.thinking_level_map, expected_thinking_map,
+            "{model_id} thinking map"
+        );
+    }
+
+    let model = get_model("openai", "gpt-5.5").expect("gpt-5.5");
+    let usage = parse_openai_responses_usage(
+        &json!({
+            "input_tokens": 1_000_000,
+            "output_tokens": 1_000_000,
+            "total_tokens": 2_000_000,
+            "input_tokens_details": { "cached_tokens": 0 }
+        }),
+        &model,
+        Some("priority"),
+    );
+    assert_cost_close("gpt-5.5 priority input cost", usage.cost.input, 12.5);
+    assert_cost_close("gpt-5.5 priority output cost", usage.cost.output, 75.0);
+    assert_cost_close("gpt-5.5 priority total cost", usage.cost.total, 87.5);
+}
+
 #[tokio::test]
 async fn unsupported_xhigh_reasoning_returns_error_message_without_network() {
     for api in ["openai-responses", "openai-completions"] {

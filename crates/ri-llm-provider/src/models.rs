@@ -188,12 +188,30 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("amazon-bedrock", "us.anthropic.claude-opus-4-7"),
     ("openai", "gpt-4o"),
     ("openai", "gpt-4o-mini"),
+    ("openai", "gpt-5"),
+    ("openai", "gpt-5-chat-latest"),
+    ("openai", "gpt-5-codex"),
     ("openai", "gpt-5-mini"),
+    ("openai", "gpt-5-nano"),
+    ("openai", "gpt-5-pro"),
+    ("openai", "gpt-5.1"),
+    ("openai", "gpt-5.1-chat-latest"),
+    ("openai", "gpt-5.1-codex"),
     ("openai", "gpt-5.1-codex-max"),
+    ("openai", "gpt-5.1-codex-mini"),
+    ("openai", "gpt-5.2"),
+    ("openai", "gpt-5.2-chat-latest"),
     ("openai", "gpt-5.2-codex"),
+    ("openai", "gpt-5.2-pro"),
+    ("openai", "gpt-5.3-chat-latest"),
+    ("openai", "gpt-5.3-codex"),
+    ("openai", "gpt-5.3-codex-spark"),
     ("openai", "gpt-5.4"),
     ("openai", "gpt-5.4-mini"),
+    ("openai", "gpt-5.4-nano"),
+    ("openai", "gpt-5.4-pro"),
     ("openai", "gpt-5.5"),
+    ("openai", "gpt-5.5-pro"),
     ("openai-codex", "gpt-5.2"),
     ("openai-codex", "gpt-5.3-codex"),
     ("openai-codex", "gpt-5.3-codex-spark"),
@@ -493,6 +511,10 @@ fn apply_known_model_overrides(model: &mut Model) {
         ensure_image_input(model);
     }
 
+    if model.provider == "openai" && apply_openai_gpt5_generated_metadata(model) {
+        return;
+    }
+
     match (model.provider.as_str(), model.id.as_str()) {
         ("mistral", "mistral-small-2603") | ("mistral", "mistral-small-latest") => {
             model.reasoning = true;
@@ -642,38 +664,6 @@ fn apply_known_model_overrides(model: &mut Model) {
             model.base_url = "https://api.together.ai/v1".to_owned();
         }
         (
-            "openai",
-            "gpt-5.1" | "gpt-5.2" | "gpt-5.3-codex" | "gpt-5.4" | "gpt-5.4-mini" | "gpt-5.4-nano"
-            | "gpt-5.5",
-        ) => {
-            model.reasoning = true;
-            model.thinking_level_map.clear();
-            model
-                .thinking_level_map
-                .insert(ThinkingLevel::Off, Some("none".to_owned()));
-            if model.id != "gpt-5.1" {
-                model
-                    .thinking_level_map
-                    .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
-            }
-            ensure_image_input(model);
-        }
-        (
-            "openai",
-            "gpt-5" | "gpt-5-mini" | "gpt-5-nano" | "gpt-5-pro" | "gpt-5.2-pro" | "gpt-5.4-pro"
-            | "gpt-5.5-pro",
-        ) => {
-            model.reasoning = true;
-            model.thinking_level_map.clear();
-            model.thinking_level_map.insert(ThinkingLevel::Off, None);
-            if model.id.contains(".") && model.id.ends_with("-pro") {
-                model
-                    .thinking_level_map
-                    .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
-            }
-            ensure_image_input(model);
-        }
-        (
             "openai-codex",
             "gpt-5.2"
             | "gpt-5.3-codex"
@@ -726,6 +716,266 @@ fn apply_known_model_overrides(model: &mut Model) {
         }
         _ => {}
     }
+}
+
+fn apply_openai_gpt5_generated_metadata(model: &mut Model) -> bool {
+    let Some((reasoning, off_effort, supports_xhigh, context_window, max_tokens, cost)) =
+        (match model.id.as_str() {
+            "gpt-5" | "gpt-5-codex" | "gpt-5.1-codex" | "gpt-5.1-codex-max" => Some((
+                true,
+                None,
+                false,
+                400_000,
+                128_000,
+                ModelCost {
+                    input: 1.25,
+                    output: 10.0,
+                    cache_read: 0.125,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5-chat-latest" => Some((
+                false,
+                None,
+                false,
+                128_000,
+                16_384,
+                ModelCost {
+                    input: 1.25,
+                    output: 10.0,
+                    cache_read: 0.125,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5-mini" | "gpt-5.1-codex-mini" => Some((
+                true,
+                None,
+                false,
+                400_000,
+                128_000,
+                ModelCost {
+                    input: 0.25,
+                    output: 2.0,
+                    cache_read: 0.025,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5-nano" => Some((
+                true,
+                None,
+                false,
+                400_000,
+                128_000,
+                ModelCost {
+                    input: 0.05,
+                    output: 0.4,
+                    cache_read: 0.005,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5-pro" => Some((
+                true,
+                None,
+                false,
+                400_000,
+                272_000,
+                ModelCost {
+                    input: 15.0,
+                    output: 120.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.1" => Some((
+                true,
+                Some("none"),
+                false,
+                400_000,
+                128_000,
+                ModelCost {
+                    input: 1.25,
+                    output: 10.0,
+                    cache_read: 0.13,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.1-chat-latest" => Some((
+                true,
+                None,
+                false,
+                128_000,
+                16_384,
+                ModelCost {
+                    input: 1.25,
+                    output: 10.0,
+                    cache_read: 0.125,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.2" => Some((
+                true,
+                Some("none"),
+                true,
+                400_000,
+                128_000,
+                ModelCost {
+                    input: 1.75,
+                    output: 14.0,
+                    cache_read: 0.175,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.2-chat-latest" => Some((
+                true,
+                None,
+                true,
+                128_000,
+                16_384,
+                ModelCost {
+                    input: 1.75,
+                    output: 14.0,
+                    cache_read: 0.175,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.2-codex" | "gpt-5.3-codex" => Some((
+                true,
+                Some("none"),
+                true,
+                400_000,
+                128_000,
+                ModelCost {
+                    input: 1.75,
+                    output: 14.0,
+                    cache_read: 0.175,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.2-pro" => Some((
+                true,
+                None,
+                true,
+                400_000,
+                128_000,
+                ModelCost {
+                    input: 21.0,
+                    output: 168.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.3-chat-latest" => Some((
+                false,
+                None,
+                true,
+                128_000,
+                16_384,
+                ModelCost {
+                    input: 1.75,
+                    output: 14.0,
+                    cache_read: 0.175,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.3-codex-spark" => Some((
+                true,
+                None,
+                true,
+                128_000,
+                32_000,
+                ModelCost {
+                    input: 1.75,
+                    output: 14.0,
+                    cache_read: 0.175,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.4" => Some((
+                true,
+                Some("none"),
+                true,
+                272_000,
+                128_000,
+                ModelCost {
+                    input: 2.5,
+                    output: 15.0,
+                    cache_read: 0.25,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.4-mini" => Some((
+                true,
+                Some("none"),
+                true,
+                400_000,
+                128_000,
+                ModelCost {
+                    input: 0.75,
+                    output: 4.5,
+                    cache_read: 0.075,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.4-nano" => Some((
+                true,
+                Some("none"),
+                true,
+                400_000,
+                128_000,
+                ModelCost {
+                    input: 0.2,
+                    output: 1.25,
+                    cache_read: 0.02,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.4-pro" | "gpt-5.5-pro" => Some((
+                true,
+                None,
+                true,
+                1_050_000,
+                128_000,
+                ModelCost {
+                    input: 30.0,
+                    output: 180.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+            )),
+            "gpt-5.5" => Some((
+                true,
+                Some("none"),
+                true,
+                272_000,
+                128_000,
+                ModelCost {
+                    input: 5.0,
+                    output: 30.0,
+                    cache_read: 0.5,
+                    cache_write: 0.0,
+                },
+            )),
+            _ => None,
+        })
+    else {
+        return false;
+    };
+
+    model.reasoning = reasoning;
+    model.thinking_level_map.clear();
+    model
+        .thinking_level_map
+        .insert(ThinkingLevel::Off, off_effort.map(str::to_owned));
+    if supports_xhigh {
+        model
+            .thinking_level_map
+            .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+    }
+    ensure_image_input(model);
+    model.context_window = context_window;
+    model.max_tokens = max_tokens;
+    model.cost = cost;
+    true
 }
 
 fn github_copilot_headers() -> BTreeMap<String, String> {

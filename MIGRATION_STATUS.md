@@ -41,6 +41,8 @@ counterparts that pass.
     source-style provider `reasoningEffort` / Bedrock `reasoning` option
     preservation through Rust `StreamOptions`.
   - Built-in model registry seed and thinking-level helpers, including
+    OpenAI Responses GPT-5 generated-catalog metadata parity for the current
+    GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5 model slice, plus
     OpenAI Codex generated-catalog metadata parity for the six current
     ChatGPT backend models, base URL, context/output windows, image-input
     capability, thinking-level map, and usage cost table.
@@ -427,10 +429,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1187 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1188 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 980 tests: 2 library tests, 347 `provider_core` tests, and
-  631 `provider_live` tests. This is 259 above the 721 direct simple source
+- `ri-llm-provider`: 981 tests: 2 library tests, 348 `provider_core` tests, and
+  631 `provider_live` tests. This is 260 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -700,6 +702,16 @@ This migration is not complete.
   `cargo fmt`,
   `cargo test -p ri-llm-provider --test provider_core cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core cloudflare_ -- --test-threads=1`,
+  `cargo fmt --check`, and `git diff --check` passed.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` OpenAI GPT-5 catalog metadata: Rust now exposes the
+  current OpenAI GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5 generated
+  Responses model slice and maps source reasoning flags, thinking-level maps,
+  context/output windows, image inputs, and non-zero cost table, including
+  priority service-tier cost usage for GPT-5.5:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core openai_model_metadata_matches_generated_gpt5_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_responses_ -- --test-threads=1`,
   `cargo fmt --check`, and `git diff --check` passed.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
@@ -1640,6 +1652,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1187 Rust tests cover the
+- Test parity is not certified by raw count alone: 1188 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
