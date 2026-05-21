@@ -874,6 +874,128 @@ fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
         "https://gateway.ai.cloudflare.com/v1/account-id/gateway-id/openai"
     );
 
+    let gateway_model_ids = get_models("cloudflare-ai-gateway")
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+    for model_id in [
+        "gpt-5.1",
+        "gpt-5.1-codex",
+        "gpt-5.2",
+        "gpt-5.2-codex",
+        "gpt-5.3-codex",
+        "gpt-5.4",
+        "gpt-5.5",
+    ] {
+        assert!(
+            gateway_model_ids.contains(&model_id.to_owned()),
+            "Cloudflare AI Gateway catalog should expose {model_id}: {gateway_model_ids:?}"
+        );
+    }
+
+    for (model_id, context_window, cost, supports_xhigh) in [
+        (
+            "gpt-5.1",
+            400_000,
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.13,
+                cache_write: 0.0,
+            },
+            false,
+        ),
+        (
+            "gpt-5.1-codex",
+            400_000,
+            ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+            false,
+        ),
+        (
+            "gpt-5.2",
+            400_000,
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+            true,
+        ),
+        (
+            "gpt-5.2-codex",
+            400_000,
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+            true,
+        ),
+        (
+            "gpt-5.3-codex",
+            400_000,
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+            true,
+        ),
+        (
+            "gpt-5.4",
+            1_050_000,
+            ModelCost {
+                input: 2.5,
+                output: 15.0,
+                cache_read: 0.25,
+                cache_write: 0.0,
+            },
+            true,
+        ),
+        (
+            "gpt-5.5",
+            1_050_000,
+            ModelCost {
+                input: 5.0,
+                output: 30.0,
+                cache_read: 0.5,
+                cache_write: 0.0,
+            },
+            true,
+        ),
+    ] {
+        let model = get_model("cloudflare-ai-gateway", model_id).expect(model_id);
+        assert_eq!(model.api, "openai-responses", "{model_id} api");
+        assert_eq!(model.base_url, CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL);
+        assert!(model.reasoning, "{model_id} reasoning");
+        assert_eq!(model.input, vec![InputKind::Text, InputKind::Image]);
+        assert_eq!(model.context_window, context_window, "{model_id} context");
+        assert_eq!(model.max_tokens, 128_000, "{model_id} output");
+        assert_eq!(model.cost, cost, "{model_id} cost");
+        let mut expected_thinking_map = BTreeMap::from([(ThinkingLevel::Off, None)]);
+        if supports_xhigh {
+            expected_thinking_map.insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+            assert!(
+                get_supported_thinking_levels(&model).contains(&ThinkingLevel::XHigh),
+                "{model_id} should support xhigh"
+            );
+        } else {
+            assert!(
+                !get_supported_thinking_levels(&model).contains(&ThinkingLevel::XHigh),
+                "{model_id} should not support xhigh"
+            );
+        }
+        assert_eq!(model.thinking_level_map, expected_thinking_map);
+    }
+
     let gateway_anthropic = get_model("cloudflare-ai-gateway", "claude-sonnet-4-5")
         .expect("cloudflare anthropic model");
     assert_eq!(gateway_anthropic.api, "anthropic-messages");

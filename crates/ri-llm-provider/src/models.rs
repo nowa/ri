@@ -270,6 +270,12 @@ const COMMON_MODELS: &[(&str, &str)] = &[
         "workers-ai/@cf/moonshotai/kimi-k2.6",
     ),
     ("cloudflare-ai-gateway", "gpt-5.1"),
+    ("cloudflare-ai-gateway", "gpt-5.1-codex"),
+    ("cloudflare-ai-gateway", "gpt-5.2"),
+    ("cloudflare-ai-gateway", "gpt-5.2-codex"),
+    ("cloudflare-ai-gateway", "gpt-5.3-codex"),
+    ("cloudflare-ai-gateway", "gpt-5.4"),
+    ("cloudflare-ai-gateway", "gpt-5.5"),
     ("cloudflare-ai-gateway", "claude-sonnet-4-5"),
     ("zai", "glm-4.5-air"),
     ("zai", "glm-4.7"),
@@ -385,18 +391,62 @@ fn apply_known_model_overrides(model: &mut Model) {
                 cache_read: 0.16,
                 cache_write: 0.0,
             };
-        } else if model.id == "gpt-5.1" {
+        } else if matches!(
+            model.id.as_str(),
+            "gpt-5.1"
+                | "gpt-5.1-codex"
+                | "gpt-5.2"
+                | "gpt-5.2-codex"
+                | "gpt-5.3-codex"
+                | "gpt-5.4"
+                | "gpt-5.5"
+        ) {
             model.reasoning = true;
             model.thinking_level_map.clear();
             model.thinking_level_map.insert(ThinkingLevel::Off, None);
+            if !matches!(model.id.as_str(), "gpt-5.1" | "gpt-5.1-codex") {
+                model
+                    .thinking_level_map
+                    .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+            }
             ensure_image_input(model);
-            model.context_window = 400_000;
+            model.context_window = if matches!(model.id.as_str(), "gpt-5.4" | "gpt-5.5") {
+                1_050_000
+            } else {
+                400_000
+            };
             model.max_tokens = 128_000;
-            model.cost = ModelCost {
-                input: 1.25,
-                output: 10.0,
-                cache_read: 0.13,
-                cache_write: 0.0,
+            model.cost = match model.id.as_str() {
+                "gpt-5.1" => ModelCost {
+                    input: 1.25,
+                    output: 10.0,
+                    cache_read: 0.13,
+                    cache_write: 0.0,
+                },
+                "gpt-5.1-codex" => ModelCost {
+                    input: 1.25,
+                    output: 10.0,
+                    cache_read: 0.125,
+                    cache_write: 0.0,
+                },
+                "gpt-5.4" => ModelCost {
+                    input: 2.5,
+                    output: 15.0,
+                    cache_read: 0.25,
+                    cache_write: 0.0,
+                },
+                "gpt-5.5" => ModelCost {
+                    input: 5.0,
+                    output: 30.0,
+                    cache_read: 0.5,
+                    cache_write: 0.0,
+                },
+                _ => ModelCost {
+                    input: 1.75,
+                    output: 14.0,
+                    cache_read: 0.175,
+                    cache_write: 0.0,
+                },
             };
         } else if model.id == "claude-sonnet-4-5" {
             model.reasoning = true;

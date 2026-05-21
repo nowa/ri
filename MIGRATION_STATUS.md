@@ -92,7 +92,10 @@ counterparts that pass.
     `{CLOUDFLARE_ACCOUNT_ID}` / `{CLOUDFLARE_GATEWAY_ID}` placeholders before
     OpenAI Responses, OpenAI Completions, and Anthropic passthrough requests,
     matching the Pi client construction path while preserving AI Gateway
-    `cf-aig-authorization` handling.
+    `cf-aig-authorization` handling. Cloudflare AI Gateway model metadata now
+    includes the Pi generated GPT-5.1/GPT-5.1 Codex through GPT-5.5 OpenAI
+    Responses catalog slice with source context/output windows, thinking-level
+    maps, image-input capability, and cost table.
   - Bedrock endpoint/region config helpers plus Converse payload helpers for
     message conversion, Claude thinking fields, GovCloud display omission, and
     application-inference-profile cache points, including image tool-result
@@ -689,6 +692,15 @@ This migration is not complete.
   `cargo fmt --check`, `git diff --check`, and
   `cargo test --workspace -- --list` passed; the list command enumerated 1187
   tests.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` Cloudflare AI Gateway GPT-5 catalog metadata: Rust now
+  exposes the generated GPT-5.1/GPT-5.1 Codex through GPT-5.5 OpenAI Responses
+  entries and maps their source base URL, context/output windows,
+  thinking-level maps, image inputs, and non-zero usage cost table:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core cloudflare_ -- --test-threads=1`,
+  `cargo fmt --check`, and `git diff --check` passed.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
   RFC3339 timestamp values, matching Pi's `new Date(createdAt).getTime()`
