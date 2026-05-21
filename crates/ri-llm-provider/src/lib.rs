@@ -36,6 +36,7 @@ pub mod overflow;
 pub mod session_resources;
 pub mod simple_options;
 pub mod stream;
+pub mod typebox_helpers;
 pub mod types;
 pub mod validation;
 
@@ -72,5 +73,6 @@ pub use overflow::*;
 pub use session_resources::*;
 pub use simple_options::*;
 pub use stream::*;
+pub use typebox_helpers::*;
 pub use types::*;
 pub use validation::*;

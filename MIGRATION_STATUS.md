@@ -63,6 +63,9 @@ counterparts that pass.
     coercion plus `allOf`/`anyOf`/`oneOf`, `enum`/`const`, object
     `additionalProperties`, tuple array items, and common string/number/array
     bounds used by TypeBox/plain JSON-schema tool parameters.
+  - Rust-native `utils/typebox-helpers.ts` `StringEnum` counterpart that
+    builds the source-compatible `{ type: "string", enum, description?,
+    default? }` schema shape for tool parameters without depending on TypeBox.
   - Context-overflow detection with provider-specific error-shape corpus and
     silent/length-stop overflow signals.
   - Environment API key lookup with ordered provider fallback, source-style
@@ -383,10 +386,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1154 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1155 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 953 tests: 2 library tests, 320 `provider_core` tests, and
-  631 `provider_live` tests. This is 232 above the 721 direct simple source
+- `ri-llm-provider`: 954 tests: 2 library tests, 321 `provider_core` tests, and
+  631 `provider_live` tests. This is 233 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -421,7 +424,7 @@ Current Rust tests: 1154 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1154-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1155-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -444,6 +447,16 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-21 after aligning
+  `utils/typebox-helpers.ts`: added `string_enum_schema` and
+  `StringEnumOptions` as a Rust-native counterpart of Pi's `StringEnum`
+  helper, verified it emits the exact provider-friendly string enum JSON-schema
+  shape and works with the Rust tool-argument validator:
+  `cargo test -p ri-llm-provider --test provider_core string_enum_schema_matches_pi_typebox_helper_shape -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`,
+  `cargo test --workspace -- --list` (1155 tests enumerated), and
+  `cargo fmt --check` and `git diff --check` passed.
 - Latest local verification on 2026-05-21 after aligning
   the Pi `cli.ts` binary surface: added the Rust `ri-ai` bin target and CLI
   helpers for `help`, `list`, interactive provider selection, OAuth login
@@ -1133,6 +1146,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1154 Rust tests cover the
+- Test parity is not certified by raw count alone: 1155 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

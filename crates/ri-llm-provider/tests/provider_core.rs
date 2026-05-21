@@ -13340,6 +13340,62 @@ fn validation_coerces_json_schema_primitives() {
 }
 
 #[test]
+fn string_enum_schema_matches_pi_typebox_helper_shape() {
+    let schema = string_enum_schema(
+        ["add", "subtract", "multiply", "divide"],
+        StringEnumOptions::new()
+            .description("The operation to perform")
+            .default_value("add"),
+    );
+
+    assert_eq!(
+        schema,
+        json!({
+            "type": "string",
+            "enum": ["add", "subtract", "multiply", "divide"],
+            "description": "The operation to perform",
+            "default": "add",
+        })
+    );
+    assert_eq!(
+        string_enum_schema(
+            ["red", "blue"],
+            StringEnumOptions::new().description("").default_value(""),
+        ),
+        json!({
+            "type": "string",
+            "enum": ["red", "blue"],
+        })
+    );
+
+    let tool = Tool {
+        name: "calculate".to_owned(),
+        description: "Run a calculation".to_owned(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "operation": schema,
+            },
+            "required": ["operation"],
+        }),
+    };
+    let call = ToolCall {
+        id: "call_enum".to_owned(),
+        name: "calculate".to_owned(),
+        arguments: object(json!({ "operation": "subtract" })),
+        thought_signature: None,
+    };
+    let validated = validate_tool_arguments(&tool, &call).expect("valid enum");
+    assert_eq!(validated["operation"], "subtract");
+
+    let invalid = ToolCall {
+        arguments: object(json!({ "operation": "divide-and-round" })),
+        ..call
+    };
+    assert!(validate_tool_arguments(&tool, &invalid).is_err());
+}
+
+#[test]
 fn validation_matches_ajv_style_plain_schema_coercions() {
     let passing_cases = vec![
         (json!({ "type": "number" }), json!("42"), json!(42.0)),
