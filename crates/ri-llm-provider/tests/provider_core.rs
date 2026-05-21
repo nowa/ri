@@ -16410,6 +16410,50 @@ async fn builtin_openai_codex_provider_retries_sse_rate_limits_before_streaming_
 }
 
 #[tokio::test]
+async fn builtin_openai_codex_provider_retries_sse_network_errors_before_streaming_success() {
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_codex_network_retry\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_codex_network_retry\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Network retry OK\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_codex_network_retry\",\"content\":[{\"type\":\"output_text\",\"text\":\"Network retry OK\"}]}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_codex_network_retry\",\"status\":\"completed\",\"usage\":{\"input_tokens\":6,\"output_tokens\":3,\"total_tokens\":9}}}\n\n",
+    );
+    let (base_url, request_task) =
+        mock_http_disconnect_then_sequence_server(vec![MockHttpSequenceResponse {
+            status: 200,
+            reason: "OK",
+            content_type: "text/event-stream",
+            headers: vec![],
+            body: sse,
+        }])
+        .await;
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.session_id = Some("codex-network-retry-session".to_owned());
+    options.stream.transport = Some(Transport::Sse);
+    options.stream.max_retry_delay_ms = Some(0);
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete after network retry");
+    let requests = request_task.await.expect("request task");
+
+    assert_eq!(text_of(&message), Some("Network retry OK"));
+    assert_eq!(
+        message.response_id.as_deref(),
+        Some("resp_codex_network_retry")
+    );
+    assert_eq!(message.usage.total_tokens, 9);
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
+        assert!(request.contains("\"prompt_cache_key\":\"codex-network-retry-session\""));
+    }
+}
+
+#[tokio::test]
 async fn builtin_openai_codex_provider_respects_abort_flag_while_streaming() {
     let (base_url, request_task) = mock_delayed_sse_server(
         vec![
@@ -18594,6 +18638,81 @@ async fn mock_http_sequence_server(
             let (mut socket, _) = listener.accept().await.expect("accept request");
             let mut request = Vec::new();
             let mut buf = [0u8; 1024];
+            loop {
+                let n = socket.read(&mut buf).await.expect("read request");
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request_is_complete(&request) {
+                    break;
+                }
+            }
+            let mut header_text = format!(
+                "HTTP/1.1 {} {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n",
+                response.status,
+                response.reason,
+                response.content_type,
+                response.body.len(),
+            );
+            for (name, value) in response.headers {
+                header_text.push_str(name);
+                header_text.push_str(": ");
+                header_text.push_str(value);
+                header_text.push_str("\r\n");
+            }
+            header_text.push_str("\r\n");
+            socket
+                .write_all(header_text.as_bytes())
+                .await
+                .expect("write headers");
+            socket
+                .write_all(response.body.as_bytes())
+                .await
+                .expect("write body");
+            requests.push(String::from_utf8_lossy(&request).into_owned());
+        }
+        requests
+    });
+    (format!("http://{addr}"), task)
+}
+
+async fn mock_http_disconnect_then_sequence_server(
+    responses: Vec<MockHttpSequenceResponse>,
+) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let task = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        let (mut socket, _) = listener.accept().await.expect("accept disconnect request");
+        let mut request = Vec::new();
+        let mut buf = [0u8; 1024];
+        loop {
+            let n = socket
+                .read(&mut buf)
+                .await
+                .expect("read disconnect request");
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..n]);
+            if request_is_complete(&request) {
+                break;
+            }
+        }
+        requests.push(String::from_utf8_lossy(&request).into_owned());
+        let _ = socket.shutdown().await;
+
+        for response in responses {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = Vec::new();
             loop {
                 let n = socket.read(&mut buf).await.expect("read request");
                 if n == 0 {

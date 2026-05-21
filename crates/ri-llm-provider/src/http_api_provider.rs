@@ -1374,7 +1374,22 @@ async fn stream_openai_codex_sse_json(
         }
 
         let request = build_json_request(model, options, url, headers, payload.clone())?;
-        let response = request.send().await.map_err(|error| error.to_string())?;
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                let error = error.to_string();
+                let max_retries = openai_codex_max_retries(options);
+                if attempt >= max_retries || error.contains("usage limit") {
+                    return Err(error);
+                }
+                let delay_ms = openai_codex_network_retry_delay_ms(attempt, options);
+                if delay_ms > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                }
+                attempt += 1;
+                continue;
+            }
+        };
         emit_simple_response_hooks(model, options, &response).await?;
         let status = response.status();
         if status.is_success() {
@@ -1395,11 +1410,7 @@ async fn stream_openai_codex_sse_json(
             .map(str::to_owned);
         let body = response.text().await.map_err(|error| error.to_string())?;
         let error = provider_error_from_body(status, &body);
-        let max_retries = options
-            .stream
-            .max_retries
-            .and_then(|value| usize::try_from(value).ok())
-            .unwrap_or(crate::openai_codex_responses::OPENAI_CODEX_MAX_RETRIES);
+        let max_retries = openai_codex_max_retries(options);
         let Some(delay_ms) = openai_codex_retry_delay_ms_with_limits(
             status,
             &error,
@@ -1418,6 +1429,25 @@ async fn stream_openai_codex_sse_json(
         }
         attempt += 1;
     }
+}
+
+fn openai_codex_max_retries(options: &SimpleStreamOptions) -> usize {
+    options
+        .stream
+        .max_retries
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(crate::openai_codex_responses::OPENAI_CODEX_MAX_RETRIES)
+}
+
+fn openai_codex_network_retry_delay_ms(attempt: usize, options: &SimpleStreamOptions) -> u64 {
+    let shift = attempt.min(63) as u32;
+    let multiplier = 1u64.checked_shl(shift).unwrap_or(u64::MAX);
+    let delay_ms =
+        crate::openai_codex_responses::OPENAI_CODEX_BASE_RETRY_DELAY_MS.saturating_mul(multiplier);
+    options
+        .stream
+        .max_retry_delay_ms
+        .map_or(delay_ms, |max| delay_ms.min(max))
 }
 
 async fn stream_openai_responses_sse_response(

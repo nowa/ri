@@ -466,9 +466,11 @@ This migration is not complete.
   counts, and sticky fallback reset; Codex WebSocket provider/protocol errors
   such as `error` events and invalid JSON now remain non-transport failures and
   do not activate SSE fallback, matching Pi's `isCodexNonTransportError`
-  guard, while preserving the original provider-transport diagnostic only on
-  real transport failures:
+  guard; Codex SSE request-send network errors now retry before failing,
+  matching Pi's fetch-error retry path, while preserving the original
+  provider-transport diagnostic only on real transport failures:
   `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_reuses_plain_websocket_without_cached_context -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_retries_sse_network_errors_before_streaming_success -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_keeps_websocket_ -- --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_ -- --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core session_resource_cleanup_removes_openai_codex_websocket_cache_for_session -- --exact --test-threads=1`,
@@ -476,7 +478,7 @@ This migration is not complete.
   `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_reuses_websocket_cached_context_for_session -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
   `cargo test --workspace -- --test-threads=1`,
-  `cargo test --workspace -- --list` (1164 tests enumerated), and
+  `cargo test --workspace -- --list` (1165 tests enumerated), and
   `cargo fmt --check` and `git diff --check` passed.
 - Latest local verification on 2026-05-21 after aligning
   `providers/google.ts` and `providers/google-vertex.ts` native `thinking`
