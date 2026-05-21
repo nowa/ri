@@ -149,6 +149,20 @@ fn local_execution_env_lists_symlinks_as_symlinks() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn local_execution_env_removes_broken_symlinks_without_following_them() {
+    let root = temp_dir();
+    let env = LocalExecutionEnv::new(&root);
+    unix_fs::symlink(root.join("missing-target"), root.join("dangling-link"))
+        .expect("dangling symlink");
+
+    assert!(env.exists("dangling-link").expect("exists"));
+    env.remove("dangling-link", RemoveOptions::default())
+        .expect("remove dangling symlink");
+    assert!(!env.exists("dangling-link").expect("removed"));
+}
+
 #[test]
 fn local_execution_env_read_text_lines_stops_at_requested_limit() {
     let root = temp_dir();

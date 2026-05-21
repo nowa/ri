@@ -383,14 +383,18 @@ impl LocalExecutionEnv {
 
     pub fn remove(&self, path: impl AsRef<Path>, options: RemoveOptions) -> Result<(), FileError> {
         let path = self.resolve(path);
-        if !path.exists() {
-            return if options.force {
-                Ok(())
-            } else {
-                Err(file_error(FileErrorCode::NotFound, "Path not found", &path))
-            };
-        }
-        if path.is_dir() && !path.is_symlink() {
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return if options.force {
+                    Ok(())
+                } else {
+                    Err(file_error(FileErrorCode::NotFound, "Path not found", &path))
+                };
+            }
+            Err(error) => return Err(file_error_from_io(error, &path)),
+        };
+        if metadata.is_dir() {
             if options.recursive {
                 fs::remove_dir_all(&path)
             } else {

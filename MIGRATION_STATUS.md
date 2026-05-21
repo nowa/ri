@@ -405,16 +405,16 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1177 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1178 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 971 tests: 2 library tests, 338 `provider_core` tests, and
   631 `provider_live` tests. This is 250 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 206 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 207 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 56 above the 150 direct simple
+  `resources`, and `session_storage`. This is 57 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -443,7 +443,7 @@ Current Rust tests: 1177 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1177-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1178-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -466,6 +466,15 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-22 after aligning
+  `harness/env/nodejs.ts` remove behavior for symlinks: Rust `remove` now uses
+  symlink metadata so dangling symlinks are removed as paths in their own right,
+  matching Node `rm` instead of being misclassified as missing targets:
+  `cargo test -p ri-agent-core --test execution_env local_execution_env_removes_broken_symlinks_without_following_them -- --test-threads=1`,
+  `cargo test -p ri-agent-core --test execution_env -- --test-threads=1`,
+  `cargo test -p ri-agent-core -- --test-threads=1`, and
+  `cargo test --workspace -- --list` passed; the workspace list enumerated
+  1178 tests.
 - Latest local verification on 2026-05-22 after tightening
   `harness/skills.ts` ignore-file parity: Rust skill loading now keeps `*`
   scoped to individual path components for slash-qualified patterns such as
@@ -1522,6 +1531,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1177 Rust tests cover the
+- Test parity is not certified by raw count alone: 1178 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
