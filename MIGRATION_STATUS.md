@@ -457,9 +457,14 @@ This migration is not complete.
   `providers/openai-codex-responses.ts` session-scoped WebSocket fallback
   behavior: a Codex WebSocket transport failure now marks the request
   `session_id` for direct SSE on later non-SSE requests, matching Pi's
-  `websocketSseFallbackSessions` path while preserving the original
-  provider-transport diagnostic only on the failed WebSocket attempt:
+  `websocketSseFallbackSessions` path; the Rust provider now also exposes and
+  updates source-style WebSocket debug stats/reset state for real provider
+  requests, including created/reused connections, cached-context requests,
+  full/delta request counts, fallback counts, and sticky fallback reset,
+  while preserving the original provider-transport diagnostic only on the
+  failed WebSocket attempt:
   `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_auto_falls_back_to_sse_when_websocket_fails_before_events -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_reuses_websocket_cached_context_for_session -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
   `cargo test --workspace -- --test-threads=1`,
   `cargo test --workspace -- --list` (1161 tests enumerated), and

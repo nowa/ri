@@ -16688,6 +16688,7 @@ async fn builtin_openai_codex_websocket_routes_through_resolved_proxy() {
 
 #[tokio::test]
 async fn builtin_openai_codex_provider_auto_falls_back_to_sse_when_websocket_fails_before_events() {
+    reset_openai_codex_websocket_debug_stats(Some("ws-fallback-session"));
     let sse = concat!(
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fallback\"}}\n\n",
         "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_fallback\"}}\n\n",
@@ -16749,6 +16750,11 @@ async fn builtin_openai_codex_provider_auto_falls_back_to_sse_when_websocket_fai
             .to_ascii_lowercase()
             .contains("openai-beta: responses=experimental")
     );
+    let fallback_stats =
+        get_openai_codex_websocket_debug_stats("ws-fallback-session").expect("fallback stats");
+    assert_eq!(fallback_stats.websocket_failures, 1);
+    assert_eq!(fallback_stats.sse_fallbacks, 1);
+    assert_eq!(fallback_stats.websocket_fallback_active, Some(true));
 
     let second_sse = concat!(
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fallback_2\"}}\n\n",
@@ -16782,10 +16788,16 @@ async fn builtin_openai_codex_provider_auto_falls_back_to_sse_when_websocket_fai
         second_request.starts_with("POST /codex/responses HTTP/1.1"),
         "sticky fallback should skip the websocket handshake and send SSE directly; request={second_request:?}"
     );
+    let sticky_stats =
+        get_openai_codex_websocket_debug_stats("ws-fallback-session").expect("sticky stats");
+    assert_eq!(sticky_stats.websocket_failures, 1);
+    assert_eq!(sticky_stats.sse_fallbacks, 2);
+    assert_eq!(sticky_stats.websocket_fallback_active, Some(true));
 }
 
 #[tokio::test]
 async fn builtin_openai_codex_provider_reuses_websocket_cached_context_for_session() {
+    reset_openai_codex_websocket_debug_stats(Some("ws-cache-session"));
     let responses = vec![
         vec![
             json!({ "type": "response.created", "response": { "id": "resp_1" } }),
@@ -16882,6 +16894,18 @@ async fn builtin_openai_codex_provider_reuses_websocket_cached_context_for_sessi
         "second websocket request should send only the new user input"
     );
     assert_eq!(second_body["input"][0]["role"], "user");
+
+    let stats =
+        get_openai_codex_websocket_debug_stats("ws-cache-session").expect("websocket debug stats");
+    assert_eq!(stats.requests, 2);
+    assert_eq!(stats.connections_created, 1);
+    assert_eq!(stats.connections_reused, 1);
+    assert_eq!(stats.cached_context_requests, 2);
+    assert_eq!(stats.full_context_requests, 1);
+    assert_eq!(stats.delta_requests, 1);
+    assert_eq!(stats.last_input_items, 1);
+    assert_eq!(stats.last_delta_input_items, Some(1));
+    assert_eq!(stats.last_previous_response_id.as_deref(), Some("resp_1"));
 }
 
 #[tokio::test]

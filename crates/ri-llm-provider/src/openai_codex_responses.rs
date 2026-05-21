@@ -5,11 +5,12 @@ use crate::{
     openai_responses::parse_openai_responses_usage,
 };
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::ErrorKind,
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -24,6 +25,11 @@ pub const OPENAI_CODEX_BASE_RETRY_DELAY_MS: u64 = 1000;
 
 const JWT_CLAIM_PATH: &str = "https://api.openai.com/auth";
 const ACCOUNT_ID_ERROR: &str = "Failed to extract accountId from token";
+static OPENAI_CODEX_WS_DEBUG_STATS: LazyLock<
+    Mutex<BTreeMap<String, OpenAICodexWebSocketDebugStats>>,
+> = LazyLock::new(|| Mutex::new(BTreeMap::new()));
+static OPENAI_CODEX_WS_SSE_FALLBACK_SESSIONS: LazyLock<Mutex<BTreeSet<String>>> =
+    LazyLock::new(|| Mutex::new(BTreeSet::new()));
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OpenAICodexResponsesPayloadOptions {
@@ -65,6 +71,83 @@ pub struct OpenAICodexWebSocketDebugStats {
     pub sse_fallbacks: u64,
     pub websocket_fallback_active: Option<bool>,
     pub last_websocket_error: Option<String>,
+}
+
+pub fn get_openai_codex_websocket_debug_stats(
+    session_id: &str,
+) -> Option<OpenAICodexWebSocketDebugStats> {
+    OPENAI_CODEX_WS_DEBUG_STATS.lock().get(session_id).cloned()
+}
+
+pub fn reset_openai_codex_websocket_debug_stats(session_id: Option<&str>) {
+    if let Some(session_id) = session_id {
+        OPENAI_CODEX_WS_DEBUG_STATS.lock().remove(session_id);
+        OPENAI_CODEX_WS_SSE_FALLBACK_SESSIONS
+            .lock()
+            .remove(session_id);
+    } else {
+        OPENAI_CODEX_WS_DEBUG_STATS.lock().clear();
+        OPENAI_CODEX_WS_SSE_FALLBACK_SESSIONS.lock().clear();
+    }
+}
+
+pub fn openai_codex_websocket_sse_fallback_active(session_id: Option<&str>) -> bool {
+    let Some(session_id) = session_id else {
+        return false;
+    };
+    OPENAI_CODEX_WS_SSE_FALLBACK_SESSIONS
+        .lock()
+        .contains(session_id)
+}
+
+pub fn record_openai_codex_websocket_request_stats_for_session(
+    session_id: Option<&str>,
+    request: &Value,
+    reused_connection: bool,
+    use_cached_context: bool,
+) {
+    if let Some(session_id) = session_id {
+        update_openai_codex_websocket_debug_stats(session_id, |stats| {
+            record_openai_codex_websocket_request_stats(
+                stats,
+                request,
+                reused_connection,
+                use_cached_context,
+            );
+        });
+    }
+}
+
+pub fn record_openai_codex_websocket_sse_fallback_for_session(session_id: Option<&str>) {
+    if let Some(session_id) = session_id {
+        let fallback_active = openai_codex_websocket_sse_fallback_active(Some(session_id));
+        update_openai_codex_websocket_debug_stats(session_id, |stats| {
+            record_openai_codex_websocket_sse_fallback(stats, fallback_active);
+        });
+    }
+}
+
+pub fn record_openai_codex_websocket_failure_for_session(
+    session_id: Option<&str>,
+    error: impl ToString,
+) {
+    if let Some(session_id) = session_id {
+        OPENAI_CODEX_WS_SSE_FALLBACK_SESSIONS
+            .lock()
+            .insert(session_id.to_owned());
+        update_openai_codex_websocket_debug_stats(session_id, |stats| {
+            record_openai_codex_websocket_failure(stats, error.to_string());
+        });
+    }
+}
+
+fn update_openai_codex_websocket_debug_stats(
+    session_id: &str,
+    update: impl FnOnce(&mut OpenAICodexWebSocketDebugStats),
+) {
+    let mut all_stats = OPENAI_CODEX_WS_DEBUG_STATS.lock();
+    let stats = all_stats.entry(session_id.to_owned()).or_default();
+    update(stats);
 }
 
 pub fn build_openai_codex_responses_payload(

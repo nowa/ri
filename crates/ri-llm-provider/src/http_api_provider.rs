@@ -39,7 +39,11 @@ use crate::{
         build_openai_codex_cached_websocket_request_body, build_openai_codex_responses_payload,
         build_openai_codex_sse_headers, build_openai_codex_websocket_headers,
         extract_openai_codex_account_id, openai_codex_retry_delay_ms_with_limits,
-        resolve_openai_codex_url, resolve_openai_codex_websocket_url,
+        openai_codex_websocket_sse_fallback_active,
+        record_openai_codex_websocket_failure_for_session,
+        record_openai_codex_websocket_request_stats_for_session,
+        record_openai_codex_websocket_sse_fallback_for_session, resolve_openai_codex_url,
+        resolve_openai_codex_websocket_url,
     },
     openai_completions::{
         OpenAICompletionsPayloadOptions, OpenAICompletionsStreamProcessor,
@@ -59,13 +63,11 @@ use crate::{
 use futures::StreamExt;
 use serde_json::{Map, Value};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     sync::{Arc, OnceLock, atomic::Ordering},
 };
 
 static OPENAI_CODEX_WS_CACHE: OnceLock<tokio::sync::Mutex<BTreeMap<String, CachedCodexWebSocket>>> =
-    OnceLock::new();
-static OPENAI_CODEX_WS_SSE_FALLBACK_SESSIONS: OnceLock<tokio::sync::Mutex<BTreeSet<String>>> =
     OnceLock::new();
 const BUILTIN_API_PROVIDER_SOURCE_ID: &str = "builtin-http";
 
@@ -854,7 +856,10 @@ fn spawn_openai_codex_responses_request(
         let transport = options.stream.transport.unwrap_or(Transport::Auto);
         let session_id = options.stream.session_id.clone();
         let websocket_disabled_for_session = transport != Transport::Sse
-            && codex_ws_sse_fallback_active(session_id.as_deref()).await;
+            && openai_codex_websocket_sse_fallback_active(session_id.as_deref());
+        if websocket_disabled_for_session {
+            record_openai_codex_websocket_sse_fallback_for_session(session_id.as_deref());
+        }
         if transport != Transport::Sse && !websocket_disabled_for_session {
             let mut websocket_started = false;
             match stream_openai_codex_websocket_json(
@@ -871,7 +876,10 @@ fn spawn_openai_codex_responses_request(
             {
                 Ok(()) => return,
                 Err(error) if websocket_started => {
-                    record_codex_ws_failure(session_id.as_deref()).await;
+                    record_openai_codex_websocket_failure_for_session(
+                        session_id.as_deref(),
+                        &error,
+                    );
                     append_assistant_message_diagnostic(
                         &mut output,
                         provider_transport_failure_diagnostic(
@@ -886,7 +894,10 @@ fn spawn_openai_codex_responses_request(
                     return;
                 }
                 Err(error) => {
-                    record_codex_ws_failure(session_id.as_deref()).await;
+                    record_openai_codex_websocket_failure_for_session(
+                        session_id.as_deref(),
+                        &error,
+                    );
                     append_assistant_message_diagnostic(
                         &mut output,
                         provider_transport_failure_diagnostic(
@@ -897,6 +908,7 @@ fn spawn_openai_codex_responses_request(
                             payload.to_string().len(),
                         ),
                     );
+                    record_openai_codex_websocket_sse_fallback_for_session(session_id.as_deref());
                 }
             }
         }
@@ -1135,6 +1147,7 @@ async fn stream_openai_codex_websocket_json(
     } else {
         None
     };
+    let reused_connection = cached.is_some();
     let (mut socket, continuation) = if let Some(cached) = cached {
         (cached.socket, cached.continuation)
     } else {
@@ -1147,6 +1160,12 @@ async fn stream_openai_codex_websocket_json(
         build_openai_codex_cached_websocket_request_body(payload, None)
     };
     let mut request_body = cached_request.body;
+    record_openai_codex_websocket_request_stats_for_session(
+        session_id.as_deref(),
+        &request_body,
+        reused_connection,
+        use_cached_context,
+    );
     insert_object_field(
         &mut request_body,
         "type",
@@ -1667,29 +1686,6 @@ async fn stream_mistral_sse_json(
 
 fn codex_ws_cache() -> &'static tokio::sync::Mutex<BTreeMap<String, CachedCodexWebSocket>> {
     OPENAI_CODEX_WS_CACHE.get_or_init(|| tokio::sync::Mutex::new(BTreeMap::new()))
-}
-
-fn codex_ws_sse_fallback_sessions() -> &'static tokio::sync::Mutex<BTreeSet<String>> {
-    OPENAI_CODEX_WS_SSE_FALLBACK_SESSIONS.get_or_init(|| tokio::sync::Mutex::new(BTreeSet::new()))
-}
-
-async fn codex_ws_sse_fallback_active(session_id: Option<&str>) -> bool {
-    let Some(session_id) = session_id else {
-        return false;
-    };
-    codex_ws_sse_fallback_sessions()
-        .lock()
-        .await
-        .contains(session_id)
-}
-
-async fn record_codex_ws_failure(session_id: Option<&str>) {
-    if let Some(session_id) = session_id {
-        codex_ws_sse_fallback_sessions()
-            .lock()
-            .await
-            .insert(session_id.to_owned());
-    }
 }
 
 fn insert_object_field(value: &mut Value, key: &str, field: Value) {
