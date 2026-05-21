@@ -73,9 +73,10 @@ TypeScript source, Markdown files, `Cargo.toml`, or test names to prove
 coverage should not be added. Coverage claims should come from behavior tests,
 gated live tests, and explicit notes in [MIGRATION_STATUS.md](MIGRATION_STATUS.md).
 
-This migration is still not certified complete by count alone. Strict external
-parity still requires running the gated provider live/E2E matrix with real
-credentials, local model services where applicable, and manual OAuth flows.
+The Rust-representable local migration has no known remaining Pi exact-case
+gap, but it is not externally certified by count alone. Strict provider parity
+still requires running the gated live/E2E matrix with real credentials, local
+model services where applicable, and manual OAuth flows.
 
 ## Features
 

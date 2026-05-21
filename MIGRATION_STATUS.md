@@ -504,22 +504,30 @@ Current Rust tests: 1208 enumerated by `cargo test --workspace -- --list`.
 
 ## Completion Audit
 
-This migration is not complete.
+The Rust-representable local migration work has no known remaining Pi exact-case
+gap after the 2026-05-22 source-by-source audit of `packages/ai` and
+`packages/agent`.
 
 - Local behavior-test coverage is substantially broader than the original
-  baseline, but strict external proof is still missing for the full provider
-  live matrix with real credentials, local model services, and manual browser or
-  device OAuth flows.
-- Remaining provider risk is case-by-case semantic parity for provider-specific
-  payload transforms, streaming edge cases, OAuth refresh/writeback behavior,
-  image API networking, proxy behavior, manual live OAuth CLI execution, and
-  live E2E flows that cannot be certified by default-off gated tests alone.
-- Remaining agent risk is case-by-case semantic parity for advanced abort/error
-  termination paths, async listener settlement, lifecycle hook ordering, and
-  session/harness integration edge cases even where Rust behavior tests now
-  cover the main contracts. High-level compaction and branch-summary
-  persistence hooks have direct Rust behavior coverage, including hook removal,
-  supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+  baseline, and the current provider and agent implementation slices have
+  direct behavior coverage for the Pi cases that can be verified without live
+  provider credentials or manual browser/device OAuth.
+- Strict external proof is still missing for the full provider live matrix with
+  real credentials, local model services, and manual browser or device OAuth
+  flows. The default-off gated live tests exercise the required paths when the
+  relevant environment is supplied, but a default local run cannot certify those
+  external services.
+- Provider parity is locally covered for payload transforms, streaming deltas,
+  usage accounting, cache behavior, response IDs, image inputs/outputs, error
+  mapping, proxy routing, OAuth refresh/writeback helpers, and provider-specific
+  model metadata. Remaining risk is external provider behavior drift that only
+  the gated live matrix can prove.
+- Agent-core parity is locally covered for advanced loop control, termination
+  paths, before/after lifecycle hooks, async listener settlement, queue
+  semantics, compaction/branch summaries, JSONL/session storage, resources,
+  skills, prompt templates, truncation, and local execution environment
+  behavior. Remaining risk is integration drift outside the checked local
+  harness contracts.
 - Latest local verification on 2026-05-22 after aligning Pi
   `total-tokens.test.ts` live usage parity: Rust total-usage live tests now use
   the Pi source model/route choices for OpenAI Responses (`openai-responses`
@@ -1974,7 +1982,7 @@ This migration is not complete.
 
 ## Known Missing Work
 
-This migration is not complete.
+This migration is locally complete but not externally certified.
 
 - Strict provider live/E2E completion still requires running the gated provider
   matrix with real API keys, provider-specific environment configuration,
@@ -1982,14 +1990,6 @@ This migration is not complete.
 - Manual interactive OAuth proof still requires real Anthropic callback,
   GitHub Copilot device, and OpenAI Codex callback login flows with
   `RI_LIVE_PROVIDER_TESTS=1` and `RI_LIVE_OAUTH_INTERACTIVE_TESTS=1`.
-- Provider-specific parity still needs continued source-by-source review for
-  edge transforms, streaming deltas, usage accounting, cache behavior,
-  response-id handling, image inputs/outputs, error mapping, and proxy routing
-  across all providers.
-- Agent-core parity still needs continued case-by-case review for termination
-  edge cases, before/after lifecycle hook ordering, async listener settlement,
-  and session/harness integration behavior outside the covered high-level
-  compaction and branch-summary hook contracts.
 - Test parity is not certified by raw count alone: 1208 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
