@@ -15244,7 +15244,9 @@ async fn session_resource_cleanup_removes_openai_codex_websocket_cache_for_sessi
     let first_request = first_request_task.await.expect("first request task");
     assert_eq!(first_request.messages.len(), 1);
 
-    let report = cleanup_session_resources(Some(session_id)).await;
+    let report = cleanup_session_resources(Some(session_id))
+        .await
+        .expect("cleanup session resources");
     assert_eq!(report.openai_codex_websocket_sessions, 1);
     assert_eq!(report.cleaned_count(), 1);
 
@@ -15288,8 +15290,88 @@ async fn session_resource_cleanup_removes_openai_codex_websocket_cache_for_sessi
         "cleanup must remove the cached continuation for the session"
     );
 
-    let report = cleanup_session_resources(Some(session_id)).await;
+    let report = cleanup_session_resources(Some(session_id))
+        .await
+        .expect("cleanup session resources again");
     assert_eq!(report.openai_codex_websocket_sessions, 1);
+}
+
+#[tokio::test]
+async fn session_resource_cleanup_runs_registered_hooks_and_aggregates_errors() {
+    let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+    let ok_calls = calls.clone();
+    let ok_registration = register_session_resource_cleanup(move |session_id| {
+        ok_calls
+            .lock()
+            .expect("calls lock")
+            .push(format!("ok:{}", session_id.unwrap_or("<all>")));
+        Ok(())
+    });
+    let first_error_calls = calls.clone();
+    let first_error_registration = register_session_resource_cleanup(move |session_id| {
+        first_error_calls
+            .lock()
+            .expect("calls lock")
+            .push(format!("err1:{}", session_id.unwrap_or("<all>")));
+        Err("first cleanup failed".to_owned())
+    });
+    let second_error_calls = calls.clone();
+    let second_error_registration = register_session_resource_cleanup(move |session_id| {
+        second_error_calls
+            .lock()
+            .expect("calls lock")
+            .push(format!("err2:{}", session_id.unwrap_or("<all>")));
+        Err("second cleanup failed".to_owned())
+    });
+
+    let error = cleanup_session_resources(Some("registered-session"))
+        .await
+        .expect_err("registered cleanup failures should aggregate");
+    assert_eq!(
+        error.errors,
+        vec![
+            "first cleanup failed".to_owned(),
+            "second cleanup failed".to_owned()
+        ]
+    );
+    assert_eq!(
+        calls.lock().expect("calls lock").as_slice(),
+        [
+            "ok:registered-session",
+            "err1:registered-session",
+            "err2:registered-session"
+        ]
+    );
+
+    drop(first_error_registration);
+    drop(second_error_registration);
+    let report = cleanup_session_resources(None)
+        .await
+        .expect("remaining registered cleanup succeeds");
+    let _ = report.cleaned_count();
+    assert_eq!(
+        calls.lock().expect("calls lock").as_slice(),
+        [
+            "ok:registered-session",
+            "err1:registered-session",
+            "err2:registered-session",
+            "ok:<all>"
+        ]
+    );
+
+    drop(ok_registration);
+    cleanup_session_resources(Some("registered-session"))
+        .await
+        .expect("dropping registration unregisters cleanup");
+    assert_eq!(
+        calls.lock().expect("calls lock").as_slice(),
+        [
+            "ok:registered-session",
+            "err1:registered-session",
+            "err2:registered-session",
+            "ok:<all>"
+        ]
+    );
 }
 
 #[tokio::test]

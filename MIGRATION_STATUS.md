@@ -141,11 +141,13 @@ counterparts that pass.
     service-tier usage cost resolution. WebSocket transport fallback now writes
     pi-shaped `provider_transport_failure` diagnostics with nested `error` and
     `details` fields.
-  - Session-scoped provider resource cleanup now covers the OpenAI Codex
-    WebSocket session cache. This is the Rust-native counterpart of
-    `session-resources.ts`: callers explicitly await `cleanup_session_resources`
-    for one session or all sessions, and cached Codex WebSocket continuations
-    are removed before later requests can reuse stale context.
+  - Session-scoped provider resource cleanup now covers both the OpenAI Codex
+    WebSocket session cache and source-style registered cleanup hooks. This is
+    the Rust-native counterpart of `session-resources.ts`: callers explicitly
+    await `cleanup_session_resources` for one session or all sessions, cached
+    Codex WebSocket continuations are removed before later requests can reuse
+    stale context, registered cleanup hooks all run, errors are aggregated in a
+    `Result`, and cleanup registrations unregister on drop.
   - GitHub Copilot OAuth helpers for device-flow request construction,
     slow-down-aware polling intervals, enterprise domain normalization,
     Copilot token refresh headers, base-URL derivation, proxy-aware async
@@ -376,10 +378,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1137 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1138 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 936 tests: 1 library test, 304 `provider_core` tests, and
-  631 `provider_live` tests. This is 215 above the 721 direct simple source
+- `ri-llm-provider`: 937 tests: 1 library test, 305 `provider_core` tests, and
+  631 `provider_live` tests. This is 216 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -414,7 +416,7 @@ Current Rust tests: 1137 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1137-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1138-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -437,7 +439,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning
+- Latest local verification on 2026-05-21 after completing
+  `session-resources.ts` registry parity: Rust now exposes registered
+  session-resource cleanup hooks, runs all hooks for a session/all sessions,
+  aggregates hook failures in a `Result`, unregisters hooks via a drop guard,
+  and still reports OpenAI Codex WebSocket cache cleanup counts:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core session_resource_cleanup_runs_registered_hooks_and_aggregates_errors -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core session_resource_cleanup_ -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`, and
+  `cargo test --workspace -- --list` (1138 tests enumerated) passed.
+- Previous local verification on 2026-05-21 after aligning
   `providers/cloudflare.ts` base-URL placeholder semantics: only source-style
   uppercase env placeholders such as `{CLOUDFLARE_ACCOUNT_ID}` are substituted,
   while non-matching or malformed brace segments remain literal:
@@ -1000,6 +1014,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1137 Rust tests cover the
+- Test parity is not certified by raw count alone: 1138 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
