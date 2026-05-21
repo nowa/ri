@@ -1,7 +1,6 @@
 use super::Skill;
 
-pub const DEFAULT_SYSTEM_PROMPT: &str =
-    "You are a helpful AI assistant with access to tools and project context.";
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a helpful assistant.";
 
 pub fn system_prompt_with_context(base: &str, context: impl AsRef<str>) -> String {
     let context = context.as_ref();

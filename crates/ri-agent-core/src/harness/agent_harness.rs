@@ -3,7 +3,7 @@ use crate::{
     harness::{
         BranchMoveSummary, BranchSummaryResult, CollectEntriesResult, CompactionDetails,
         CompactionPreparation, CompactionResult, CompactionThresholdSettings, CustomMessageContent,
-        LocalExecutionEnv, PromptTemplate, Session, SessionTreeEntry, Skill,
+        DEFAULT_SYSTEM_PROMPT, LocalExecutionEnv, PromptTemplate, Session, SessionTreeEntry, Skill,
         collect_entries_for_branch_summary, compact as compact_prepared_session,
         convert_session_messages_to_llm, format_prompt_template_invocation,
         format_skill_invocation, generate_branch_summary, prepare_compaction,
@@ -506,7 +506,7 @@ impl AgentHarnessOptions {
             session,
             model,
             thinking_level: ThinkingLevel::Off,
-            system_prompt: String::new(),
+            system_prompt: DEFAULT_SYSTEM_PROMPT.to_owned(),
             system_prompt_provider: None,
             stream_options: SimpleStreamOptions::default(),
             get_api_key_and_headers: None,

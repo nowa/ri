@@ -177,6 +177,35 @@ fn agent_harness_constructs_and_exposes_queue_modes() {
     assert_eq!(harness.session().metadata_id(), session.metadata_id());
 }
 
+#[tokio::test]
+async fn agent_harness_uses_pi_default_system_prompt() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    let captured = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured_ref = captured.clone();
+    registration.set_responses(vec![faux_response_factory(move |context, _, _, _| {
+        captured_ref.lock().expect("mutex").push(
+            context
+                .system_prompt
+                .clone()
+                .expect("system prompt should be present"),
+        );
+        faux_assistant_message("done", Default::default())
+    })]);
+    let harness = AgentHarness::new(AgentHarnessOptions::new(
+        test_env(),
+        Session::new(InMemorySessionStorage::new()),
+        registration.get_model(),
+    ));
+
+    harness.prompt("hello").await.expect("prompt");
+
+    assert_eq!(
+        *captured.lock().expect("mutex"),
+        vec![DEFAULT_SYSTEM_PROMPT.to_owned()]
+    );
+    registration.unregister();
+}
+
 #[test]
 fn agent_harness_resources_getters_clone_and_emit_update_events() {
     let model = Model::faux("resources-api", "resources-provider", "resources-model");
