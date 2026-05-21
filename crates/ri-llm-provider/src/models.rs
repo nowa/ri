@@ -219,6 +219,30 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("openai-codex", "gpt-5.4-mini"),
     ("openai-codex", "gpt-5.5"),
     ("azure-openai-responses", "gpt-4o-mini"),
+    ("azure-openai-responses", "gpt-5"),
+    ("azure-openai-responses", "gpt-5-chat-latest"),
+    ("azure-openai-responses", "gpt-5-codex"),
+    ("azure-openai-responses", "gpt-5-mini"),
+    ("azure-openai-responses", "gpt-5-nano"),
+    ("azure-openai-responses", "gpt-5-pro"),
+    ("azure-openai-responses", "gpt-5.1"),
+    ("azure-openai-responses", "gpt-5.1-chat-latest"),
+    ("azure-openai-responses", "gpt-5.1-codex"),
+    ("azure-openai-responses", "gpt-5.1-codex-max"),
+    ("azure-openai-responses", "gpt-5.1-codex-mini"),
+    ("azure-openai-responses", "gpt-5.2"),
+    ("azure-openai-responses", "gpt-5.2-chat-latest"),
+    ("azure-openai-responses", "gpt-5.2-codex"),
+    ("azure-openai-responses", "gpt-5.2-pro"),
+    ("azure-openai-responses", "gpt-5.3-chat-latest"),
+    ("azure-openai-responses", "gpt-5.3-codex"),
+    ("azure-openai-responses", "gpt-5.3-codex-spark"),
+    ("azure-openai-responses", "gpt-5.4"),
+    ("azure-openai-responses", "gpt-5.4-mini"),
+    ("azure-openai-responses", "gpt-5.4-nano"),
+    ("azure-openai-responses", "gpt-5.4-pro"),
+    ("azure-openai-responses", "gpt-5.5"),
+    ("azure-openai-responses", "gpt-5.5-pro"),
     ("github-copilot", "gpt-4o"),
     ("github-copilot", "gpt-5-mini"),
     ("github-copilot", "gpt-5.2-codex"),
@@ -514,6 +538,11 @@ fn apply_known_model_overrides(model: &mut Model) {
     if model.provider == "openai" && apply_openai_gpt5_generated_metadata(model) {
         return;
     }
+    if model.provider == "azure-openai-responses"
+        && apply_azure_openai_gpt5_generated_metadata(model)
+    {
+        return;
+    }
 
     match (model.provider.as_str(), model.id.as_str()) {
         ("mistral", "mistral-small-2603") | ("mistral", "mistral-small-latest") => {
@@ -718,264 +747,293 @@ fn apply_known_model_overrides(model: &mut Model) {
     }
 }
 
+struct Gpt5GeneratedMetadata {
+    reasoning: bool,
+    openai_off_effort: Option<&'static str>,
+    supports_xhigh: bool,
+    context_window: u64,
+    max_tokens: u64,
+    cost: ModelCost,
+}
+
+fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
+    match model_id {
+        "gpt-5" | "gpt-5-codex" | "gpt-5.1-codex" | "gpt-5.1-codex-max" => {
+            Some(Gpt5GeneratedMetadata {
+                reasoning: true,
+                openai_off_effort: None,
+                supports_xhigh: false,
+                context_window: 400_000,
+                max_tokens: 128_000,
+                cost: ModelCost {
+                    input: 1.25,
+                    output: 10.0,
+                    cache_read: 0.125,
+                    cache_write: 0.0,
+                },
+            })
+        }
+        "gpt-5-chat-latest" => Some(Gpt5GeneratedMetadata {
+            reasoning: false,
+            openai_off_effort: None,
+            supports_xhigh: false,
+            context_window: 128_000,
+            max_tokens: 16_384,
+            cost: ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5-mini" | "gpt-5.1-codex-mini" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: None,
+            supports_xhigh: false,
+            context_window: 400_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 0.25,
+                output: 2.0,
+                cache_read: 0.025,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5-nano" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: None,
+            supports_xhigh: false,
+            context_window: 400_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 0.05,
+                output: 0.4,
+                cache_read: 0.005,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5-pro" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: None,
+            supports_xhigh: false,
+            context_window: 400_000,
+            max_tokens: 272_000,
+            cost: ModelCost {
+                input: 15.0,
+                output: 120.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.1" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: Some("none"),
+            supports_xhigh: false,
+            context_window: 400_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.13,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.1-chat-latest" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: None,
+            supports_xhigh: false,
+            context_window: 128_000,
+            max_tokens: 16_384,
+            cost: ModelCost {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.2" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: Some("none"),
+            supports_xhigh: true,
+            context_window: 400_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.2-chat-latest" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: None,
+            supports_xhigh: true,
+            context_window: 128_000,
+            max_tokens: 16_384,
+            cost: ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.2-codex" | "gpt-5.3-codex" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: Some("none"),
+            supports_xhigh: true,
+            context_window: 400_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.2-pro" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: None,
+            supports_xhigh: true,
+            context_window: 400_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 21.0,
+                output: 168.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.3-chat-latest" => Some(Gpt5GeneratedMetadata {
+            reasoning: false,
+            openai_off_effort: None,
+            supports_xhigh: true,
+            context_window: 128_000,
+            max_tokens: 16_384,
+            cost: ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.3-codex-spark" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: None,
+            supports_xhigh: true,
+            context_window: 128_000,
+            max_tokens: 32_000,
+            cost: ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.4" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: Some("none"),
+            supports_xhigh: true,
+            context_window: 272_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 2.5,
+                output: 15.0,
+                cache_read: 0.25,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.4-mini" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: Some("none"),
+            supports_xhigh: true,
+            context_window: 400_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 0.75,
+                output: 4.5,
+                cache_read: 0.075,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.4-nano" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: Some("none"),
+            supports_xhigh: true,
+            context_window: 400_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 0.2,
+                output: 1.25,
+                cache_read: 0.02,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.4-pro" | "gpt-5.5-pro" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: None,
+            supports_xhigh: true,
+            context_window: 1_050_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 30.0,
+                output: 180.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        }),
+        "gpt-5.5" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: Some("none"),
+            supports_xhigh: true,
+            context_window: 272_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 5.0,
+                output: 30.0,
+                cache_read: 0.5,
+                cache_write: 0.0,
+            },
+        }),
+        _ => None,
+    }
+}
+
 fn apply_openai_gpt5_generated_metadata(model: &mut Model) -> bool {
-    let Some((reasoning, off_effort, supports_xhigh, context_window, max_tokens, cost)) =
-        (match model.id.as_str() {
-            "gpt-5" | "gpt-5-codex" | "gpt-5.1-codex" | "gpt-5.1-codex-max" => Some((
-                true,
-                None,
-                false,
-                400_000,
-                128_000,
-                ModelCost {
-                    input: 1.25,
-                    output: 10.0,
-                    cache_read: 0.125,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5-chat-latest" => Some((
-                false,
-                None,
-                false,
-                128_000,
-                16_384,
-                ModelCost {
-                    input: 1.25,
-                    output: 10.0,
-                    cache_read: 0.125,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5-mini" | "gpt-5.1-codex-mini" => Some((
-                true,
-                None,
-                false,
-                400_000,
-                128_000,
-                ModelCost {
-                    input: 0.25,
-                    output: 2.0,
-                    cache_read: 0.025,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5-nano" => Some((
-                true,
-                None,
-                false,
-                400_000,
-                128_000,
-                ModelCost {
-                    input: 0.05,
-                    output: 0.4,
-                    cache_read: 0.005,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5-pro" => Some((
-                true,
-                None,
-                false,
-                400_000,
-                272_000,
-                ModelCost {
-                    input: 15.0,
-                    output: 120.0,
-                    cache_read: 0.0,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.1" => Some((
-                true,
-                Some("none"),
-                false,
-                400_000,
-                128_000,
-                ModelCost {
-                    input: 1.25,
-                    output: 10.0,
-                    cache_read: 0.13,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.1-chat-latest" => Some((
-                true,
-                None,
-                false,
-                128_000,
-                16_384,
-                ModelCost {
-                    input: 1.25,
-                    output: 10.0,
-                    cache_read: 0.125,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.2" => Some((
-                true,
-                Some("none"),
-                true,
-                400_000,
-                128_000,
-                ModelCost {
-                    input: 1.75,
-                    output: 14.0,
-                    cache_read: 0.175,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.2-chat-latest" => Some((
-                true,
-                None,
-                true,
-                128_000,
-                16_384,
-                ModelCost {
-                    input: 1.75,
-                    output: 14.0,
-                    cache_read: 0.175,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.2-codex" | "gpt-5.3-codex" => Some((
-                true,
-                Some("none"),
-                true,
-                400_000,
-                128_000,
-                ModelCost {
-                    input: 1.75,
-                    output: 14.0,
-                    cache_read: 0.175,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.2-pro" => Some((
-                true,
-                None,
-                true,
-                400_000,
-                128_000,
-                ModelCost {
-                    input: 21.0,
-                    output: 168.0,
-                    cache_read: 0.0,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.3-chat-latest" => Some((
-                false,
-                None,
-                true,
-                128_000,
-                16_384,
-                ModelCost {
-                    input: 1.75,
-                    output: 14.0,
-                    cache_read: 0.175,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.3-codex-spark" => Some((
-                true,
-                None,
-                true,
-                128_000,
-                32_000,
-                ModelCost {
-                    input: 1.75,
-                    output: 14.0,
-                    cache_read: 0.175,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.4" => Some((
-                true,
-                Some("none"),
-                true,
-                272_000,
-                128_000,
-                ModelCost {
-                    input: 2.5,
-                    output: 15.0,
-                    cache_read: 0.25,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.4-mini" => Some((
-                true,
-                Some("none"),
-                true,
-                400_000,
-                128_000,
-                ModelCost {
-                    input: 0.75,
-                    output: 4.5,
-                    cache_read: 0.075,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.4-nano" => Some((
-                true,
-                Some("none"),
-                true,
-                400_000,
-                128_000,
-                ModelCost {
-                    input: 0.2,
-                    output: 1.25,
-                    cache_read: 0.02,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.4-pro" | "gpt-5.5-pro" => Some((
-                true,
-                None,
-                true,
-                1_050_000,
-                128_000,
-                ModelCost {
-                    input: 30.0,
-                    output: 180.0,
-                    cache_read: 0.0,
-                    cache_write: 0.0,
-                },
-            )),
-            "gpt-5.5" => Some((
-                true,
-                Some("none"),
-                true,
-                272_000,
-                128_000,
-                ModelCost {
-                    input: 5.0,
-                    output: 30.0,
-                    cache_read: 0.5,
-                    cache_write: 0.0,
-                },
-            )),
-            _ => None,
-        })
-    else {
+    let Some(metadata) = gpt5_generated_metadata(model.id.as_str()) else {
         return false;
     };
+    apply_gpt5_generated_metadata(model, &metadata, metadata.openai_off_effort);
+    true
+}
 
-    model.reasoning = reasoning;
+fn apply_azure_openai_gpt5_generated_metadata(model: &mut Model) -> bool {
+    let Some(metadata) = gpt5_generated_metadata(model.id.as_str()) else {
+        return false;
+    };
+    model.base_url.clear();
+    apply_gpt5_generated_metadata(model, &metadata, None);
+    true
+}
+
+fn apply_gpt5_generated_metadata(
+    model: &mut Model,
+    metadata: &Gpt5GeneratedMetadata,
+    off_effort: Option<&str>,
+) {
+    model.reasoning = metadata.reasoning;
     model.thinking_level_map.clear();
     model
         .thinking_level_map
         .insert(ThinkingLevel::Off, off_effort.map(str::to_owned));
-    if supports_xhigh {
+    if metadata.supports_xhigh {
         model
             .thinking_level_map
             .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
     }
     ensure_image_input(model);
-    model.context_window = context_window;
-    model.max_tokens = max_tokens;
-    model.cost = cost;
-    true
+    model.context_window = metadata.context_window;
+    model.max_tokens = metadata.max_tokens;
+    model.cost = metadata.cost.clone();
 }
 
 fn github_copilot_headers() -> BTreeMap<String, String> {
@@ -1211,7 +1269,7 @@ fn base_url_for_provider(provider: &str) -> &'static str {
         "google" => "https://generativelanguage.googleapis.com",
         "google-vertex" => "https://{location}-aiplatform.googleapis.com",
         "openai" => "https://api.openai.com/v1",
-        "azure-openai-responses" => "https://example.openai.azure.com/openai/v1",
+        "azure-openai-responses" => "",
         "openai-codex" => "https://chatgpt.com/backend-api",
         "mistral" => "https://api.mistral.ai",
         "fireworks" => "https://api.fireworks.ai/inference",

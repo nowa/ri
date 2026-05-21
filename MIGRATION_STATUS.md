@@ -41,7 +41,8 @@ counterparts that pass.
     source-style provider `reasoningEffort` / Bedrock `reasoning` option
     preservation through Rust `StreamOptions`.
   - Built-in model registry seed and thinking-level helpers, including
-    OpenAI Responses GPT-5 generated-catalog metadata parity for the current
+    OpenAI and Azure OpenAI Responses GPT-5 generated-catalog metadata parity
+    for the current
     GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5 model slice, plus
     OpenAI Codex generated-catalog metadata parity for the six current
     ChatGPT backend models, base URL, context/output windows, image-input
@@ -105,8 +106,9 @@ counterparts that pass.
     block aggregation, usage mapping, stop reasons, and SDK exception error
     events.
   - Azure OpenAI base URL/config normalization, default API version,
-    deployment-name map resolution, and Responses payload construction with
-    deployment overrides, tools, session cache keys, and reasoning options.
+    deployment-name map resolution, source-style empty generated model base
+    URLs, GPT-5 generated-catalog metadata, and Responses payload construction
+    with deployment overrides, tools, session cache keys, and reasoning options.
   - Google Vertex API-key/ADC/custom-base-URL client config helpers.
   - Google/Gemini shared tool conversion helpers with OpenAPI schema sanitization,
     message conversion, multimodal function response routing, thought-signature
@@ -429,10 +431,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1188 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1189 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 981 tests: 2 library tests, 348 `provider_core` tests, and
-  631 `provider_live` tests. This is 260 above the 721 direct simple source
+- `ri-llm-provider`: 982 tests: 2 library tests, 349 `provider_core` tests, and
+  631 `provider_live` tests. This is 261 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -713,6 +715,20 @@ This migration is not complete.
   `cargo test -p ri-llm-provider --test provider_core openai_model_metadata_matches_generated_gpt5_catalog -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core openai_responses_ -- --test-threads=1`,
   `cargo fmt --check`, and `git diff --check` passed.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` Azure OpenAI Responses GPT-5 catalog metadata: Rust now
+  exposes the current Azure GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5
+  generated model slice, reuses the source OpenAI GPT-5 cost/context/output
+  table, keeps Azure generated model `baseUrl` empty, uses Azure's
+  `off: null` thinking map shape, and errors without explicit Azure base URL
+  configuration:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core azure_openai_model_metadata_matches_generated_gpt5_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core azure_openai -- --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_model_metadata_matches_generated_gpt5_catalog -- --exact --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed; the list command enumerated 1189
+  tests.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
   RFC3339 timestamp values, matching Pi's `new Date(createdAt).getTime()`
@@ -1652,6 +1668,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1188 Rust tests cover the
+- Test parity is not certified by raw count alone: 1189 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

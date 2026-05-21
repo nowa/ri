@@ -6758,6 +6758,86 @@ fn azure_openai_deployment_name_prefers_option_env_map_then_model_id() {
 }
 
 #[test]
+fn azure_openai_model_metadata_matches_generated_gpt5_catalog() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(&[
+        "AZURE_OPENAI_BASE_URL",
+        "AZURE_OPENAI_RESOURCE_NAME",
+        "AZURE_OPENAI_API_VERSION",
+    ]);
+    let expected_ids = [
+        "gpt-5",
+        "gpt-5-chat-latest",
+        "gpt-5-codex",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-5-pro",
+        "gpt-5.1",
+        "gpt-5.1-chat-latest",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex-mini",
+        "gpt-5.2",
+        "gpt-5.2-chat-latest",
+        "gpt-5.2-codex",
+        "gpt-5.2-pro",
+        "gpt-5.3-chat-latest",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-spark",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.4-pro",
+        "gpt-5.5",
+        "gpt-5.5-pro",
+    ];
+    let azure_model_ids = get_models("azure-openai-responses")
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+
+    for model_id in expected_ids {
+        assert!(
+            azure_model_ids.contains(&model_id.to_owned()),
+            "Azure OpenAI catalog should expose {model_id}: {azure_model_ids:?}"
+        );
+
+        let azure = get_model("azure-openai-responses", model_id).expect(model_id);
+        let openai = get_model("openai", model_id).expect(model_id);
+        assert_eq!(azure.api, "azure-openai-responses", "{model_id} api");
+        assert_eq!(azure.provider, "azure-openai-responses", "{model_id}");
+        assert_eq!(azure.base_url, "", "{model_id} base URL");
+        assert_eq!(azure.reasoning, openai.reasoning, "{model_id} reasoning");
+        assert_eq!(azure.input, openai.input, "{model_id} input");
+        assert_eq!(
+            azure.context_window, openai.context_window,
+            "{model_id} context"
+        );
+        assert_eq!(azure.max_tokens, openai.max_tokens, "{model_id} output");
+        assert_eq!(azure.cost, openai.cost, "{model_id} cost");
+
+        let mut expected_thinking_map = BTreeMap::from([(ThinkingLevel::Off, None)]);
+        if openai
+            .thinking_level_map
+            .contains_key(&ThinkingLevel::XHigh)
+        {
+            expected_thinking_map.insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+        }
+        assert_eq!(
+            azure.thinking_level_map, expected_thinking_map,
+            "{model_id} thinking map"
+        );
+    }
+
+    let model = get_model("azure-openai-responses", "gpt-5.5").expect("azure gpt-5.5");
+    assert!(
+        resolve_azure_openai_config(&model, AzureOpenAIConfigOptions::default())
+            .expect_err("missing Azure base URL")
+            .contains("Azure OpenAI base URL is required")
+    );
+}
+
+#[test]
 fn azure_openai_responses_payload_uses_deployment_tools_session_and_reasoning() {
     let mut model = get_model("azure-openai-responses", "gpt-4o-mini").expect("azure model");
     model.reasoning = true;
