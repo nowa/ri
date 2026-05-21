@@ -15384,6 +15384,44 @@ async fn builtin_openai_responses_provider_stream_options_preserve_reasoning_eff
 }
 
 #[tokio::test]
+async fn builtin_cloudflare_ai_gateway_openai_responses_resolves_base_url_placeholders() {
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_cf_resolved\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_cf_resolved\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Resolved\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_cf_resolved\",\"content\":[{\"type\":\"output_text\",\"text\":\"Resolved\"}]}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cf_resolved\",\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"total_tokens\":3}}}\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(&["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"]);
+    let host = base_url
+        .strip_prefix("http://")
+        .expect("mock server is plain http");
+    set_env("CLOUDFLARE_ACCOUNT_ID", host);
+    set_env("CLOUDFLARE_GATEWAY_ID", "gateway-id");
+
+    let mut model =
+        get_model("cloudflare-ai-gateway", "gpt-5.1").expect("cloudflare gateway openai model");
+    assert_eq!(model.api, "openai-responses");
+    model.base_url = "http://{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}".to_owned();
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("cf-token".to_owned());
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let request = request_task.await.expect("request task");
+    let lower_request = request.to_ascii_lowercase();
+
+    assert_eq!(text_of(&message), Some("Resolved"));
+    assert_eq!(message.response_id.as_deref(), Some("resp_cf_resolved"));
+    assert!(request.starts_with("POST /gateway-id/responses HTTP/1.1"));
+    assert!(lower_request.contains("cf-aig-authorization: bearer cf-token"));
+    assert!(!lower_request.contains("\r\nauthorization: bearer cf-token"));
+}
+
+#[tokio::test]
 async fn builtin_cloudflare_ai_gateway_openai_responses_preserves_byok_authorization_and_adds_cf_aig_auth()
  {
     let sse = concat!(

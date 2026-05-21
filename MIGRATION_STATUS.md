@@ -85,6 +85,11 @@ counterparts that pass.
     Anthropic/GitHub Copilot/OpenAI Codex OAuth token-refresh HTTP paths,
     GitHub Copilot OAuth device-flow requests, plus OpenAI Codex WebSocket HTTP
     CONNECT proxy tunneling.
+  - Cloudflare provider base URL helpers and HTTP request paths now resolve
+    `{CLOUDFLARE_ACCOUNT_ID}` / `{CLOUDFLARE_GATEWAY_ID}` placeholders before
+    OpenAI Responses, OpenAI Completions, and Anthropic passthrough requests,
+    matching the Pi client construction path while preserving AI Gateway
+    `cf-aig-authorization` handling.
   - Bedrock endpoint/region config helpers plus Converse payload helpers for
     message conversion, Claude thinking fields, GovCloud display omission, and
     application-inference-profile cache points, including image tool-result

@@ -33,6 +33,7 @@ use crate::{
         MistralChatStreamProcessor, build_mistral_request_headers, build_mistral_simple_payload,
         format_mistral_http_error,
     },
+    models::{is_cloudflare_provider, resolve_cloudflare_base_url},
     node_http_proxy::reqwest_client_for_target,
     openai_codex_responses::{
         OpenAICodexCachedWebSocketContinuation, OpenAICodexResponsesPayloadOptions,
@@ -237,10 +238,11 @@ impl ApiProvider for OpenAICompletionsHttpProvider {
             cache_retention,
             &options.stream.headers,
         );
+        let base_url = resolved_model_base_url(model).map_err(ProviderError::Provider)?;
         spawn_openai_completions_sse_request(
             model.clone(),
             options.clone(),
-            endpoint_url(&model.base_url, "chat/completions"),
+            endpoint_url(&base_url, "chat/completions"),
             headers,
             payload,
         )
@@ -306,10 +308,11 @@ impl ApiProvider for OpenAIResponsesHttpProvider {
             cache_retention,
             &options.stream.headers,
         );
+        let base_url = resolved_model_base_url(model).map_err(ProviderError::Provider)?;
         spawn_openai_responses_sse_request(
             model.clone(),
             options.clone(),
-            endpoint_url(&model.base_url, "responses"),
+            endpoint_url(&base_url, "responses"),
             headers,
             payload,
         )
@@ -523,10 +526,11 @@ impl ApiProvider for AnthropicMessagesHttpProvider {
         {
             headers.insert("authorization".to_owned(), format!("Bearer {auth_token}"));
         }
+        let base_url = resolved_model_base_url(model).map_err(ProviderError::Provider)?;
         spawn_anthropic_sse_request(
             model.clone(),
             options,
-            endpoint_url(&config.base_url, "messages"),
+            endpoint_url(&base_url, "messages"),
             headers,
             payload,
             context.tools.clone(),
@@ -1957,6 +1961,14 @@ async fn emit_simple_response_hooks(
             },
         )
         .await
+}
+
+fn resolved_model_base_url(model: &Model) -> Result<String, String> {
+    if is_cloudflare_provider(&model.provider) {
+        resolve_cloudflare_base_url(model)
+    } else {
+        Ok(model.base_url.clone())
+    }
 }
 
 fn endpoint_url(base_url: &str, path: &str) -> String {
