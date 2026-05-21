@@ -975,15 +975,11 @@ async fn agent_harness_emits_after_provider_response_before_assistant_stream() {
     let events_ref = events.clone();
     harness.subscribe(move |event| match event {
         AgentHarnessEvent::AfterProviderResponse(event) => {
-            let provider = event
-                .headers
-                .get("x-faux-provider")
-                .map(String::as_str)
-                .unwrap_or("");
-            events_ref
-                .lock()
-                .expect("mutex")
-                .push(format!("response:{}:{provider}", event.status));
+            events_ref.lock().expect("mutex").push(format!(
+                "response:{}:{}",
+                event.status,
+                event.headers.len()
+            ));
         }
         AgentHarnessEvent::Agent(AgentEvent::MessageStart {
             message: AgentMessage::Assistant(_),
@@ -1000,7 +996,7 @@ async fn agent_harness_emits_after_provider_response_before_assistant_stream() {
 
     assert_eq!(
         *events.lock().expect("mutex"),
-        vec!["response:200:faux", "assistant_start"]
+        vec!["response:200:0", "assistant_start"]
     );
     registration.unregister();
 }

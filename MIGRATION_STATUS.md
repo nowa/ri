@@ -42,8 +42,9 @@ counterparts that pass.
   - Faux provider with queued responses, multi-model registrations,
     model-aware response factories, event deltas, terminal error/abort events,
     abort flags before and during paced streams, usage estimates, session cache
-    simulation, and unregister behavior. Faux response factories can inspect
-    `SimpleStreamOptions` for helper tests.
+    simulation, response-hook ordering before queued response processing,
+    Pi-shaped exhausted/factory-error terminal events, and unregister behavior.
+    Faux response factories can inspect `SimpleStreamOptions` for helper tests.
   - Rust-native `providers/simple-options.ts` parity for simple stream defaults:
     default `max_tokens` selection, 32k output cap when model output reaches the
     context window, explicit caller override preservation, xhigh-to-high budget
@@ -430,7 +431,20 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning Pi `env-api-keys.ts`
+- Latest local verification on 2026-05-21 after aligning Pi `providers/faux.ts`
+  stream ordering: faux response hooks now run before queued response/factory
+  processing with empty response headers, exhausted queues and factory panics
+  emit a single terminal `error` event without an extra `start`, and
+  `AgentHarness` still observes `after_provider_response` before assistant
+  stream events:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core faux_provider_emits_error_when_response_factory_panics -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core faux_provider_replaces_appends_exhausts_and_unregisters -- --exact`,
+  `cargo test -p ri-agent-core --test agent_harness agent_harness_emits_after_provider_response_before_assistant_stream -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test -p ri-agent-core -- --test-threads=1`, `cargo fmt --check`,
+  `git diff --check`, and `cargo test --workspace -- --test-threads=1` passed.
+- Previous local verification on 2026-05-21 after aligning Pi `env-api-keys.ts`
   behavior where it is a runtime credential marker rather than SDK internals:
   empty API-key environment variables are ignored like falsy source env values,
   Anthropic OAuth/API-key fallback order is preserved, Google Vertex ADC

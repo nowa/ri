@@ -342,6 +342,25 @@ impl FauxProvider {
         let abort_flag = options.stream.abort_flag.clone();
 
         tokio::spawn(async move {
+            if let Err(error) = options
+                .emit_response_hooks(
+                    &model,
+                    ProviderResponse {
+                        status: 200,
+                        headers: BTreeMap::new(),
+                    },
+                )
+                .await
+            {
+                let error = create_error_message(error, &api, &provider, &model.id);
+                sender.push(AssistantMessageEvent::Error {
+                    reason: StopReason::Error,
+                    error: error.clone(),
+                });
+                sender.end(error);
+                return;
+            }
+
             let message = match step {
                 Some(FauxResponseStep::Message(message)) => Ok(message),
                 Some(FauxResponseStep::Factory(factory)) => {
@@ -365,19 +384,14 @@ impl FauxProvider {
                         Err(error) => Err(error),
                     }
                 }
-                None => Ok(create_error_message(
-                    "No more faux responses queued",
-                    &api,
-                    &provider,
-                    &model.id,
-                )),
-            };
-
-            let message = match message {
-                Ok(message) => message,
-                Err(error) => {
+                None => {
                     let error = with_usage_estimate(
-                        create_error_message(error, &api, &provider, &model.id),
+                        create_error_message(
+                            "No more faux responses queued",
+                            &api,
+                            &provider,
+                            &model.id,
+                        ),
                         &context,
                         &options.stream,
                         &prompt_cache,
@@ -391,29 +405,18 @@ impl FauxProvider {
                 }
             };
 
-            if let Err(error) = options
-                .emit_response_hooks(
-                    &model,
-                    ProviderResponse {
-                        status: 200,
-                        headers: BTreeMap::from([("x-faux-provider".to_owned(), provider.clone())]),
-                    },
-                )
-                .await
-            {
-                let error = with_usage_estimate(
-                    create_error_message(error, &api, &provider, &model.id),
-                    &context,
-                    &options.stream,
-                    &prompt_cache,
-                );
-                sender.push(AssistantMessageEvent::Error {
-                    reason: StopReason::Error,
-                    error: error.clone(),
-                });
-                sender.end(error);
-                return;
-            }
+            let message = match message {
+                Ok(message) => message,
+                Err(error) => {
+                    let error = create_error_message(error, &api, &provider, &model.id);
+                    sender.push(AssistantMessageEvent::Error {
+                        reason: StopReason::Error,
+                        error: error.clone(),
+                    });
+                    sender.end(error);
+                    return;
+                }
+            };
 
             let mut message = clone_message(message, &api, &provider, &model.id);
             message = with_usage_estimate(message, &context, &options.stream, &prompt_cache);

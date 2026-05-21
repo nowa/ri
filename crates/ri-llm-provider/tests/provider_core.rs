@@ -11804,14 +11804,16 @@ async fn faux_provider_emits_error_when_response_factory_panics() {
     registration.set_responses(vec![faux_response_factory(|_, _, _, _| {
         panic!("boom");
     })]);
+    let seen_responses = Arc::new(Mutex::new(Vec::<ProviderResponse>::new()));
+    let mut options = SimpleStreamOptions::default();
+    options
+        .response_hooks
+        .push(Arc::new(RecordingProviderResponseHook {
+            seen: seen_responses.clone(),
+        }));
 
     let events = collect_events(
-        stream(
-            &registration.get_model(),
-            user_context("hi"),
-            Default::default(),
-        )
-        .expect("stream"),
+        stream_simple(&registration.get_model(), user_context("hi"), options).expect("stream"),
     )
     .await;
 
@@ -11824,6 +11826,10 @@ async fn faux_provider_emits_error_when_response_factory_panics() {
         }
         event => panic!("expected error event, got {event:?}"),
     }
+    let seen_responses = seen_responses.lock().expect("seen responses");
+    assert_eq!(seen_responses.len(), 1);
+    assert_eq!(seen_responses[0].status, 200);
+    assert!(seen_responses[0].headers.is_empty());
     registration.unregister();
 }
 
@@ -11865,14 +11871,22 @@ async fn faux_provider_replaces_appends_exhausts_and_unregisters() {
     assert_eq!(text_of(&third), Some("third"));
     assert_eq!(text_of(&fourth), Some("fourth"));
 
-    let exhausted = complete(&model, context.clone(), Default::default())
-        .await
-        .expect("exhausted");
-    assert_eq!(exhausted.stop_reason, StopReason::Error);
-    assert_eq!(
-        exhausted.error_message.as_deref(),
-        Some("No more faux responses queued")
-    );
+    let exhausted_events = collect_events(
+        stream(&model, context.clone(), Default::default()).expect("exhausted stream"),
+    )
+    .await;
+    assert_eq!(exhausted_events.len(), 1);
+    match &exhausted_events[0] {
+        AssistantMessageEvent::Error { reason, error } => {
+            assert_eq!(*reason, StopReason::Error);
+            assert_eq!(error.stop_reason, StopReason::Error);
+            assert_eq!(
+                error.error_message.as_deref(),
+                Some("No more faux responses queued")
+            );
+        }
+        event => panic!("expected exhausted faux response to emit only error, got {event:?}"),
+    }
     assert_eq!(registration.pending_response_count(), 0);
 
     let api = registration.api().to_owned();
