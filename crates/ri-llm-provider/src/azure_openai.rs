@@ -46,7 +46,11 @@ pub fn parse_azure_openai_deployment_name_map(value: Option<&str>) -> BTreeMap<S
         if trimmed.is_empty() {
             continue;
         }
-        let Some((model_id, deployment_name)) = trimmed.split_once('=') else {
+        let mut parts = trimmed.split('=');
+        let Some(model_id) = parts.next() else {
+            continue;
+        };
+        let Some(deployment_name) = parts.next() else {
             continue;
         };
         let model_id = model_id.trim();
@@ -94,7 +98,7 @@ pub fn build_azure_openai_responses_payload(
     if let Some(session_id) = options.session_id {
         payload["prompt_cache_key"] = Value::String(session_id);
     }
-    if let Some(max_tokens) = options.max_tokens {
+    if let Some(max_tokens) = options.max_tokens.filter(|value| *value > 0) {
         payload["max_output_tokens"] = Value::Number(max_tokens.into());
     }
     if let Some(temperature) = options.temperature {
@@ -104,14 +108,17 @@ pub fn build_azure_openai_responses_payload(
         payload["tools"] = Value::Array(convert_openai_responses_tools(&context.tools, None));
     }
     if model.reasoning {
-        if options.reasoning_effort.is_some() || options.reasoning_summary.is_some() {
+        let reasoning_summary = options
+            .reasoning_summary
+            .filter(|summary| !summary.is_empty());
+        if options.reasoning_effort.is_some() || reasoning_summary.is_some() {
             let effort = options
                 .reasoning_effort
                 .map(|level| azure_openai_reasoning_effort(model, level))
                 .unwrap_or_else(|| "medium".to_owned());
             payload["reasoning"] = json!({
                 "effort": effort,
-                "summary": options.reasoning_summary.unwrap_or_else(|| "auto".to_owned()),
+                "summary": reasoning_summary.unwrap_or_else(|| "auto".to_owned()),
             });
             payload["include"] = json!(["reasoning.encrypted_content"]);
         } else if model.thinking_level_map.get(&ThinkingLevel::Off) != Some(&None) {
@@ -181,7 +188,12 @@ pub fn resolve_azure_openai_config(
 ) -> Result<AzureOpenAIConfig, String> {
     let api_version = options
         .azure_api_version
-        .or_else(|| std::env::var("AZURE_OPENAI_API_VERSION").ok())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var("AZURE_OPENAI_API_VERSION")
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
         .unwrap_or_else(|| DEFAULT_AZURE_OPENAI_API_VERSION.to_owned());
 
     let base_url = options
@@ -197,7 +209,12 @@ pub fn resolve_azure_openai_config(
         .or_else(|| {
             options
                 .azure_resource_name
-                .or_else(|| std::env::var("AZURE_OPENAI_RESOURCE_NAME").ok())
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    std::env::var("AZURE_OPENAI_RESOURCE_NAME")
+                        .ok()
+                        .filter(|value| !value.is_empty())
+                })
                 .map(|resource| build_default_azure_openai_base_url(&resource))
         })
         .or_else(|| (!model.base_url.is_empty()).then(|| model.base_url.clone()))

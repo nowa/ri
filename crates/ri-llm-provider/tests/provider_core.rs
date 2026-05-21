@@ -5556,6 +5556,35 @@ fn azure_openai_config_builds_default_resource_url_from_env() {
 }
 
 #[test]
+fn azure_openai_config_treats_empty_resource_and_api_version_as_unset() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(&[
+        "AZURE_OPENAI_BASE_URL",
+        "AZURE_OPENAI_RESOURCE_NAME",
+        "AZURE_OPENAI_API_VERSION",
+    ]);
+    set_env("AZURE_OPENAI_RESOURCE_NAME", "env-resource");
+    set_env("AZURE_OPENAI_API_VERSION", "");
+
+    let model = get_model("azure-openai-responses", "gpt-4o-mini").expect("azure model");
+    let config = resolve_azure_openai_config(
+        &model,
+        AzureOpenAIConfigOptions {
+            azure_resource_name: Some(String::new()),
+            azure_api_version: Some(String::new()),
+            ..Default::default()
+        },
+    )
+    .expect("config");
+
+    assert_eq!(
+        config.base_url,
+        "https://env-resource.openai.azure.com/openai/v1"
+    );
+    assert_eq!(config.api_version, "v1");
+}
+
+#[test]
 fn azure_openai_deployment_name_prefers_option_env_map_then_model_id() {
     let _lock = ENV_LOCK.lock().expect("env lock");
     let _guard = EnvGuard::clearing(&["AZURE_OPENAI_DEPLOYMENT_NAME_MAP"]);
@@ -5577,6 +5606,12 @@ fn azure_openai_deployment_name_prefers_option_env_map_then_model_id() {
         .get("other")
         .map(String::as_str),
         Some("other-prod")
+    );
+    assert_eq!(
+        parse_azure_openai_deployment_name_map(Some("gpt-4o-mini=prod-mini=ignored"))
+            .get("gpt-4o-mini")
+            .map(String::as_str),
+        Some("prod-mini")
     );
     assert_eq!(
         resolve_azure_openai_deployment_name(&model, None),
@@ -5648,6 +5683,32 @@ fn azure_openai_responses_payload_uses_deployment_tools_session_and_reasoning() 
     assert_eq!(
         payload["reasoning"],
         json!({ "effort": "high", "summary": "detailed" })
+    );
+    assert_eq!(payload["include"], json!(["reasoning.encrypted_content"]));
+}
+
+#[test]
+fn azure_openai_responses_payload_omits_zero_max_tokens_and_defaults_empty_reasoning_summary() {
+    let mut model = get_model("azure-openai-responses", "gpt-4o-mini").expect("azure model");
+    model.reasoning = true;
+    model
+        .thinking_level_map
+        .insert(ThinkingLevel::High, Some("high".to_owned()));
+    let payload = build_azure_openai_responses_payload(
+        &model,
+        &user_context("hello"),
+        AzureOpenAIResponsesPayloadOptions {
+            max_tokens: Some(0),
+            reasoning_effort: Some(ThinkingLevel::High),
+            reasoning_summary: Some(String::new()),
+            ..Default::default()
+        },
+    );
+
+    assert!(payload.get("max_output_tokens").is_none());
+    assert_eq!(
+        payload["reasoning"],
+        json!({ "effort": "high", "summary": "auto" })
     );
     assert_eq!(payload["include"], json!(["reasoning.encrypted_content"]));
 }
