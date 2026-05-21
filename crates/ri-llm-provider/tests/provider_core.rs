@@ -2824,6 +2824,146 @@ impl OAuthTokenRefresher for FailingOAuthRefresher {
     }
 }
 
+#[tokio::test]
+async fn oauth_high_level_helpers_refresh_and_resolve_in_memory_credentials() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    reset_oauth_providers();
+    register_oauth_provider(OAuthProviderInfo {
+        id: "custom-oauth".to_owned(),
+        name: "Custom OAuth".to_owned(),
+        uses_callback_server: false,
+    });
+    let expired = StoredOAuthCredentials {
+        refresh: "custom-refresh".to_owned(),
+        access: "expired-access".to_owned(),
+        expires: 999,
+        extra: BTreeMap::from([("tenant".to_owned(), json!("acme"))]),
+    };
+    let refreshed = StoredOAuthCredentials {
+        refresh: "custom-refresh-2".to_owned(),
+        access: "fresh-access".to_owned(),
+        expires: 2_000_000,
+        extra: BTreeMap::from([("tenant".to_owned(), json!("acme"))]),
+    };
+    let refresher = FakeOAuthRefresher {
+        result: refreshed.clone(),
+        calls: Mutex::new(Vec::new()),
+    };
+    let credentials = BTreeMap::from([("custom-oauth".to_owned(), expired.clone())]);
+
+    let token =
+        refresh_oauth_token_with_refresher_at("custom-oauth", &expired, 1_000_000, &refresher)
+            .await
+            .expect("refresh token");
+    let resolution = get_oauth_api_key_from_credentials_with_refresher_at(
+        "custom-oauth",
+        &credentials,
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect("api key resolution")
+    .expect("resolved credentials");
+    let calls = refresher.calls.lock().expect("calls lock");
+
+    assert_eq!(token, refreshed);
+    assert_eq!(resolution.api_key, "fresh-access");
+    assert_eq!(resolution.credentials, Some(refreshed));
+    assert!(resolution.refreshed);
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].0, "custom-oauth");
+    assert_eq!(calls[0].1, expired);
+    assert_eq!(calls[0].2, 1_000_000);
+    assert_eq!(calls[1].0, "custom-oauth");
+    assert_eq!(calls[1].2, 1_000_000);
+    reset_oauth_providers();
+}
+
+#[tokio::test]
+async fn oauth_high_level_api_key_helper_matches_source_edge_cases() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    reset_oauth_providers();
+    let valid = StoredOAuthCredentials {
+        refresh: "anthropic-refresh".to_owned(),
+        access: "valid-access".to_owned(),
+        expires: 2_000_000,
+        extra: BTreeMap::new(),
+    };
+    let credentials = BTreeMap::from([("anthropic".to_owned(), valid.clone())]);
+    let refresher = FailingOAuthRefresher {
+        message: "should not refresh valid credentials",
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let valid_resolution = get_oauth_api_key_from_credentials_with_refresher_at(
+        "anthropic",
+        &credentials,
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect("valid credentials")
+    .expect("valid result");
+    let missing = get_oauth_api_key_from_credentials_with_refresher_at(
+        "github-copilot",
+        &credentials,
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect("known provider without credentials");
+    let unknown = get_oauth_api_key_from_credentials_with_refresher_at(
+        "unknown-oauth",
+        &BTreeMap::new(),
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect_err("unknown provider should fail before credential lookup");
+
+    assert_eq!(valid_resolution.api_key, "valid-access");
+    assert_eq!(valid_resolution.credentials, Some(valid));
+    assert!(!valid_resolution.refreshed);
+    assert!(missing.is_none());
+    assert_eq!(unknown, "Unknown OAuth provider: unknown-oauth");
+    assert!(refresher.calls.lock().expect("calls lock").is_empty());
+}
+
+#[tokio::test]
+async fn oauth_high_level_api_key_helper_hides_refresh_failure_details_like_source() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    reset_oauth_providers();
+    let credentials = BTreeMap::from([(
+        "anthropic".to_owned(),
+        StoredOAuthCredentials {
+            refresh: "anthropic-refresh".to_owned(),
+            access: "expired-access".to_owned(),
+            expires: 999,
+            extra: BTreeMap::new(),
+        },
+    )]);
+    let refresher = FailingOAuthRefresher {
+        message: "network unavailable",
+        calls: Mutex::new(Vec::new()),
+    };
+
+    let error = get_oauth_api_key_from_credentials_with_refresher_at(
+        "anthropic",
+        &credentials,
+        1_000_000,
+        &refresher,
+    )
+    .await
+    .expect_err("refresh failure");
+    let calls = refresher.calls.lock().expect("calls lock");
+
+    assert_eq!(error, "Failed to refresh OAuth token for anthropic");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "anthropic");
+    assert_eq!(calls[0].1.access, "expired-access");
+    assert_eq!(calls[0].2, 1_000_000);
+}
+
 fn auth_storage_test_path(label: &str) -> std::path::PathBuf {
     std::env::temp_dir()
         .join(format!(

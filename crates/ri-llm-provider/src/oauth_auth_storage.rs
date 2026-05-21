@@ -207,6 +207,82 @@ impl OAuthTokenRefresher for BuiltInOAuthTokenRefresher {
     }
 }
 
+pub async fn refresh_oauth_token(
+    provider_id: &str,
+    credentials: &StoredOAuthCredentials,
+) -> Result<StoredOAuthCredentials, String> {
+    refresh_oauth_token_with_refresher_at(
+        provider_id,
+        credentials,
+        now_millis() as i64,
+        &BuiltInOAuthTokenRefresher,
+    )
+    .await
+}
+
+pub async fn refresh_oauth_token_with_refresher_at<R>(
+    provider_id: &str,
+    credentials: &StoredOAuthCredentials,
+    now_millis: i64,
+    refresher: &R,
+) -> Result<StoredOAuthCredentials, String>
+where
+    R: OAuthTokenRefresher,
+{
+    if get_oauth_provider(provider_id).is_none() {
+        return Err(format!("Unknown OAuth provider: {provider_id}"));
+    }
+    refresher
+        .refresh_token(provider_id, credentials, now_millis)
+        .await
+}
+
+pub async fn get_oauth_api_key_from_credentials(
+    provider_id: &str,
+    credentials_by_provider: &BTreeMap<String, StoredOAuthCredentials>,
+) -> Result<Option<OAuthApiKeyResolution>, String> {
+    get_oauth_api_key_from_credentials_with_refresher_at(
+        provider_id,
+        credentials_by_provider,
+        now_millis() as i64,
+        &BuiltInOAuthTokenRefresher,
+    )
+    .await
+}
+
+pub async fn get_oauth_api_key_from_credentials_with_refresher_at<R>(
+    provider_id: &str,
+    credentials_by_provider: &BTreeMap<String, StoredOAuthCredentials>,
+    now_millis: i64,
+    refresher: &R,
+) -> Result<Option<OAuthApiKeyResolution>, String>
+where
+    R: OAuthTokenRefresher,
+{
+    if get_oauth_provider(provider_id).is_none() {
+        return Err(format!("Unknown OAuth provider: {provider_id}"));
+    }
+
+    let Some(mut credentials) = credentials_by_provider.get(provider_id).cloned() else {
+        return Ok(None);
+    };
+
+    let mut refreshed = false;
+    if now_millis >= credentials.expires {
+        credentials = refresher
+            .refresh_token(provider_id, &credentials, now_millis)
+            .await
+            .map_err(|_| format!("Failed to refresh OAuth token for {provider_id}"))?;
+        refreshed = true;
+    }
+
+    Ok(Some(OAuthApiKeyResolution {
+        api_key: credentials.access.clone(),
+        credentials: Some(credentials),
+        refreshed,
+    }))
+}
+
 pub fn default_auth_storage_path() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
