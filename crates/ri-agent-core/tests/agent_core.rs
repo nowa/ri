@@ -475,6 +475,63 @@ impl AgentToolResultHook for ClearingToolErrorHook {
     }
 }
 
+struct InspectingToolHookContext {
+    seen: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl AgentToolCallHook for InspectingToolHookContext {
+    async fn on_tool_call(
+        &self,
+        context: AgentToolCallHookContext,
+    ) -> Result<Option<AgentToolCallHookResult>, String> {
+        assert_eq!(context.tool_call_id, "tool-1");
+        assert_eq!(context.tool_name, "echo");
+        assert_eq!(context.tool_call.id, "tool-1");
+        assert_eq!(context.tool_call.name, "echo");
+        assert_eq!(context.assistant_message.stop_reason, StopReason::ToolUse);
+        assert_eq!(
+            context
+                .context
+                .messages
+                .iter()
+                .filter_map(|message| message.role())
+                .collect::<Vec<_>>(),
+            vec!["user", "assistant"]
+        );
+        assert_eq!(context.context.tools.len(), 1);
+        self.seen.lock().expect("mutex").push("before".to_owned());
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl AgentToolResultHook for InspectingToolHookContext {
+    async fn on_tool_result(
+        &self,
+        context: AgentToolResultHookContext,
+    ) -> Result<Option<AgentToolResultHookResult>, String> {
+        assert_eq!(context.tool_call_id, "tool-1");
+        assert_eq!(context.tool_name, "echo");
+        assert_eq!(context.tool_call.id, "tool-1");
+        assert_eq!(context.tool_call.name, "echo");
+        assert_eq!(context.assistant_message.stop_reason, StopReason::ToolUse);
+        assert_eq!(
+            context
+                .context
+                .messages
+                .iter()
+                .filter_map(|message| message.role())
+                .collect::<Vec<_>>(),
+            vec!["user", "assistant"]
+        );
+        assert_eq!(context.context.tools.len(), 1);
+        assert!(!context.is_error);
+        self.seen.lock().expect("mutex").push("after".to_owned());
+        Ok(None)
+    }
+}
+
 struct TailTransformer {
     seen: Arc<Mutex<Vec<String>>>,
 }
@@ -2419,6 +2476,67 @@ async fn agent_loop_runs_tool_call_and_tool_result_hooks() {
     let event_names: Vec<&str> = events.iter().map(event_name).collect();
     assert!(event_names.contains(&"tool_execution_start"));
     assert!(event_names.contains(&"tool_execution_end"));
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_loop_tool_hooks_receive_assistant_and_context_snapshot() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call(
+                "echo",
+                json!({ "value": "abc" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(Map::new),
+                Some("tool-1".to_owned()),
+            ),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+    ]);
+
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let tool = AgentTool {
+        definition: Tool {
+            name: "echo".to_owned(),
+            description: "Echo tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Echo".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(EchoExecutor {
+            executed: executed.clone(),
+        }),
+    };
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let hook = Arc::new(InspectingToolHookContext { seen: seen.clone() });
+
+    let mut context = context_with_model(&registration.get_model());
+    context.tools.push(tool);
+    let mut config = AgentLoopConfig::new(registration.get_model());
+    config.tool_call_hooks.push(hook.clone());
+    config.tool_result_hooks.push(hook);
+
+    let (messages, _events) = agent_loop_prompt(context, "run tool", config)
+        .await
+        .expect("loop");
+
+    assert_eq!(*executed.lock().expect("mutex"), vec!["abc".to_owned()]);
+    assert_eq!(text_of(&messages[2]), Some("echoed: abc"));
+    assert_eq!(
+        *seen.lock().expect("mutex"),
+        vec!["before".to_owned(), "after".to_owned()]
+    );
     registration.unregister();
 }
 

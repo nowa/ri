@@ -171,12 +171,14 @@ pub trait AgentToolExecutor: Send + Sync {
 pub type AgentToolUpdateCallback =
     Arc<dyn Fn(AgentToolResult) -> BoxFuture<'static, ()> + Send + Sync + 'static>;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct AgentToolCallHookContext {
     pub tool_call_id: String,
     pub tool_name: String,
     pub input: Value,
+    pub assistant_message: AssistantMessage,
+    pub tool_call: ToolCall,
+    pub context: AgentContext,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -208,14 +210,16 @@ impl AgentToolCallHookResult {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct AgentToolResultHookContext {
     pub tool_call_id: String,
     pub tool_name: String,
     pub input: Value,
     pub result: AgentToolResult,
     pub is_error: bool,
+    pub assistant_message: AssistantMessage,
+    pub tool_call: ToolCall,
+    pub context: AgentContext,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

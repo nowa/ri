@@ -7,8 +7,8 @@ use crate::types::{
 };
 use futures::{StreamExt, stream::FuturesUnordered};
 use ri_llm_provider::{
-    AssistantMessage, Model, SimpleStreamOptions, StopReason, ToolResultContent, ToolResultMessage,
-    Usage, now_millis, stream_simple,
+    AssistantMessage, Model, SimpleStreamOptions, StopReason, ToolCall, ToolResultContent,
+    ToolResultMessage, Usage, now_millis, stream_simple,
 };
 use std::sync::{Arc, Mutex};
 
@@ -64,6 +64,9 @@ struct PreparedToolCall {
     tool_call_id: String,
     tool_name: String,
     args: serde_json::Value,
+    assistant_message: AssistantMessage,
+    tool_call: ToolCall,
+    context: AgentContext,
     tool: crate::types::AgentTool,
 }
 
@@ -600,6 +603,9 @@ async fn run_one_turn(
                 tool_call_id: tool_call.id.clone(),
                 tool_name: tool_call.name.clone(),
                 input: args.clone(),
+                assistant_message: assistant.clone(),
+                tool_call: tool_call.clone(),
+                context: context.clone(),
             };
             for hook in &config.tool_call_hooks {
                 match hook.on_tool_call(hook_context.clone()).await {
@@ -657,6 +663,9 @@ async fn run_one_turn(
                 tool_call_id: tool_call.id.clone(),
                 tool_name: tool_call.name.clone(),
                 args,
+                assistant_message: assistant.clone(),
+                tool_call: tool_call.clone(),
+                context: context.clone(),
                 tool: tool.clone(),
             });
         }
@@ -823,6 +832,9 @@ async fn execute_prepared_tool_call(
         input: result_input.clone(),
         result: result.clone(),
         is_error,
+        assistant_message: call.assistant_message.clone(),
+        tool_call: call.tool_call.clone(),
+        context: call.context.clone(),
     };
     for hook in &tool_result_hooks {
         match hook.on_tool_result(hook_context.clone()).await {

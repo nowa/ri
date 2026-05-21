@@ -247,7 +247,9 @@ counterparts that pass.
     with argument replacement and Pi-style pre-execution blocking, tool-result
     replacement/error-flag hooks, hook-driven tool-result termination, partial
     tool execution update callbacks/events, tool-result message lifecycle events, and
-    transform/convert hooks for LLM request context. Prepare-next-turn hooks can
+    assistant/tool-call/current-context hook snapshots for low-level
+    `beforeToolCall`/`afterToolCall` parity. Transform/convert hooks for LLM
+    request context. Prepare-next-turn hooks can
     replace the next-turn context/model/thinking state after `turn_end`, and
     should-stop-after-turn hooks can stop before the next provider request.
     Queued messages can be injected before the initial provider request or
@@ -331,16 +333,16 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1115 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1116 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 926 tests: 1 library test, 294 `provider_core` tests, and
   631 `provider_live` tests. This is 205 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 189 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 190 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 39 above the 150 direct simple
+  `resources`, and `session_storage`. This is 40 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -369,7 +371,7 @@ Current Rust tests: 1115 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1115-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1116-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -392,7 +394,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning Pi `afterToolCall`
+- Latest local verification on 2026-05-21 after aligning low-level Pi
+  `beforeToolCall` / `afterToolCall` hook context snapshots from
+  `agent-loop.ts` and `types.ts`: Rust tool-call and tool-result hooks now
+  receive the assistant message, raw tool-call block, validated/current input,
+  and current agent context snapshot containing the prompt and assistant
+  tool-call message before tool-result messages are appended:
+  `cargo fmt`, `cargo fmt --check`,
+  `cargo test -p ri-agent-core --test agent_core agent_loop_tool_hooks_receive_assistant_and_context_snapshot -- --exact`,
+  `cargo test -p ri-agent-core -- --test-threads=1`, `git diff --check`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1116 tests.
+- Previous local verification on 2026-05-21 after aligning Pi `afterToolCall`
   / harness `tool_result` `isError` semantics from `agent-loop.ts`,
   `types.ts`, and `harness/agent-harness.ts`: tool-result hooks now receive
   the current error flag and can override it while replacing result content,
@@ -583,6 +597,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1115 Rust tests cover the
+- Test parity is not certified by raw count alone: 1116 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
