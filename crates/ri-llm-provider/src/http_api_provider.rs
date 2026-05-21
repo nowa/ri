@@ -1258,8 +1258,10 @@ async fn stream_openai_codex_websocket_json(
                 }
             })?;
         if processor.is_terminal() {
-            processor.finish(output, sender);
-            if let Some(session_id) = session_id {
+            let should_cache =
+                !matches!(output.stop_reason, StopReason::Error | StopReason::Aborted);
+            finish_openai_responses_processor(processor, sender, output);
+            if let Some(session_id) = session_id.filter(|_| should_cache) {
                 let continuation = if use_cached_context {
                     build_openai_codex_cached_websocket_continuation(model, payload.clone(), output)
                 } else {
@@ -1482,7 +1484,7 @@ async fn stream_openai_responses_sse_response(
             }
             processor.process_event(event, output, sender, model)?;
             if processor.is_terminal() {
-                processor.finish(output, sender);
+                finish_openai_responses_processor(processor, sender, output);
                 return Ok(());
             }
             if push_abort_if_requested(sender, options, output) {
@@ -1498,15 +1500,32 @@ async fn stream_openai_responses_sse_response(
         }
         processor.process_event(event, output, sender, model)?;
         if processor.is_terminal() {
-            processor.finish(output, sender);
+            finish_openai_responses_processor(processor, sender, output);
             return Ok(());
         }
     }
     if push_abort_if_requested(sender, options, output) {
         return Ok(());
     }
-    processor.finish(output, sender);
+    finish_openai_responses_processor(processor, sender, output);
     Ok(())
+}
+
+fn finish_openai_responses_processor(
+    processor: OpenAIResponsesStreamProcessor,
+    sender: &crate::AssistantMessageEventSender,
+    output: &mut AssistantMessage,
+) {
+    if matches!(output.stop_reason, StopReason::Error | StopReason::Aborted) {
+        let reason = output.stop_reason;
+        let error = output
+            .error_message
+            .clone()
+            .unwrap_or_else(|| "An unknown error occurred".to_owned());
+        push_provider_error(sender, output, reason, error);
+        return;
+    }
+    processor.finish(output, sender);
 }
 
 fn request_service_tier_for_usage(model: &Model, options: &SimpleStreamOptions) -> Option<String> {

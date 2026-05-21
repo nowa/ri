@@ -192,7 +192,8 @@ counterparts that pass.
     text/refusal deltas, text signature replay including
     commentary/final-answer phase metadata and long ID hashing, reasoning
     summary stream blocks, refusal final content, source-shaped failed-response
-    errors, incomplete terminal events, aborted reasoning history pruning,
+    errors, failed/cancelled terminal-status error events, incomplete terminal
+    events, aborted reasoning history pruning,
     same-provider model handoff item-id omission, empty assistant-turn pruning,
     and service-tier usage cost multipliers, including request-tier fallback
     when Responses API streams omit a service-tier echo.

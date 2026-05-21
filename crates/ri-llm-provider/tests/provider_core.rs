@@ -15272,6 +15272,47 @@ async fn builtin_openai_responses_provider_prices_requested_service_tier_without
 }
 
 #[tokio::test]
+async fn builtin_openai_responses_provider_maps_completed_failed_status_to_error_event() {
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_completed_failed\"}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_completed_failed\",\"status\":\"failed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":0,\"total_tokens\":3}}}\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let mut model = Model::faux("openai-responses", "openai", "mock-gpt-5");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("test-key".to_owned());
+
+    let stream = stream_simple(&model, user_context("hello"), options).expect("stream");
+    let events = collect_events(stream).await;
+    let request = request_task.await.expect("request task");
+    let (reason, error) = events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            AssistantMessageEvent::Error { reason, error } => Some((reason, error)),
+            _ => None,
+        })
+        .expect("error event");
+
+    assert!(request.starts_with("POST /responses HTTP/1.1"));
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AssistantMessageEvent::Done { .. })),
+        "failed response should terminate with an error event"
+    );
+    assert_eq!(*reason, StopReason::Error);
+    assert_eq!(error.stop_reason, StopReason::Error);
+    assert_eq!(
+        error.error_message.as_deref(),
+        Some("An unknown error occurred")
+    );
+    assert_eq!(error.response_id.as_deref(), Some("resp_completed_failed"));
+    assert_eq!(error.usage.input, 3);
+}
+
+#[tokio::test]
 async fn builtin_openai_responses_provider_stream_options_preserve_reasoning_effort() {
     let sse = concat!(
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_reasoning\"}}\n\n",
