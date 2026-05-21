@@ -1,9 +1,10 @@
 use crate::types::{
-    AgentContext, AgentContextTransformer, AgentEvent, AgentEventSink, AgentLoopTurnUpdate,
-    AgentMessage, AgentMessageConverter, AgentNextTurnContext, AgentNextTurnPreparer,
-    AgentQueuedMessageProvider, AgentShouldStopAfterTurn, AgentStreamProvider, AgentToolCallHook,
-    AgentToolCallHookContext, AgentToolResult, AgentToolResultContent, AgentToolResultHook,
-    AgentToolResultHookContext, AgentToolUpdateCallback, ToolExecutionMode, assistant_tool_calls,
+    AgentApiKeyProvider, AgentContext, AgentContextTransformer, AgentEvent, AgentEventSink,
+    AgentLoopTurnUpdate, AgentMessage, AgentMessageConverter, AgentNextTurnContext,
+    AgentNextTurnPreparer, AgentQueuedMessageProvider, AgentShouldStopAfterTurn,
+    AgentStreamProvider, AgentToolCallHook, AgentToolCallHookContext, AgentToolResult,
+    AgentToolResultContent, AgentToolResultHook, AgentToolResultHookContext,
+    AgentToolUpdateCallback, ToolExecutionMode, assistant_tool_calls,
 };
 use futures::{StreamExt, stream::FuturesUnordered};
 use ri_llm_provider::{
@@ -21,6 +22,7 @@ pub struct AgentLoopConfig {
     pub transform_context: Option<Arc<dyn AgentContextTransformer>>,
     pub convert_to_llm: Option<Arc<dyn AgentMessageConverter>>,
     pub stream_provider: Option<Arc<dyn AgentStreamProvider>>,
+    pub api_key_provider: Option<Arc<dyn AgentApiKeyProvider>>,
     pub prepare_next_turn: Option<Arc<dyn AgentNextTurnPreparer>>,
     pub should_stop_after_turn: Option<Arc<dyn AgentShouldStopAfterTurn>>,
     pub queued_message_provider: Option<Arc<dyn AgentQueuedMessageProvider>>,
@@ -41,6 +43,7 @@ impl AgentLoopConfig {
             transform_context: None,
             convert_to_llm: None,
             stream_provider: None,
+            api_key_provider: None,
             prepare_next_turn: None,
             should_stop_after_turn: None,
             queued_message_provider: None,
@@ -95,6 +98,12 @@ impl std::fmt::Debug for dyn AgentToolCallHook {
 impl std::fmt::Debug for dyn AgentStreamProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("AgentStreamProvider")
+    }
+}
+
+impl std::fmt::Debug for dyn AgentApiKeyProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AgentApiKeyProvider")
     }
 }
 
@@ -482,11 +491,15 @@ async fn run_one_turn(
     events: &mut Vec<AgentEvent>,
 ) -> Result<TurnOutcome, String> {
     let llm_context = build_llm_context(context, config).await?;
+    let mut stream_options = config.stream_options.clone();
+    if let Some(api_key_provider) = &config.api_key_provider
+        && let Some(api_key) = api_key_provider.get_api_key(&config.model.provider).await?
+    {
+        stream_options.stream.api_key = Some(api_key);
+    }
     let stream = match &config.stream_provider {
-        Some(provider) => {
-            provider.stream(&config.model, llm_context, config.stream_options.clone())?
-        }
-        None => stream_simple(&config.model, llm_context, config.stream_options.clone())
+        Some(provider) => provider.stream(&config.model, llm_context, stream_options)?,
+        None => stream_simple(&config.model, llm_context, stream_options)
             .map_err(|error| error.to_string())?,
     };
 

@@ -285,6 +285,11 @@ pub trait AgentStreamProvider: Send + Sync {
 }
 
 #[async_trait]
+pub trait AgentApiKeyProvider: Send + Sync {
+    async fn get_api_key(&self, provider: &str) -> Result<Option<String>, String>;
+}
+
+#[async_trait]
 pub trait AgentQueuedMessageProvider: Send + Sync {
     async fn get_queued_messages(&self) -> Result<Vec<AgentMessage>, String>;
 }

@@ -1713,6 +1713,7 @@ impl AgentHarness {
             })),
             convert_to_llm: None,
             stream_provider: None,
+            api_key_provider: None,
             prepare_next_turn: Some(Arc::new(HarnessNextTurnPreparer {
                 env: self.env.clone(),
                 session: self.session.clone(),

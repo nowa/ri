@@ -270,10 +270,11 @@ counterparts that pass.
     abort handles that cancel active provider streams, and provider start
     failures persisted as assistant error messages with lifecycle events.
   - Custom stream-provider hooks for the low-level loop and `Agent` wrapper,
-    including a Rust-native `agent/src/proxy.ts` counterpart that posts model,
-    context, and proxy-safe stream options to `/api/stream`, reconstructs SSE
-    assistant events, preserves abort behavior, and keeps API keys and retry
-    policy out of the proxy payload.
+    dynamic per-request API key providers for low-level LLM calls with static
+    key fallback, including a Rust-native `agent/src/proxy.ts` counterpart that
+    posts model, context, and proxy-safe stream options to `/api/stream`,
+    reconstructs SSE assistant events, preserves abort behavior, and keeps API
+    keys and retry policy out of the proxy payload.
   - Harness basics: system prompt helper, system skill formatting, UTF-8/line
     truncation, token/usage estimate, compaction predicates, cut-point
     selection, compaction preparation, file-operation metadata extraction, and
@@ -335,16 +336,16 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1117 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1118 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 926 tests: 1 library test, 294 `provider_core` tests, and
   631 `provider_live` tests. This is 205 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 191 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 192 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 41 above the 150 direct simple
+  `resources`, and `session_storage`. This is 42 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -373,7 +374,7 @@ Current Rust tests: 1117 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1117-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1118-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -396,7 +397,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning Pi sequential
+- Latest local verification on 2026-05-21 after aligning Pi low-level
+  `getApiKey` behavior from `agent-loop.ts`, `agent.ts`, and `types.ts`: Rust
+  `AgentLoopConfig`/`AgentOptions` now accept an async API key provider, resolve
+  it before each low-level provider request, override the static stream
+  `api_key` when a refreshed key is returned, and fall back to the static key
+  when the provider returns `None`:
+  `cargo fmt`, `cargo fmt --check`, `git diff --check`,
+  `cargo test -p ri-agent-core --test agent_core agent_loop_resolves_dynamic_api_key_before_each_provider_request -- --exact`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1118 tests.
+- Previous local verification on 2026-05-21 after aligning Pi sequential
   `executeToolCallsSequential` lifecycle ordering from `agent-loop.ts`: Rust
   sequential tool batches now emit each tool's `tool_execution_end` and
   tool-result message events before emitting the next tool's
@@ -623,6 +636,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1117 Rust tests cover the
+- Test parity is not certified by raw count alone: 1118 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

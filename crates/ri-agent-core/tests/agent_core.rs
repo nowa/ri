@@ -2,9 +2,12 @@ use async_trait::async_trait;
 use ri_agent_core::*;
 use ri_llm_provider::*;
 use serde_json::{Map, Value, json};
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
 fn context_with_model(_model: &Model) -> AgentContext {
@@ -149,6 +152,50 @@ impl AgentToolExecutor for UpdatingExecutor {
         self.update_observed_before_return
             .store(true, Ordering::SeqCst);
         Ok(AgentToolResult::text(format!("final: {value}")))
+    }
+}
+
+struct RecordingApiKeyProvider {
+    keys: Arc<Mutex<VecDeque<Option<String>>>>,
+    providers: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl AgentApiKeyProvider for RecordingApiKeyProvider {
+    async fn get_api_key(&self, provider: &str) -> Result<Option<String>, String> {
+        self.providers
+            .lock()
+            .expect("mutex")
+            .push(provider.to_owned());
+        Ok(self.keys.lock().expect("mutex").pop_front().flatten())
+    }
+}
+
+struct RecordingOptionsStreamProvider {
+    seen_options: Arc<Mutex<Vec<SimpleStreamOptions>>>,
+    responses: Arc<Mutex<VecDeque<AssistantMessage>>>,
+}
+
+impl AgentStreamProvider for RecordingOptionsStreamProvider {
+    fn stream(
+        &self,
+        _model: &Model,
+        _context: Context,
+        options: SimpleStreamOptions,
+    ) -> Result<AssistantMessageEventStream, String> {
+        self.seen_options.lock().expect("mutex").push(options);
+        let message = self
+            .responses
+            .lock()
+            .expect("mutex")
+            .pop_front()
+            .ok_or_else(|| "missing response".to_owned())?;
+        let (sender, stream) = assistant_message_event_stream();
+        sender.push(AssistantMessageEvent::Done {
+            reason: message.stop_reason.clone(),
+            message,
+        });
+        Ok(stream)
     }
 }
 
@@ -977,6 +1024,85 @@ async fn agent_loop_emits_tool_execution_update_from_tool_callbacks() {
         vec![AgentToolResultContent::Text(TextContent::new(
             "partial: hooked"
         ))]
+    );
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_loop_resolves_dynamic_api_key_before_each_provider_request() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    let responses = Arc::new(Mutex::new(VecDeque::from(vec![
+        faux_assistant_message(
+            faux_tool_call(
+                "echo",
+                json!({ "value": "again" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(Map::new),
+                Some("tool-1".to_owned()),
+            ),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        ),
+        faux_assistant_message("done", Default::default()),
+    ])));
+    let seen_options = Arc::new(Mutex::new(Vec::new()));
+    let providers = Arc::new(Mutex::new(Vec::new()));
+    let keys = Arc::new(Mutex::new(VecDeque::from(vec![
+        Some("dynamic-key".to_owned()),
+        None,
+    ])));
+
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let tool = AgentTool {
+        definition: Tool {
+            name: "echo".to_owned(),
+            description: "Echo tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Echo".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(EchoExecutor {
+            executed: executed.clone(),
+        }),
+    };
+    let mut context = context_with_model(&registration.get_model());
+    context.tools.push(tool);
+    let mut config = AgentLoopConfig::new(registration.get_model());
+    config.stream_options.stream.api_key = Some("static-key".to_owned());
+    config.stream_provider = Some(Arc::new(RecordingOptionsStreamProvider {
+        seen_options: seen_options.clone(),
+        responses,
+    }));
+    config.api_key_provider = Some(Arc::new(RecordingApiKeyProvider {
+        keys,
+        providers: providers.clone(),
+    }));
+
+    let (messages, _events) = agent_loop_prompt(context, "run tool", config)
+        .await
+        .expect("loop");
+
+    assert_eq!(*executed.lock().expect("mutex"), vec!["again".to_owned()]);
+    assert_eq!(text_of(&messages[2]), Some("echoed: again"));
+    assert_eq!(text_of(&messages[3]), Some("done"));
+    let seen = seen_options.lock().expect("mutex");
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].stream.api_key.as_deref(), Some("dynamic-key"));
+    assert_eq!(seen[1].stream.api_key.as_deref(), Some("static-key"));
+    assert_eq!(
+        *providers.lock().expect("mutex"),
+        vec![
+            registration.get_model().provider.clone(),
+            registration.get_model().provider.clone()
+        ]
     );
     registration.unregister();
 }

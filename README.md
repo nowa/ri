@@ -111,6 +111,8 @@ credentials, local model services where applicable, and manual OAuth flows.
   snapshots for low-level hook implementations.
 - Steering and follow-up queues.
 - Context transforms and custom `AgentMessage` conversion before LLM calls.
+- Dynamic API key providers for resolving refreshed credentials before each
+  low-level LLM request.
 - Custom stream providers, including proxy streaming through `/api/stream`.
 - Prompt templates, skills/resources loading, session storage, compaction,
   Pi-style session tree navigation, and local execution environment utilities.
