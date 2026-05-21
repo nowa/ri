@@ -378,9 +378,10 @@ counterparts that pass.
     directories, full-session fork, before-target user-message fork, at-target
     fork, invalid-target errors, Pi-style JSONL entry validation for required
     `parentId`, non-empty `timestamp`, and `leaf.targetId` fields, and
-    source-shaped `bashExecution` message entries with LLM-context formatting,
-    `excludeFromContext` filtering, JSONL round trips, token estimates, and
-    compaction turn-start handling.
+    source-style `invalid_session` classification when a persisted leaf points
+    at a missing entry, source-shaped `bashExecution` message entries with
+    LLM-context formatting, `excludeFromContext` filtering, JSONL round trips,
+    token estimates, and compaction turn-start handling.
   - Skill and prompt-template invocation formatting plus skill/prompt-template
     loading, pi-style numeric/slice/all-argument substitution including
     multi-digit numeric placeholders and regex-style rejection of malformed
@@ -461,6 +462,15 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-22 after aligning
+  `session/memory-storage.ts` and `session/jsonl-storage.ts` damaged leaf
+  handling: reading a persisted/current leaf that points at a missing entry now
+  reports `invalid_session`, while explicit attempts to set the leaf to a
+  missing entry still report `not_found`, matching Pi's storage distinction:
+  `cargo test -p ri-agent-core --test session_storage -- --test-threads=1`,
+  `cargo fmt`, `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --test-threads=1` passed.
 - Latest local verification on 2026-05-21 after aligning
   `prompt-templates.ts` placeholder matching: Rust now leaves malformed
   `${@:...}` slice placeholders untouched unless the start and optional length

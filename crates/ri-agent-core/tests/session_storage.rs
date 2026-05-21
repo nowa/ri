@@ -120,6 +120,17 @@ fn in_memory_storage_matches_core_storage_behaviour() {
         .expect_err("invalid leaf");
     assert_eq!(err.code, SessionErrorCode::NotFound);
 
+    let corrupted_leaf = SessionTreeEntry::Leaf {
+        id: "leaf-1".to_owned(),
+        parent_id: Some("entry-1".to_owned()),
+        timestamp: "2026-01-01T00:00:01.000Z".to_owned(),
+        target_id: Some("missing".to_owned()),
+    };
+    let corrupted =
+        InMemorySessionStorage::with_options(Some(vec![root.clone(), corrupted_leaf]), None);
+    let err = corrupted.leaf_id().expect_err("corrupted leaf target");
+    assert_eq!(err.code, SessionErrorCode::InvalidSession);
+
     storage.append_entry(SessionTreeEntry::Label {
         id: "label-1".to_owned(),
         parent_id: Some("entry-1".to_owned()),
@@ -424,6 +435,19 @@ fn jsonl_storage_rejects_malformed_headers_and_entries() {
     let err = JsonlSessionStorage::open(&path).expect_err("missing leaf targetId");
     assert_eq!(err.code, SessionErrorCode::InvalidEntry);
     assert!(err.message.contains("has invalid targetId"));
+
+    let leaf_with_missing_target = json!({
+        "type": "leaf",
+        "id": "leaf-1",
+        "parentId": null,
+        "timestamp": "2026-01-01T00:00:01.000Z",
+        "targetId": "missing"
+    });
+    fs::write(&path, format!("{header}\n{leaf_with_missing_target}\n"))
+        .expect("write invalid leaf target");
+    let storage = JsonlSessionStorage::open(&path).expect("open invalid leaf target");
+    let err = storage.leaf_id().expect_err("invalid leaf target");
+    assert_eq!(err.code, SessionErrorCode::InvalidSession);
 }
 
 fn run_session_suite(storage: impl Into<SessionStorageKind>) {

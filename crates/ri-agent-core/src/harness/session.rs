@@ -488,7 +488,7 @@ impl InMemorySessionStorage {
     }
 
     pub fn leaf_id(&self) -> Result<Option<String>, SessionError> {
-        validate_leaf(&self.by_id, self.leaf_id.as_deref())?;
+        validate_existing_leaf(&self.by_id, self.leaf_id.as_deref())?;
         Ok(self.leaf_id.clone())
     }
 
@@ -624,7 +624,7 @@ impl JsonlSessionStorage {
     }
 
     pub fn leaf_id(&self) -> Result<Option<String>, SessionError> {
-        validate_leaf(&self.by_id, self.leaf_id.as_deref())?;
+        validate_existing_leaf(&self.by_id, self.leaf_id.as_deref())?;
         Ok(self.leaf_id.clone())
     }
 
@@ -1557,6 +1557,21 @@ fn validate_leaf(
         if !by_id.contains_key(leaf_id) {
             return Err(SessionError::new(
                 SessionErrorCode::NotFound,
+                format!("Entry {leaf_id} not found"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_existing_leaf(
+    by_id: &BTreeMap<String, SessionTreeEntry>,
+    leaf_id: Option<&str>,
+) -> Result<(), SessionError> {
+    if let Some(leaf_id) = leaf_id {
+        if !by_id.contains_key(leaf_id) {
+            return Err(SessionError::new(
+                SessionErrorCode::InvalidSession,
                 format!("Entry {leaf_id} not found"),
             ));
         }
