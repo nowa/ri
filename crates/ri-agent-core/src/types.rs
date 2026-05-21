@@ -179,6 +179,35 @@ pub struct AgentToolCallHookContext {
     pub input: Value,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentToolCallHookResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<Value>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub block: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl AgentToolCallHookResult {
+    pub fn replace_input(input: Value) -> Self {
+        Self {
+            input: Some(input),
+            block: false,
+            reason: None,
+        }
+    }
+
+    pub fn block(reason: impl Into<String>) -> Self {
+        Self {
+            input: None,
+            block: true,
+            reason: Some(reason.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentToolResultHookContext {
@@ -193,7 +222,7 @@ pub trait AgentToolCallHook: Send + Sync {
     async fn on_tool_call(
         &self,
         context: AgentToolCallHookContext,
-    ) -> Result<Option<Value>, String>;
+    ) -> Result<Option<AgentToolCallHookResult>, String>;
 }
 
 #[async_trait]

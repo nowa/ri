@@ -596,14 +596,40 @@ async fn run_one_turn(
                     }
                 }
             }
-            let hook_context = AgentToolCallHookContext {
+            let mut hook_context = AgentToolCallHookContext {
                 tool_call_id: tool_call.id.clone(),
                 tool_name: tool_call.name.clone(),
                 input: args.clone(),
             };
             for hook in &config.tool_call_hooks {
                 match hook.on_tool_call(hook_context.clone()).await {
-                    Ok(Some(replacement)) => args = replacement,
+                    Ok(Some(result)) => {
+                        if let Some(replacement) = result.input {
+                            args = replacement;
+                            hook_context.input = args.clone();
+                        }
+                        if result.block {
+                            record_event(
+                                events,
+                                config,
+                                AgentEvent::ToolExecutionStart {
+                                    tool_call_id: tool_call.id.clone(),
+                                    tool_name: tool_call.name.clone(),
+                                    args,
+                                },
+                            )
+                            .await;
+                            execution_outcomes.push(error_tool_execution_outcome(
+                                index,
+                                tool_call.id.clone(),
+                                tool_call.name.clone(),
+                                result
+                                    .reason
+                                    .unwrap_or_else(|| "Tool execution was blocked".to_owned()),
+                            ));
+                            continue 'tool_calls;
+                        }
+                    }
                     Ok(None) => {}
                     Err(error) => {
                         record_event(

@@ -275,7 +275,7 @@ impl AgentToolCallHook for RecordingToolCallHook {
     async fn on_tool_call(
         &self,
         context: AgentToolCallHookContext,
-    ) -> Result<Option<Value>, String> {
+    ) -> Result<Option<AgentToolCallHookResult>, String> {
         self.seen.lock().expect("mutex").push((
             context.tool_call_id,
             context.tool_name,
@@ -297,12 +297,14 @@ impl AgentToolCallHook for ReplacingToolCallHook {
     async fn on_tool_call(
         &self,
         context: AgentToolCallHookContext,
-    ) -> Result<Option<Value>, String> {
+    ) -> Result<Option<AgentToolCallHookResult>, String> {
         assert_eq!(
             context.input.get("value").and_then(Value::as_str),
             Some("original")
         );
-        Ok(Some(json!({ "value": "hooked" })))
+        Ok(Some(AgentToolCallHookResult::replace_input(
+            json!({ "value": "hooked" }),
+        )))
     }
 }
 
@@ -313,12 +315,32 @@ impl AgentToolCallHook for NumberReplacingToolCallHook {
     async fn on_tool_call(
         &self,
         context: AgentToolCallHookContext,
-    ) -> Result<Option<Value>, String> {
+    ) -> Result<Option<AgentToolCallHookResult>, String> {
         assert_eq!(
             context.input.get("value").and_then(Value::as_str),
             Some("original")
         );
-        Ok(Some(json!({ "value": 123 })))
+        Ok(Some(AgentToolCallHookResult::replace_input(
+            json!({ "value": 123 }),
+        )))
+    }
+}
+
+struct BlockingToolCallHook;
+
+#[async_trait]
+impl AgentToolCallHook for BlockingToolCallHook {
+    async fn on_tool_call(
+        &self,
+        context: AgentToolCallHookContext,
+    ) -> Result<Option<AgentToolCallHookResult>, String> {
+        assert_eq!(context.tool_call_id, "tool-1");
+        assert_eq!(context.tool_name, "echo");
+        assert_eq!(
+            context.input.get("value").and_then(Value::as_str),
+            Some("blocked")
+        );
+        Ok(Some(AgentToolCallHookResult::block("blocked by policy")))
     }
 }
 
@@ -1737,6 +1759,78 @@ async fn agent_loop_tool_call_hook_can_replace_arguments_before_execution() {
             .and_then(Value::as_str),
         Some("hooked")
     );
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_loop_tool_call_hook_can_block_execution_with_error_result() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call(
+                "echo",
+                json!({ "value": "blocked" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(Map::new),
+                Some("tool-1".to_owned()),
+            ),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let tool = AgentTool {
+        definition: Tool {
+            name: "echo".to_owned(),
+            description: "Echo tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Echo".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(EchoExecutor {
+            executed: executed.clone(),
+        }),
+    };
+
+    let mut context = context_with_model(&registration.get_model());
+    context.tools.push(tool);
+    let mut config = AgentLoopConfig::new(registration.get_model());
+    config.tool_call_hooks.push(Arc::new(BlockingToolCallHook));
+    let (messages, events) = agent_loop_prompt(context, "run tool", config)
+        .await
+        .expect("loop");
+
+    assert!(executed.lock().expect("mutex").is_empty());
+    assert_eq!(text_of(&messages[2]), Some("blocked by policy"));
+    assert_eq!(text_of(&messages[3]), Some("done"));
+    let tool_end = events.iter().find_map(|event| match event {
+        AgentEvent::ToolExecutionEnd {
+            tool_call_id,
+            result,
+            is_error,
+            ..
+        } if tool_call_id == "tool-1" => Some((result, *is_error)),
+        _ => None,
+    });
+    let Some((result, is_error)) = tool_end else {
+        panic!("expected blocked tool execution end");
+    };
+    assert!(is_error);
+    assert!(matches!(
+        result.content.first(),
+        Some(AgentToolResultContent::Text(text)) if text.text == "blocked by policy"
+    ));
     registration.unregister();
 }
 

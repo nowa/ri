@@ -4721,6 +4721,67 @@ async fn agent_harness_runs_tool_call_and_tool_result_hooks_through_direct_loop(
 }
 
 #[tokio::test]
+async fn agent_harness_tool_call_hook_can_block_tool_execution() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    let mut args = Map::new();
+    args.insert("expression".to_owned(), Value::String("2 + 2".to_owned()));
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call("calculate", args, Some("call-block".to_owned())),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+    let session = Session::new(InMemorySessionStorage::new());
+    let mut options =
+        AgentHarnessOptions::new(test_env(), session.clone(), registration.get_model());
+    options.tools = vec![calculate_tool()];
+    let harness = AgentHarness::new(options);
+    let tool_result_hook_ran = Arc::new(AtomicBool::new(false));
+    let tool_result_hook_ran_ref = tool_result_hook_ran.clone();
+    harness.on_tool_call(|event| {
+        assert_eq!(event.tool_call_id, "call-block");
+        assert_eq!(event.tool_name, "calculate");
+        assert_eq!(event.input["expression"], Value::String("2 + 2".to_owned()));
+        Ok(Some(ToolCallResult {
+            block: true,
+            reason: Some("blocked by harness".to_owned()),
+            ..Default::default()
+        }))
+    });
+    harness.on_tool_result(move |_| {
+        tool_result_hook_ran_ref.store(true, Ordering::SeqCst);
+        Ok(None)
+    });
+
+    harness.prompt("hello").await.expect("prompt");
+
+    assert!(!tool_result_hook_ran.load(Ordering::SeqCst));
+    let tool_result = session
+        .entries()
+        .into_iter()
+        .find_map(|entry| match entry {
+            SessionTreeEntry::Message {
+                message: SessionEntryMessage::Llm(Message::ToolResult(result)),
+                ..
+            } => Some(result),
+            _ => None,
+        })
+        .expect("tool result");
+    assert_eq!(tool_result.tool_call_id, "call-block");
+    assert!(tool_result.is_error);
+    assert!(matches!(
+        tool_result.content.first(),
+        Some(ToolResultContent::Text(text)) if text.text == "blocked by harness"
+    ));
+    registration.unregister();
+}
+
+#[tokio::test]
 async fn agent_harness_refreshes_model_thinking_and_active_tools_at_prepare_next_turn() {
     let mut first_model = FauxModelDefinition::new("first");
     first_model.reasoning = true;

@@ -104,7 +104,8 @@ credentials, local model services where applicable, and manual OAuth flows.
 - Event streaming for agent, turn, message, and tool execution events, including
   partial tool execution updates.
 - Parallel and sequential tool execution.
-- Tool call and tool result hooks.
+- Tool call and tool result hooks, including pre-execution blocking with error
+  tool results.
 - Steering and follow-up queues.
 - Context transforms and custom `AgentMessage` conversion before LLM calls.
 - Custom stream providers, including proxy streaming through `/api/stream`.

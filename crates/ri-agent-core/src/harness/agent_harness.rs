@@ -11,8 +11,8 @@ use crate::{
     types::{
         AgentContext, AgentEvent, AgentEventSink, AgentLoopTurnUpdate, AgentMessage,
         AgentNextTurnContext, AgentNextTurnPreparer, AgentTool, AgentToolCallHook,
-        AgentToolCallHookContext, AgentToolResult, AgentToolResultContent, AgentToolResultHook,
-        AgentToolResultHookContext, QueueMode, ToolExecutionMode,
+        AgentToolCallHookContext, AgentToolCallHookResult, AgentToolResult, AgentToolResultContent,
+        AgentToolResultHook, AgentToolResultHookContext, QueueMode, ToolExecutionMode,
     },
 };
 use async_trait::async_trait;
@@ -456,6 +456,8 @@ pub struct ToolCallEvent {
 #[derive(Debug, Clone, Default)]
 pub struct ToolCallResult {
     pub input: Option<Value>,
+    pub block: bool,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -2433,13 +2435,15 @@ impl AgentToolCallHook for HarnessToolCallHook {
     async fn on_tool_call(
         &self,
         context: AgentToolCallHookContext,
-    ) -> Result<Option<Value>, String> {
+    ) -> Result<Option<AgentToolCallHookResult>, String> {
         let hooks: Vec<ToolCallHook> = self.hooks.lock().values().cloned().collect();
         if hooks.is_empty() {
             return Ok(None);
         }
         let mut current_input = context.input;
         let mut replacement = None;
+        let mut block = false;
+        let mut reason = None;
         for hook in hooks {
             if let Some(result) = hook(ToolCallEvent {
                 tool_call_id: context.tool_call_id.clone(),
@@ -2452,9 +2456,17 @@ impl AgentToolCallHook for HarnessToolCallHook {
                     current_input = input;
                     replacement = Some(current_input.clone());
                 }
+                block = result.block;
+                reason = result.reason;
             }
         }
-        Ok(replacement)
+        Ok(
+            (replacement.is_some() || block).then_some(AgentToolCallHookResult {
+                input: replacement,
+                block,
+                reason,
+            }),
+        )
     }
 }
 
