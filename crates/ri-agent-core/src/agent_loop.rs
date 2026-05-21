@@ -9,7 +9,7 @@ use crate::types::{
 use futures::{StreamExt, stream::FuturesUnordered};
 use ri_llm_provider::{
     AssistantMessage, Model, SimpleStreamOptions, StopReason, ToolCall, ToolResultContent,
-    ToolResultMessage, Usage, now_millis, stream_simple,
+    ToolResultMessage, Usage, now_millis, stream_simple, validate_tool_arguments_value,
 };
 use std::sync::{Arc, Mutex};
 
@@ -722,6 +722,17 @@ async fn prepare_tool_call(
                     error,
                 ));
             }
+        }
+    }
+    match validate_tool_arguments_value(&tool.definition, &tool_call.name, args.clone()) {
+        Ok(validated_args) => args = validated_args,
+        Err(error) => {
+            return ToolCallPreparation::Immediate(error_tool_execution_outcome(
+                index,
+                tool_call.id,
+                tool_call.name,
+                error.to_string(),
+            ));
         }
     }
 

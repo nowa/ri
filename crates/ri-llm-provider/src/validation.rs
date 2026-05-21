@@ -27,7 +27,19 @@ pub fn validate_tool_arguments(
     tool: &Tool,
     tool_call: &ToolCall,
 ) -> Result<Value, ValidationError> {
-    let mut args = Value::Object(tool_call.arguments.clone());
+    validate_tool_arguments_value(
+        tool,
+        &tool_call.name,
+        Value::Object(tool_call.arguments.clone()),
+    )
+}
+
+pub fn validate_tool_arguments_value(
+    tool: &Tool,
+    tool_name: &str,
+    mut args: Value,
+) -> Result<Value, ValidationError> {
+    let received = args.clone();
     coerce_with_schema(&mut args, &tool.parameters);
     let mut errors = Vec::new();
     validate_value(&args, &tool.parameters, "root", &mut errors);
@@ -35,14 +47,13 @@ pub fn validate_tool_arguments(
         Ok(args)
     } else {
         Err(ValidationError::InvalidArguments {
-            tool: tool_call.name.clone(),
+            tool: tool_name.to_owned(),
             details: errors
                 .into_iter()
                 .map(|error| format!("  - {error}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            received: serde_json::to_string_pretty(&Value::Object(tool_call.arguments.clone()))
-                .unwrap_or_else(|_| "{}".to_owned()),
+            received: serde_json::to_string_pretty(&received).unwrap_or_else(|_| "{}".to_owned()),
         })
     }
 }

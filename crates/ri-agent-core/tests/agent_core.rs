@@ -1191,6 +1191,83 @@ async fn agent_loop_turns_missing_tools_into_error_tool_results_and_continues() 
 }
 
 #[tokio::test]
+async fn agent_loop_validates_tool_arguments_before_hooks_and_execution() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call(
+                "echo",
+                json!({}).as_object().cloned().unwrap_or_else(Map::new),
+                Some("tool-1".to_owned()),
+            ),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let tool = AgentTool {
+        definition: Tool {
+            name: "echo".to_owned(),
+            description: "Echo tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Echo".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(EchoExecutor {
+            executed: executed.clone(),
+        }),
+    };
+    let mut context = context_with_model(&registration.get_model());
+    context.tools.push(tool);
+    let seen_hook = Arc::new(Mutex::new(Vec::new()));
+    let mut config = AgentLoopConfig::new(registration.get_model());
+    config.tool_call_hooks.push(Arc::new(RecordingToolCallHook {
+        seen: seen_hook.clone(),
+    }));
+
+    let (messages, events) = agent_loop_prompt(context, "run invalid tool", config)
+        .await
+        .expect("loop");
+
+    assert!(executed.lock().expect("mutex").is_empty());
+    assert!(seen_hook.lock().expect("mutex").is_empty());
+    assert_eq!(
+        messages.iter().map(role_of).collect::<Vec<_>>(),
+        vec!["user", "assistant", "toolResult", "assistant"]
+    );
+    let validation_error = text_of(&messages[2]).expect("validation error");
+    assert!(validation_error.contains("Validation failed for tool \"echo\""));
+    assert!(validation_error.contains("value: required property is missing"));
+    assert!(validation_error.contains("Received arguments"));
+    assert_eq!(text_of(&messages[3]), Some("done"));
+    let tool_end = events.iter().find_map(|event| match event {
+        AgentEvent::ToolExecutionEnd {
+            result, is_error, ..
+        } => Some((result, *is_error)),
+        _ => None,
+    });
+    let Some((result, is_error)) = tool_end else {
+        panic!("expected validation tool execution end");
+    };
+    assert!(is_error);
+    assert!(matches!(
+        result.content.first(),
+        Some(AgentToolResultContent::Text(text)) if text.text == validation_error
+    ));
+    registration.unregister();
+}
+
+#[tokio::test]
 async fn agent_loop_turns_tool_execution_errors_into_error_tool_results_and_continues() {
     let registration = register_faux_provider(RegisterFauxProviderOptions::default());
     registration.set_responses(vec![
