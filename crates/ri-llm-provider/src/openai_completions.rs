@@ -71,7 +71,7 @@ pub fn build_openai_completions_payload(
     }
 
     if let Some(max_tokens) = options.max_tokens.filter(|value| *value > 0) {
-        if max_tokens_field(model) == Some("max_tokens") {
+        if max_tokens_field(model) == "max_tokens" {
             payload["max_tokens"] = json!(max_tokens);
         } else {
             payload["max_completion_tokens"] = json!(max_tokens);
@@ -101,8 +101,13 @@ fn convert_openai_completions_messages_with_cache(
 ) -> Vec<Value> {
     let mut messages = Vec::new();
     if let Some(system_prompt) = &context.system_prompt {
+        let role = if model.reasoning && supports_developer_role(model) {
+            "developer"
+        } else {
+            "system"
+        };
         messages.push(json!({
-            "role": "system",
+            "role": role,
             "content": format_text_content(system_prompt, anthropic_cache_markers),
         }));
     }
@@ -941,34 +946,72 @@ fn supports_store(model: &Model) -> bool {
         .unwrap_or_else(|| !is_nonstandard_openai_completions_model(model))
 }
 
+fn supports_developer_role(model: &Model) -> bool {
+    model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("supportsDeveloperRole"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| !is_nonstandard_openai_completions_model(model))
+}
+
 fn is_nonstandard_openai_completions_model(model: &Model) -> bool {
     let provider = model.provider.as_str();
     let base_url = model.base_url.as_str();
-    let is_together = provider == "together"
-        || base_url.contains("api.together.ai")
-        || base_url.contains("api.together.xyz");
-    let is_zai = provider == "zai" || base_url.contains("api.z.ai");
-    let is_moonshot = provider == "moonshotai"
-        || provider == "moonshotai-cn"
-        || base_url.contains("api.moonshot.");
-    let is_cloudflare_workers_ai =
-        provider == "cloudflare-workers-ai" || base_url.contains("api.cloudflare.com");
-    let is_cloudflare_ai_gateway =
-        provider == "cloudflare-ai-gateway" || base_url.contains("gateway.ai.cloudflare.com");
 
     provider == "cerebras"
         || base_url.contains("cerebras.ai")
         || provider == "xai"
         || base_url.contains("api.x.ai")
-        || is_together
+        || is_together_openai_completions_model(model)
         || base_url.contains("chutes.ai")
         || base_url.contains("deepseek.com")
-        || is_zai
-        || is_moonshot
+        || is_zai_openai_completions_model(model)
+        || is_moonshot_openai_completions_model(model)
         || provider == "opencode"
         || base_url.contains("opencode.ai")
-        || is_cloudflare_workers_ai
-        || is_cloudflare_ai_gateway
+        || is_cloudflare_workers_ai_model(model)
+        || is_cloudflare_ai_gateway_model(model)
+}
+
+fn is_together_openai_completions_model(model: &Model) -> bool {
+    model.provider == "together"
+        || model.base_url.contains("api.together.ai")
+        || model.base_url.contains("api.together.xyz")
+}
+
+fn is_zai_openai_completions_model(model: &Model) -> bool {
+    model.provider == "zai" || model.base_url.contains("api.z.ai")
+}
+
+fn is_moonshot_openai_completions_model(model: &Model) -> bool {
+    model.provider == "moonshotai"
+        || model.provider == "moonshotai-cn"
+        || model.base_url.contains("api.moonshot.")
+}
+
+fn is_cloudflare_workers_ai_model(model: &Model) -> bool {
+    model.provider == "cloudflare-workers-ai" || model.base_url.contains("api.cloudflare.com")
+}
+
+fn is_cloudflare_ai_gateway_model(model: &Model) -> bool {
+    model.provider == "cloudflare-ai-gateway"
+        || model.base_url.contains("gateway.ai.cloudflare.com")
+}
+
+fn is_grok_openai_completions_model(model: &Model) -> bool {
+    model.provider == "xai" || model.base_url.contains("api.x.ai")
+}
+
+fn is_deepseek_openai_completions_model(model: &Model) -> bool {
+    model.provider == "deepseek" || model.base_url.contains("deepseek.com")
+}
+
+fn uses_max_tokens_field(model: &Model) -> bool {
+    model.base_url.contains("chutes.ai")
+        || is_moonshot_openai_completions_model(model)
+        || is_cloudflare_ai_gateway_model(model)
+        || is_together_openai_completions_model(model)
 }
 
 fn uses_anthropic_cache_control(model: &Model) -> bool {
@@ -1010,12 +1053,18 @@ fn send_session_affinity_headers(model: &Model) -> bool {
     compat_bool(model, "sendSessionAffinityHeaders")
 }
 
-fn max_tokens_field(model: &Model) -> Option<&str> {
-    model
+fn max_tokens_field(model: &Model) -> &'static str {
+    match model
         .compat
         .as_ref()
         .and_then(|compat| compat.get("maxTokensField"))
         .and_then(Value::as_str)
+    {
+        Some("max_tokens") => "max_tokens",
+        Some("max_completion_tokens") => "max_completion_tokens",
+        _ if uses_max_tokens_field(model) => "max_tokens",
+        _ => "max_completion_tokens",
+    }
 }
 
 fn should_set_prompt_cache_key(model: &Model, cache_retention: CacheRetention) -> bool {
@@ -1029,7 +1078,11 @@ fn supports_long_cache_retention(model: &Model) -> bool {
         .as_ref()
         .and_then(|compat| compat.get("supportsLongCacheRetention"))
         .and_then(Value::as_bool)
-        .unwrap_or(true)
+        .unwrap_or_else(|| {
+            !(is_together_openai_completions_model(model)
+                || is_cloudflare_workers_ai_model(model)
+                || is_cloudflare_ai_gateway_model(model))
+        })
 }
 
 fn compat_bool(model: &Model, key: &str) -> bool {
@@ -1042,23 +1095,107 @@ fn compat_bool(model: &Model, key: &str) -> bool {
 }
 
 fn apply_reasoning_options(payload: &mut Value, model: &Model, reasoning: Option<ThinkingLevel>) {
-    let Some(reasoning) = reasoning else {
+    if !model.reasoning {
         return;
-    };
-    if model.provider == "openrouter" && model.id == "deepseek/deepseek-r1" {
-        payload["reasoning"] = json!({ "effort": thinking_level_wire(model, reasoning) });
-    } else if model.provider == "groq" && model.id.starts_with("qwen/qwen3") {
-        payload["reasoning_effort"] = Value::String("default".to_owned());
-    } else if model
+    }
+
+    if model.provider == "groq" && model.id.starts_with("qwen/qwen3") {
+        if reasoning.is_some() {
+            payload["reasoning_effort"] = Value::String("default".to_owned());
+        }
+    } else {
+        match thinking_format(model) {
+            "zai" | "qwen" => {
+                payload["enable_thinking"] = Value::Bool(reasoning.is_some());
+            }
+            "qwen-chat-template" => {
+                payload["chat_template_kwargs"] = json!({
+                    "enable_thinking": reasoning.is_some(),
+                    "preserve_thinking": true,
+                });
+            }
+            "deepseek" => {
+                payload["thinking"] = json!({
+                    "type": if reasoning.is_some() { "enabled" } else { "disabled" },
+                });
+                if let Some(reasoning) = reasoning {
+                    payload["reasoning_effort"] =
+                        Value::String(thinking_level_wire(model, reasoning));
+                }
+            }
+            "openrouter" => {
+                if let Some(reasoning) = reasoning {
+                    payload["reasoning"] =
+                        json!({ "effort": thinking_level_wire(model, reasoning) });
+                } else if model.thinking_level_map.get(&ThinkingLevel::Off) != Some(&None) {
+                    let effort = model
+                        .thinking_level_map
+                        .get(&ThinkingLevel::Off)
+                        .and_then(|value| value.clone())
+                        .unwrap_or_else(|| "none".to_owned());
+                    payload["reasoning"] = json!({ "effort": effort });
+                }
+            }
+            "together" => {
+                payload["reasoning"] = json!({ "enabled": reasoning.is_some() });
+                if let Some(reasoning) = reasoning
+                    && supports_reasoning_effort(model)
+                {
+                    payload["reasoning_effort"] =
+                        Value::String(thinking_level_wire(model, reasoning));
+                }
+            }
+            _ => {
+                if let Some(reasoning) = reasoning {
+                    if supports_reasoning_effort(model) {
+                        payload["reasoning_effort"] =
+                            Value::String(thinking_level_wire(model, reasoning));
+                    }
+                } else if supports_reasoning_effort(model)
+                    && let Some(Some(off_value)) = model.thinking_level_map.get(&ThinkingLevel::Off)
+                {
+                    payload["reasoning_effort"] = Value::String(off_value.clone());
+                }
+            }
+        }
+    }
+}
+
+fn supports_reasoning_effort(model: &Model) -> bool {
+    model
         .compat
         .as_ref()
         .and_then(|compat| compat.get("supportsReasoningEffort"))
         .and_then(Value::as_bool)
-        == Some(false)
+        .unwrap_or_else(|| {
+            !(is_grok_openai_completions_model(model)
+                || is_zai_openai_completions_model(model)
+                || is_moonshot_openai_completions_model(model)
+                || is_together_openai_completions_model(model)
+                || is_cloudflare_ai_gateway_model(model))
+        })
+}
+
+fn thinking_format(model: &Model) -> &str {
+    if let Some(format) = model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("thinkingFormat"))
+        .and_then(Value::as_str)
     {
-        return;
+        return format;
+    }
+
+    if is_deepseek_openai_completions_model(model) {
+        "deepseek"
+    } else if is_zai_openai_completions_model(model) {
+        "zai"
+    } else if is_together_openai_completions_model(model) {
+        "together"
+    } else if model.provider == "openrouter" || model.base_url.contains("openrouter.ai") {
+        "openrouter"
     } else {
-        payload["reasoning_effort"] = Value::String(thinking_level_wire(model, reasoning));
+        "openai"
     }
 }
 

@@ -10415,6 +10415,40 @@ fn openai_completions_payload_sets_stream_usage_store_and_omits_falsey_options()
 }
 
 #[test]
+fn openai_completions_system_prompt_uses_developer_role_for_standard_reasoning_models() {
+    let context = Context {
+        system_prompt: Some("Follow policy.".to_owned()),
+        messages: vec![Message::User(UserMessage::text("hi"))],
+        ..Default::default()
+    };
+    let mut model = get_model("openai", "gpt-4o-mini").expect("model");
+    model.api = "openai-completions".to_owned();
+    model.reasoning = true;
+
+    let messages = convert_openai_completions_messages(&model, &context);
+    assert_eq!(messages[0]["role"], "developer");
+
+    let mut non_reasoning_model = model.clone();
+    non_reasoning_model.reasoning = false;
+    let messages = convert_openai_completions_messages(&non_reasoning_model, &context);
+    assert_eq!(messages[0]["role"], "system");
+
+    let mut compat_disabled_model = model.clone();
+    compat_disabled_model.compat = Some(json!({ "supportsDeveloperRole": false }));
+    let messages = convert_openai_completions_messages(&compat_disabled_model, &context);
+    assert_eq!(messages[0]["role"], "system");
+
+    let mut cloudflare_model = get_model(
+        "cloudflare-ai-gateway",
+        "workers-ai/@cf/moonshotai/kimi-k2.6",
+    )
+    .expect("cloudflare gateway workers model");
+    cloudflare_model.reasoning = true;
+    let messages = convert_openai_completions_messages(&cloudflare_model, &context);
+    assert_eq!(messages[0]["role"], "system");
+}
+
+#[test]
 fn openai_completions_payload_forwards_tool_choice_and_strict_compat() {
     let mut model = get_model("openai", "gpt-4o-mini").expect("model");
     model.api = "openai-completions".to_owned();
@@ -10455,6 +10489,7 @@ fn openai_completions_payload_forwards_tool_choice_and_strict_compat() {
 #[test]
 fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
     let groq_qwen = get_model("groq", "qwen/qwen3-32b").expect("groq qwen");
+    assert!(groq_qwen.reasoning);
     let payload = build_openai_completions_payload(
         &groq_qwen,
         &Context {
@@ -10482,6 +10517,16 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
     );
     assert_eq!(payload["reasoning"], json!({ "effort": "high" }));
     assert!(payload.get("reasoning_effort").is_none());
+    let payload = build_openai_completions_payload(
+        &openrouter,
+        &Context {
+            messages: vec![Message::User(UserMessage::text("Hi"))],
+            ..Default::default()
+        },
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert_eq!(payload["reasoning"], json!({ "effort": "none" }));
+    assert!(payload.get("reasoning_effort").is_none());
 
     let openrouter_opus =
         get_model("openrouter", "anthropic/claude-opus-4.6").expect("openrouter opus");
@@ -10496,7 +10541,8 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
             ..Default::default()
         },
     );
-    assert_eq!(payload["reasoning_effort"], "max");
+    assert_eq!(payload["reasoning"], json!({ "effort": "max" }));
+    assert!(payload.get("reasoning_effort").is_none());
 
     let deepseek_v4 = get_model("deepseek", "deepseek-v4-flash").expect("deepseek v4");
     let payload = build_openai_completions_payload(
@@ -10510,6 +10556,7 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
             ..Default::default()
         },
     );
+    assert_eq!(payload["thinking"], json!({ "type": "enabled" }));
     assert_eq!(payload["reasoning_effort"], "max");
 
     let zai = get_model("zai", "glm-5.1").expect("zai");
@@ -10526,6 +10573,7 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
         },
         OpenAICompletionsPayloadOptions::default(),
     );
+    assert_eq!(payload["enable_thinking"], false);
     assert_eq!(payload["tool_stream"], true);
 
     let unsupported = get_model("zai", "glm-4.5-air").expect("zai unsupported");
@@ -10546,8 +10594,10 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
 }
 
 #[test]
-fn openrouter_qwen_payload_omits_reasoning_fields_when_reasoning_is_disabled_by_default() {
+fn openrouter_qwen_payload_uses_openrouter_reasoning_format_and_disables_by_default() {
     let model = get_model("openrouter", "qwen/qwen3.5-plus-02-15").expect("openrouter qwen");
+    assert!(model.reasoning);
+    assert_eq!(model.input, vec![InputKind::Text, InputKind::Image]);
     let context = user_context("Reply with pong.");
 
     let payload = build_openai_completions_payload(
@@ -10556,7 +10606,7 @@ fn openrouter_qwen_payload_omits_reasoning_fields_when_reasoning_is_disabled_by_
         OpenAICompletionsPayloadOptions::default(),
     );
     assert_eq!(payload["model"], "qwen/qwen3.5-plus-02-15");
-    assert!(payload.get("reasoning").is_none());
+    assert_eq!(payload["reasoning"], json!({ "effort": "none" }));
     assert!(payload.get("reasoning_effort").is_none());
 
     let payload = build_openai_completions_payload(
@@ -10567,13 +10617,14 @@ fn openrouter_qwen_payload_omits_reasoning_fields_when_reasoning_is_disabled_by_
             ..Default::default()
         },
     );
-    assert_eq!(payload["reasoning_effort"], "high");
-    assert!(payload.get("reasoning").is_none());
+    assert_eq!(payload["reasoning"], json!({ "effort": "high" }));
+    assert!(payload.get("reasoning_effort").is_none());
 }
 
 #[test]
 fn openai_completions_payload_keeps_normal_groq_reasoning_effort_without_mapping() {
     let groq_gpt_oss = get_model("groq", "openai/gpt-oss-20b").expect("groq gpt oss");
+    assert!(groq_gpt_oss.reasoning);
     let payload = build_openai_completions_payload(
         &groq_gpt_oss,
         &Context {
@@ -10591,11 +10642,159 @@ fn openai_completions_payload_keeps_normal_groq_reasoning_effort_without_mapping
 }
 
 #[test]
+fn openai_completions_detects_openai_compatible_payload_defaults_from_base_url() {
+    let context = Context {
+        system_prompt: Some("Follow policy.".to_owned()),
+        messages: vec![Message::User(UserMessage::text("Hi"))],
+        ..Default::default()
+    };
+    let together_model = Model {
+        id: "custom-together".to_owned(),
+        name: "Custom Together".to_owned(),
+        api: "openai-completions".to_owned(),
+        provider: "custom".to_owned(),
+        base_url: "https://api.together.ai/v1".to_owned(),
+        reasoning: true,
+        thinking_level_map: Default::default(),
+        input: vec![InputKind::Text],
+        cost: ModelCost::default(),
+        context_window: 128_000,
+        max_tokens: 32_000,
+        headers: Default::default(),
+        compat: None,
+    };
+
+    let payload = build_openai_completions_payload(
+        &together_model,
+        &context,
+        OpenAICompletionsPayloadOptions {
+            reasoning: Some(ThinkingLevel::High),
+            max_tokens: Some(64),
+            cache_retention: Some(CacheRetention::Long),
+            session_id: Some("session-together".to_owned()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(payload["messages"][0]["role"], "system");
+    assert_eq!(payload["max_tokens"], 64);
+    assert!(payload.get("max_completion_tokens").is_none());
+    assert!(payload.get("store").is_none());
+    assert!(payload.get("prompt_cache_key").is_none());
+    assert!(payload.get("prompt_cache_retention").is_none());
+    assert_eq!(payload["reasoning"], json!({ "enabled": true }));
+    assert!(payload.get("reasoning_effort").is_none());
+
+    let payload = build_openai_completions_payload(
+        &together_model,
+        &context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert_eq!(payload["reasoning"], json!({ "enabled": false }));
+
+    let mut explicit_reasoning_model = together_model.clone();
+    explicit_reasoning_model.compat = Some(json!({ "supportsReasoningEffort": true }));
+    let payload = build_openai_completions_payload(
+        &explicit_reasoning_model,
+        &context,
+        OpenAICompletionsPayloadOptions {
+            reasoning: Some(ThinkingLevel::High),
+            ..Default::default()
+        },
+    );
+    assert_eq!(payload["reasoning"], json!({ "enabled": true }));
+    assert_eq!(payload["reasoning_effort"], "high");
+}
+
+#[test]
+fn openai_completions_payload_maps_detected_and_explicit_thinking_formats() {
+    let context = Context {
+        messages: vec![Message::User(UserMessage::text("Hi"))],
+        ..Default::default()
+    };
+    let zai_model = get_model("zai", "glm-5.1").expect("zai model");
+    let payload = build_openai_completions_payload(
+        &zai_model,
+        &context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert_eq!(payload["enable_thinking"], false);
+    assert!(payload.get("reasoning_effort").is_none());
+
+    let payload = build_openai_completions_payload(
+        &zai_model,
+        &context,
+        OpenAICompletionsPayloadOptions {
+            reasoning: Some(ThinkingLevel::Medium),
+            ..Default::default()
+        },
+    );
+    assert_eq!(payload["enable_thinking"], true);
+    assert!(payload.get("reasoning_effort").is_none());
+
+    let qwen_template_model = Model {
+        id: "custom-qwen-chat-template".to_owned(),
+        name: "Custom Qwen Chat Template".to_owned(),
+        api: "openai-completions".to_owned(),
+        provider: "custom".to_owned(),
+        base_url: "https://example.com/v1".to_owned(),
+        reasoning: true,
+        thinking_level_map: Default::default(),
+        input: vec![InputKind::Text],
+        cost: ModelCost::default(),
+        context_window: 128_000,
+        max_tokens: 32_000,
+        headers: Default::default(),
+        compat: Some(json!({ "thinkingFormat": "qwen-chat-template" })),
+    };
+    let payload = build_openai_completions_payload(
+        &qwen_template_model,
+        &context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert_eq!(
+        payload["chat_template_kwargs"],
+        json!({ "enable_thinking": false, "preserve_thinking": true })
+    );
+
+    let payload = build_openai_completions_payload(
+        &qwen_template_model,
+        &context,
+        OpenAICompletionsPayloadOptions {
+            reasoning: Some(ThinkingLevel::Low),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        payload["chat_template_kwargs"],
+        json!({ "enable_thinking": true, "preserve_thinking": true })
+    );
+}
+
+#[test]
 fn openai_completions_zai_tool_stream_metadata_override_and_no_tools_match_provider() {
     for model_id in ["glm-5.1", "glm-4.7", "glm-5-turbo"] {
+        let model = get_model("zai", model_id).expect("zai model");
+        assert!(model.reasoning, "{model_id}");
         assert_eq!(
-            get_model("zai", model_id)
-                .expect("zai model")
+            model
+                .compat
+                .as_ref()
+                .and_then(|compat| compat.get("supportsDeveloperRole"))
+                .and_then(Value::as_bool),
+            Some(false),
+            "{model_id}"
+        );
+        assert_eq!(
+            model
+                .compat
+                .as_ref()
+                .and_then(|compat| compat.get("thinkingFormat"))
+                .and_then(Value::as_str),
+            Some("zai"),
+            "{model_id}"
+        );
+        assert_eq!(
+            model
                 .compat
                 .as_ref()
                 .and_then(|compat| compat.get("zaiToolStream"))
@@ -10604,9 +10803,26 @@ fn openai_completions_zai_tool_stream_metadata_override_and_no_tools_match_provi
             "{model_id}"
         );
     }
+    let unsupported_model = get_model("zai", "glm-4.5-air").expect("unsupported zai model");
+    assert!(unsupported_model.reasoning);
     assert_eq!(
-        get_model("zai", "glm-4.5-air")
-            .expect("unsupported zai model")
+        unsupported_model
+            .compat
+            .as_ref()
+            .and_then(|compat| compat.get("supportsDeveloperRole"))
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        unsupported_model
+            .compat
+            .as_ref()
+            .and_then(|compat| compat.get("thinkingFormat"))
+            .and_then(Value::as_str),
+        Some("zai")
+    );
+    assert_eq!(
+        unsupported_model
             .compat
             .as_ref()
             .and_then(|compat| compat.get("zaiToolStream"))

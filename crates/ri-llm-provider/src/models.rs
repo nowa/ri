@@ -493,6 +493,25 @@ fn apply_known_model_overrides(model: &mut Model) {
             model.reasoning = true;
             ensure_image_input(model);
         }
+        ("groq", "openai/gpt-oss-20b" | "openai/gpt-oss-120b") => {
+            model.reasoning = true;
+        }
+        ("groq", "qwen/qwen3-32b") => {
+            model.reasoning = true;
+            model.thinking_level_map.clear();
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Minimal, None);
+            model.thinking_level_map.insert(ThinkingLevel::Low, None);
+            model.thinking_level_map.insert(ThinkingLevel::Medium, None);
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::High, Some("default".to_owned()));
+        }
+        ("openrouter", "qwen/qwen3.5-plus-02-15") => {
+            model.reasoning = true;
+            ensure_image_input(model);
+        }
         ("together", "moonshotai/Kimi-K2.6") => {
             model.base_url = "https://api.together.ai/v1".to_owned();
             model.reasoning = true;
@@ -881,9 +900,11 @@ fn base_url_for_provider(provider: &str) -> &'static str {
 
 fn reasoning_for_model(provider: &str, model_id: &str) -> bool {
     provider == "openai-codex"
+        || provider == "zai"
         || model_id.starts_with("gpt-5")
         || model_id.contains("opus")
         || model_id.contains("sonnet")
+        || model_id.contains("deepseek-r1")
         || model_id.contains("thinking")
         || model_id.contains("magistral")
         || model_id.contains("gemini-2.5")
@@ -931,8 +952,15 @@ fn supports_images(provider: &str, model_id: &str) -> bool {
 }
 
 fn compat_for_model(provider: &str, model_id: &str) -> Option<Value> {
-    if provider == "zai" && matches!(model_id, "glm-4.7" | "glm-5-turbo" | "glm-5.1") {
-        Some(json!({ "zaiToolStream": true }))
+    if provider == "zai" {
+        let mut compat = json!({
+            "supportsDeveloperRole": false,
+            "thinkingFormat": "zai",
+        });
+        if matches!(model_id, "glm-4.7" | "glm-5-turbo" | "glm-5.1") {
+            compat["zaiToolStream"] = Value::Bool(true);
+        }
+        Some(compat)
     } else if provider == "cloudflare-workers-ai"
         || (provider == "cloudflare-ai-gateway" && model_id.starts_with("workers-ai/"))
     {
