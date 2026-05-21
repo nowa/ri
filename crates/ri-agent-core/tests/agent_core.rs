@@ -3878,6 +3878,11 @@ async fn agent_has_queued_messages_tracks_steering_follow_up_and_clears() {
     assert!(agent.has_queued_messages());
 
     agent.abort();
+    assert!(
+        agent.has_queued_messages(),
+        "low-level Agent::abort matches Pi Agent.abort by cancelling the active run without clearing queued messages"
+    );
+    agent.clear_follow_up_queue();
     assert!(!agent.has_queued_messages());
 
     agent.steer(Message::User(UserMessage::text("Steering message")));

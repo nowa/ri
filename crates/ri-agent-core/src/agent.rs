@@ -348,7 +348,6 @@ impl Agent {
 
     pub fn abort(&self) {
         self.abort_flag.store(true, Ordering::SeqCst);
-        self.clear_all_queues();
     }
 
     pub fn abort_handle(&self) -> Arc<AtomicBool> {

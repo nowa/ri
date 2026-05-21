@@ -267,8 +267,9 @@ counterparts that pass.
     prompt normalization, prompt-message runs, source-compatible busy/continue
     validation errors, and steering/follow-up queues with one-at-a-time/all
     drain modes plus queued state introspection, queue clearing/reset helpers,
-    abort handles that cancel active provider streams, and provider start
-    failures persisted as assistant error messages with lifecycle events.
+    abort handles that cancel active provider streams without clearing
+    low-level `Agent` queues, and provider start failures persisted as
+    assistant error messages with lifecycle events.
   - Custom stream-provider hooks for the low-level loop and `Agent` wrapper,
     dynamic per-request API key providers for low-level LLM calls with static
     key fallback, including a Rust-native `agent/src/proxy.ts` counterpart that
@@ -398,6 +399,17 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after aligning Pi low-level
+  `Agent.abort()` queue behavior from `agent.ts`: Rust `Agent::abort()` now
+  only cancels the active run and preserves queued steering/follow-up messages;
+  explicit clear helpers and `reset` still clear queues, while high-level
+  harness abort keeps its Pi-style queue clearing behavior:
+  `cargo fmt`, `cargo fmt --check`, `git diff --check`,
+  `cargo test -p ri-agent-core --test agent_core agent_has_queued_messages_tracks_steering_follow_up_and_clears -- --exact`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo test --workspace -- --list`, and
+  `cargo test --workspace -- --test-threads=1` passed; the list command
+  enumerated 1118 tests.
+- Previous local verification on 2026-05-21 after aligning Pi low-level
   `getApiKey` behavior from `agent-loop.ts`, `agent.ts`, and `types.ts`: Rust
   `AgentLoopConfig`/`AgentOptions` now accept an async API key provider, resolve
   it before each low-level provider request, override the static stream
