@@ -1306,6 +1306,20 @@ fn live_abort_then_new_message_context(aborted: AssistantMessage) -> Context {
     }
 }
 
+fn live_midstream_abort_then_new_message_context(aborted: AssistantMessage) -> Context {
+    Context {
+        system_prompt: Some("You are a helpful assistant.".to_owned()),
+        messages: vec![
+            Message::User(UserMessage::text(LIVE_ABORT_PROMPT)),
+            Message::Assistant(aborted),
+            Message::User(UserMessage::text(
+                "Please continue, but keep the answer to one short sentence.",
+            )),
+        ],
+        ..Default::default()
+    }
+}
+
 fn live_multiturn_context(model: &Model) -> Context {
     Context {
         system_prompt: Some("You are a helpful assistant. Be concise.".to_owned()),
@@ -4402,12 +4416,11 @@ async fn run_live_abort_then_new_message_bedrock_smoke(test: &str) -> Result<(),
     Ok(())
 }
 
-async fn run_live_abort_tokens_with_options(
+async fn run_live_midstream_abort_with_options(
     test: &str,
     model: &Model,
     mut options: SimpleStreamOptions,
-    expectation: LiveAbortUsageExpectation,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<AssistantMessage, Box<dyn Error>> {
     let abort_flag = options
         .stream
         .abort_flag
@@ -4437,7 +4450,65 @@ async fn run_live_abort_tokens_with_options(
         abort_fired,
         "{test} completed without text/thinking deltas to abort: {message:?}"
     );
+    assert!(
+        !message.content.is_empty(),
+        "{test} aborted stream should preserve partial assistant content: {message:?}"
+    );
+    assert_eq!(
+        message.stop_reason,
+        StopReason::Aborted,
+        "{test} expected an aborted stream, got {:?}: {:?}",
+        message.stop_reason,
+        message.error_message
+    );
+    Ok(message)
+}
+
+async fn run_live_abort_tokens_with_options(
+    test: &str,
+    model: &Model,
+    options: SimpleStreamOptions,
+    expectation: LiveAbortUsageExpectation,
+) -> Result<AssistantMessage, Box<dyn Error>> {
+    let message = run_live_midstream_abort_with_options(test, model, options).await?;
     assert_live_abort_usage(test, &message, expectation);
+    Ok(message)
+}
+
+async fn run_live_abort_tokens_then_new_message_with_options(
+    test: &str,
+    model: &Model,
+    options: SimpleStreamOptions,
+    expectation: LiveAbortUsageExpectation,
+) -> Result<(), Box<dyn Error>> {
+    let mut follow_up_options = options.clone();
+    follow_up_options.stream.abort_flag = None;
+    let aborted = run_live_abort_tokens_with_options(test, model, options, expectation).await?;
+    let follow_up = complete_simple(
+        model,
+        live_midstream_abort_then_new_message_context(aborted),
+        follow_up_options,
+    )
+    .await?;
+    assert_live_text_response(test, &follow_up);
+    Ok(())
+}
+
+async fn run_live_midstream_abort_then_new_message_with_options(
+    test: &str,
+    model: &Model,
+    options: SimpleStreamOptions,
+) -> Result<(), Box<dyn Error>> {
+    let mut follow_up_options = options.clone();
+    follow_up_options.stream.abort_flag = None;
+    let aborted = run_live_midstream_abort_with_options(test, model, options).await?;
+    let follow_up = complete_simple(
+        model,
+        live_midstream_abort_then_new_message_context(aborted),
+        follow_up_options,
+    )
+    .await?;
+    assert_live_text_response(test, &follow_up);
     Ok(())
 }
 
@@ -4635,6 +4706,47 @@ async fn run_live_abort_tokens_smoke(
         expectation,
     )
     .await
+    .map(|_| ())
+}
+
+async fn run_live_abort_tokens_then_new_message_smoke(
+    test: &str,
+    provider: &str,
+    model_id: &str,
+    api_key_env: &str,
+    expectation: LiveAbortUsageExpectation,
+) -> Result<(), Box<dyn Error>> {
+    let Some(api_key) = live_api_key(test, api_key_env) else {
+        return Ok(());
+    };
+    let model = get_model(provider, model_id)
+        .ok_or_else(|| format!("missing model registry entry: {provider}/{model_id}"))?;
+    run_live_abort_tokens_then_new_message_with_options(
+        test,
+        &model,
+        live_abort_options(Some(api_key), Arc::new(AtomicBool::new(false))),
+        expectation,
+    )
+    .await
+}
+
+async fn run_live_midstream_abort_then_new_message_api_key_smoke(
+    test: &str,
+    provider: &str,
+    model_id: &str,
+    api_key_env: &str,
+) -> Result<(), Box<dyn Error>> {
+    let Some(api_key) = live_api_key(test, api_key_env) else {
+        return Ok(());
+    };
+    let model = get_model(provider, model_id)
+        .ok_or_else(|| format!("missing model registry entry: {provider}/{model_id}"))?;
+    run_live_midstream_abort_then_new_message_with_options(
+        test,
+        &model,
+        live_abort_options(Some(api_key), Arc::new(AtomicBool::new(false))),
+    )
+    .await
 }
 
 async fn run_live_response_id_smoke(
@@ -4792,6 +4904,26 @@ async fn run_live_oauth_abort_tokens_smoke(
     };
     let model = live_oauth_model(provider, model_id, &resolution)?;
     run_live_abort_tokens_with_options(
+        test,
+        &model,
+        live_abort_options(Some(resolution.api_key), Arc::new(AtomicBool::new(false))),
+        expectation,
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn run_live_oauth_abort_tokens_then_new_message_smoke(
+    test: &str,
+    provider: &str,
+    model_id: &str,
+    expectation: LiveAbortUsageExpectation,
+) -> Result<(), Box<dyn Error>> {
+    let Some(resolution) = live_oauth_resolution(test, provider).await else {
+        return Ok(());
+    };
+    let model = live_oauth_model(provider, model_id, &resolution)?;
+    run_live_abort_tokens_then_new_message_with_options(
         test,
         &model,
         live_abort_options(Some(resolution.api_key), Arc::new(AtomicBool::new(false))),
@@ -8432,9 +8564,32 @@ async fn live_xiaomi_immediate_abort() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+async fn live_xiaomi_handles_midstream_abort_then_new_message() -> Result<(), Box<dyn Error>> {
+    run_live_midstream_abort_then_new_message_api_key_smoke(
+        "live_xiaomi_handles_midstream_abort_then_new_message",
+        "xiaomi",
+        "mimo-v2.5-pro",
+        "XIAOMI_API_KEY",
+    )
+    .await
+}
+
+#[tokio::test]
 async fn live_xiaomi_token_plan_cn_immediate_abort() -> Result<(), Box<dyn Error>> {
     run_live_immediate_abort_api_key_smoke(
         "live_xiaomi_token_plan_cn_immediate_abort",
+        "xiaomi-token-plan-cn",
+        "mimo-v2.5-pro",
+        "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn live_xiaomi_token_plan_cn_handles_midstream_abort_then_new_message()
+-> Result<(), Box<dyn Error>> {
+    run_live_midstream_abort_then_new_message_api_key_smoke(
+        "live_xiaomi_token_plan_cn_handles_midstream_abort_then_new_message",
         "xiaomi-token-plan-cn",
         "mimo-v2.5-pro",
         "XIAOMI_TOKEN_PLAN_CN_API_KEY",
@@ -8454,6 +8609,18 @@ async fn live_xiaomi_token_plan_ams_immediate_abort() -> Result<(), Box<dyn Erro
 }
 
 #[tokio::test]
+async fn live_xiaomi_token_plan_ams_handles_midstream_abort_then_new_message()
+-> Result<(), Box<dyn Error>> {
+    run_live_midstream_abort_then_new_message_api_key_smoke(
+        "live_xiaomi_token_plan_ams_handles_midstream_abort_then_new_message",
+        "xiaomi-token-plan-ams",
+        "mimo-v2.5-pro",
+        "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+    )
+    .await
+}
+
+#[tokio::test]
 async fn live_xiaomi_token_plan_sgp_immediate_abort() -> Result<(), Box<dyn Error>> {
     run_live_immediate_abort_api_key_smoke(
         "live_xiaomi_token_plan_sgp_immediate_abort",
@@ -8465,9 +8632,32 @@ async fn live_xiaomi_token_plan_sgp_immediate_abort() -> Result<(), Box<dyn Erro
 }
 
 #[tokio::test]
+async fn live_xiaomi_token_plan_sgp_handles_midstream_abort_then_new_message()
+-> Result<(), Box<dyn Error>> {
+    run_live_midstream_abort_then_new_message_api_key_smoke(
+        "live_xiaomi_token_plan_sgp_handles_midstream_abort_then_new_message",
+        "xiaomi-token-plan-sgp",
+        "mimo-v2.5-pro",
+        "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
+    )
+    .await
+}
+
+#[tokio::test]
 async fn live_kimi_coding_immediate_abort() -> Result<(), Box<dyn Error>> {
     run_live_immediate_abort_api_key_smoke(
         "live_kimi_coding_immediate_abort",
+        "kimi-coding",
+        "kimi-k2-thinking",
+        "KIMI_API_KEY",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn live_kimi_coding_handles_midstream_abort_then_new_message() -> Result<(), Box<dyn Error>> {
+    run_live_midstream_abort_then_new_message_api_key_smoke(
+        "live_kimi_coding_handles_midstream_abort_then_new_message",
         "kimi-coding",
         "kimi-k2-thinking",
         "KIMI_API_KEY",
@@ -8533,7 +8723,7 @@ async fn live_openai_responses_exposes_response_id() -> Result<(), Box<dyn Error
 
 #[tokio::test]
 async fn live_openai_responses_abort_reports_source_usage_shape() -> Result<(), Box<dyn Error>> {
-    run_live_abort_tokens_smoke(
+    run_live_abort_tokens_then_new_message_smoke(
         "live_openai_responses_abort_reports_source_usage_shape",
         "openai",
         "gpt-5-mini",
@@ -8636,7 +8826,7 @@ async fn live_openai_completions_exposes_response_id() -> Result<(), Box<dyn Err
 
 #[tokio::test]
 async fn live_openai_completions_abort_reports_source_usage_shape() -> Result<(), Box<dyn Error>> {
-    run_live_abort_tokens_smoke(
+    run_live_abort_tokens_then_new_message_smoke(
         "live_openai_completions_abort_reports_source_usage_shape",
         "openai",
         "gpt-4o-mini",
@@ -9102,10 +9292,22 @@ async fn live_anthropic_oauth_auth_storage_exposes_response_id() -> Result<(), B
 #[tokio::test]
 async fn live_anthropic_oauth_auth_storage_abort_reports_source_usage_shape()
 -> Result<(), Box<dyn Error>> {
-    run_live_oauth_abort_tokens_smoke(
-        "live_anthropic_oauth_auth_storage_abort_reports_source_usage_shape",
-        "anthropic",
-        "claude-sonnet-4.6",
+    let test = "live_anthropic_oauth_auth_storage_abort_reports_source_usage_shape";
+    let Some(resolution) = live_oauth_resolution(test, "anthropic").await else {
+        return Ok(());
+    };
+    let model = live_oauth_model("anthropic", "claude-sonnet-4.6", &resolution)?;
+    let mut options =
+        live_abort_options(Some(resolution.api_key), Arc::new(AtomicBool::new(false)));
+    options.reasoning = Some(ThinkingLevel::High);
+    options.thinking_budgets = Some(ThinkingBudgets {
+        high: Some(2_048),
+        ..Default::default()
+    });
+    run_live_abort_tokens_then_new_message_with_options(
+        test,
+        &model,
+        options,
         LiveAbortUsageExpectation::PositiveInputOutput,
     )
     .await
@@ -9201,7 +9403,7 @@ async fn live_openai_codex_oauth_auth_storage_exposes_response_id() -> Result<()
 #[tokio::test]
 async fn live_openai_codex_oauth_auth_storage_abort_reports_source_usage_shape()
 -> Result<(), Box<dyn Error>> {
-    run_live_oauth_abort_tokens_smoke(
+    run_live_oauth_abort_tokens_then_new_message_smoke(
         "live_openai_codex_oauth_auth_storage_abort_reports_source_usage_shape",
         "openai-codex",
         "gpt-5.5",
@@ -9390,11 +9592,18 @@ async fn live_google_generative_ai_exposes_response_id() -> Result<(), Box<dyn E
 #[tokio::test]
 async fn live_google_generative_ai_abort_reports_source_usage_shape() -> Result<(), Box<dyn Error>>
 {
-    run_live_abort_tokens_smoke(
-        "live_google_generative_ai_abort_reports_source_usage_shape",
-        "google",
-        "gemini-2.5-flash",
-        "GEMINI_API_KEY",
+    let test = "live_google_generative_ai_abort_reports_source_usage_shape";
+    let Some(api_key) = live_api_key(test, "GEMINI_API_KEY") else {
+        return Ok(());
+    };
+    let model = get_model("google", "gemini-2.5-flash")
+        .ok_or_else(|| "missing model registry entry: google/gemini-2.5-flash")?;
+    let mut options = live_abort_options(Some(api_key), Arc::new(AtomicBool::new(false)));
+    options.reasoning = Some(ThinkingLevel::High);
+    run_live_abort_tokens_then_new_message_with_options(
+        test,
+        &model,
+        options,
         LiveAbortUsageExpectation::PositiveInputOutput,
     )
     .await
@@ -9575,7 +9784,7 @@ async fn live_mistral_conversations_smoke_completes() -> Result<(), Box<dyn Erro
     run_live_text_smoke(
         "live_mistral_conversations_smoke_completes",
         "mistral",
-        "mistral-small-2603",
+        "devstral-medium-latest",
         "MISTRAL_API_KEY",
     )
     .await
@@ -9586,7 +9795,7 @@ async fn live_mistral_conversations_exposes_response_id() -> Result<(), Box<dyn 
     run_live_response_id_smoke(
         "live_mistral_conversations_exposes_response_id",
         "mistral",
-        "mistral-small-2603",
+        "devstral-medium-latest",
         "MISTRAL_API_KEY",
     )
     .await
@@ -9595,10 +9804,10 @@ async fn live_mistral_conversations_exposes_response_id() -> Result<(), Box<dyn 
 #[tokio::test]
 async fn live_mistral_conversations_abort_reports_source_usage_shape() -> Result<(), Box<dyn Error>>
 {
-    run_live_abort_tokens_smoke(
+    run_live_abort_tokens_then_new_message_smoke(
         "live_mistral_conversations_abort_reports_source_usage_shape",
         "mistral",
-        "mistral-small-2603",
+        "devstral-medium-latest",
         "MISTRAL_API_KEY",
         LiveAbortUsageExpectation::ZeroInputOutput,
     )
@@ -9611,7 +9820,7 @@ async fn live_mistral_conversations_invalid_api_key_reports_provider_error()
     run_live_provider_error_smoke(
         "live_mistral_conversations_invalid_api_key_reports_provider_error",
         "mistral",
-        "mistral-small-2603",
+        "devstral-medium-latest",
     )
     .await
 }
@@ -9621,7 +9830,7 @@ async fn live_mistral_conversations_streams_text_deltas() -> Result<(), Box<dyn 
     run_live_streaming_smoke(
         "live_mistral_conversations_streams_text_deltas",
         "mistral",
-        "mistral-small-2603",
+        "devstral-medium-latest",
         "MISTRAL_API_KEY",
     )
     .await
@@ -9632,7 +9841,7 @@ async fn live_mistral_conversations_handles_multiturn_context() -> Result<(), Bo
     run_live_multiturn_smoke(
         "live_mistral_conversations_handles_multiturn_context",
         "mistral",
-        "mistral-small-2603",
+        "devstral-medium-latest",
         "MISTRAL_API_KEY",
     )
     .await
@@ -9643,7 +9852,7 @@ async fn live_mistral_conversations_handles_tool_call() -> Result<(), Box<dyn Er
     run_live_tool_call_smoke(
         "live_mistral_conversations_handles_tool_call",
         "mistral",
-        "mistral-small-2603",
+        "devstral-medium-latest",
         "MISTRAL_API_KEY",
     )
     .await
@@ -9654,7 +9863,7 @@ async fn live_mistral_conversations_reports_total_usage_components() -> Result<(
     run_live_total_usage_smoke(
         "live_mistral_conversations_reports_total_usage_components",
         "mistral",
-        "mistral-small-2603",
+        "devstral-medium-latest",
         "MISTRAL_API_KEY",
     )
     .await
@@ -9758,7 +9967,7 @@ async fn live_azure_openai_responses_abort_reports_source_usage_shape() -> Resul
 
     let model = get_model("azure-openai-responses", "gpt-4o-mini")
         .ok_or_else(|| "missing model registry entry: azure-openai-responses/gpt-4o-mini")?;
-    run_live_abort_tokens_with_options(
+    run_live_abort_tokens_then_new_message_with_options(
         test,
         &model,
         options,
@@ -9930,10 +10139,12 @@ async fn live_bedrock_converse_abort_reports_source_usage_shape() -> Result<(), 
         "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
     )
     .ok_or_else(|| "missing model registry entry: amazon-bedrock/global sonnet")?;
-    run_live_abort_tokens_with_options(
+    let mut options = live_abort_options(None, Arc::new(AtomicBool::new(false)));
+    options.reasoning = Some(ThinkingLevel::Medium);
+    run_live_abort_tokens_then_new_message_with_options(
         test,
         &model,
-        live_abort_options(None, Arc::new(AtomicBool::new(false))),
+        options,
         LiveAbortUsageExpectation::ZeroInputOutput,
     )
     .await
@@ -10168,6 +10379,7 @@ async fn live_cloudflare_workers_ai_abort_reports_source_usage_shape() -> Result
         LiveAbortUsageExpectation::ZeroInputOutput,
     )
     .await
+    .map(|_| ())
 }
 
 #[tokio::test]
@@ -10211,6 +10423,7 @@ async fn live_cloudflare_ai_gateway_abort_reports_source_usage_shape() -> Result
         LiveAbortUsageExpectation::ZeroInputOutput,
     )
     .await
+    .map(|_| ())
 }
 
 #[tokio::test]
@@ -10707,11 +10920,18 @@ async fn live_together_reports_total_usage_components() -> Result<(), Box<dyn Er
 
 #[tokio::test]
 async fn live_together_abort_reports_source_usage_shape() -> Result<(), Box<dyn Error>> {
-    run_live_abort_tokens_smoke(
-        "live_together_abort_reports_source_usage_shape",
-        "together",
-        "moonshotai/Kimi-K2.6",
-        "TOGETHER_API_KEY",
+    let test = "live_together_abort_reports_source_usage_shape";
+    let Some(api_key) = live_api_key(test, "TOGETHER_API_KEY") else {
+        return Ok(());
+    };
+    let model = get_model("together", "moonshotai/Kimi-K2.6")
+        .ok_or_else(|| "missing model registry entry: together/Kimi-K2.6")?;
+    let mut options = live_abort_options(Some(api_key), Arc::new(AtomicBool::new(false)));
+    options.reasoning = Some(ThinkingLevel::High);
+    run_live_abort_tokens_then_new_message_with_options(
+        test,
+        &model,
+        options,
         LiveAbortUsageExpectation::ZeroInputOutput,
     )
     .await
@@ -10753,7 +10973,7 @@ async fn live_minimax_reports_total_usage_components() -> Result<(), Box<dyn Err
 
 #[tokio::test]
 async fn live_minimax_abort_reports_source_usage_shape() -> Result<(), Box<dyn Error>> {
-    run_live_abort_tokens_smoke(
+    run_live_abort_tokens_then_new_message_smoke(
         "live_minimax_abort_reports_source_usage_shape",
         "minimax",
         "MiniMax-M2.7",
@@ -10843,7 +11063,7 @@ async fn live_vercel_ai_gateway_reports_total_usage_components() -> Result<(), B
 
 #[tokio::test]
 async fn live_vercel_ai_gateway_abort_reports_source_usage_shape() -> Result<(), Box<dyn Error>> {
-    run_live_abort_tokens_smoke(
+    run_live_abort_tokens_then_new_message_smoke(
         "live_vercel_ai_gateway_abort_reports_source_usage_shape",
         "vercel-ai-gateway",
         "google/gemini-2.5-flash",
