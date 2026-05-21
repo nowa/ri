@@ -970,6 +970,235 @@ fn minimax_model_metadata_matches_generated_catalog() {
 }
 
 #[test]
+fn xai_model_metadata_matches_generated_catalog() {
+    let models = get_models("xai");
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "grok-2",
+            "grok-2-1212",
+            "grok-2-latest",
+            "grok-2-vision",
+            "grok-2-vision-1212",
+            "grok-2-vision-latest",
+            "grok-3",
+            "grok-3-fast",
+            "grok-4.20-0309-non-reasoning",
+            "grok-4.20-0309-reasoning",
+            "grok-4.3",
+            "grok-beta",
+            "grok-code-fast-1",
+            "grok-vision-beta",
+        ]
+    );
+
+    for (model_id, reasoning, image_input, context_window, max_tokens, cost) in [
+        (
+            "grok-2",
+            false,
+            false,
+            131_072,
+            8_192,
+            ModelCost {
+                input: 2.0,
+                output: 10.0,
+                cache_read: 2.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-2-1212",
+            false,
+            false,
+            131_072,
+            8_192,
+            ModelCost {
+                input: 2.0,
+                output: 10.0,
+                cache_read: 2.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-2-latest",
+            false,
+            false,
+            131_072,
+            8_192,
+            ModelCost {
+                input: 2.0,
+                output: 10.0,
+                cache_read: 2.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-2-vision",
+            false,
+            true,
+            8_192,
+            4_096,
+            ModelCost {
+                input: 2.0,
+                output: 10.0,
+                cache_read: 2.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-2-vision-1212",
+            false,
+            true,
+            8_192,
+            4_096,
+            ModelCost {
+                input: 2.0,
+                output: 10.0,
+                cache_read: 2.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-2-vision-latest",
+            false,
+            true,
+            8_192,
+            4_096,
+            ModelCost {
+                input: 2.0,
+                output: 10.0,
+                cache_read: 2.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-3",
+            false,
+            false,
+            131_072,
+            8_192,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.75,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-3-fast",
+            false,
+            false,
+            131_072,
+            8_192,
+            ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 1.25,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-4.20-0309-non-reasoning",
+            false,
+            true,
+            2_000_000,
+            30_000,
+            ModelCost {
+                input: 2.0,
+                output: 6.0,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-4.20-0309-reasoning",
+            true,
+            true,
+            2_000_000,
+            30_000,
+            ModelCost {
+                input: 2.0,
+                output: 6.0,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-4.3",
+            true,
+            true,
+            1_000_000,
+            30_000,
+            ModelCost {
+                input: 1.25,
+                output: 2.5,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-beta",
+            false,
+            false,
+            131_072,
+            4_096,
+            ModelCost {
+                input: 5.0,
+                output: 15.0,
+                cache_read: 5.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-code-fast-1",
+            false,
+            false,
+            32_768,
+            8_192,
+            ModelCost {
+                input: 0.2,
+                output: 1.5,
+                cache_read: 0.02,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "grok-vision-beta",
+            false,
+            true,
+            8_192,
+            4_096,
+            ModelCost {
+                input: 5.0,
+                output: 15.0,
+                cache_read: 5.0,
+                cache_write: 0.0,
+            },
+        ),
+    ] {
+        let model = get_model("xai", model_id).expect(model_id);
+        assert_eq!(model.api, "openai-completions", "{model_id} api");
+        assert_eq!(model.provider, "xai", "{model_id} provider");
+        assert_eq!(model.base_url, "https://api.x.ai/v1", "{model_id} base");
+        assert_eq!(model.reasoning, reasoning, "{model_id} reasoning");
+        assert!(model.thinking_level_map.is_empty(), "{model_id} thinking");
+        let expected_input = if image_input {
+            vec![InputKind::Text, InputKind::Image]
+        } else {
+            vec![InputKind::Text]
+        };
+        assert_eq!(model.input, expected_input, "{model_id} input");
+        assert_eq!(model.cost, cost, "{model_id} cost");
+        assert_eq!(model.context_window, context_window, "{model_id} context");
+        assert_eq!(model.max_tokens, max_tokens, "{model_id} max tokens");
+        assert!(model.compat.is_none(), "{model_id} compat");
+    }
+}
+
+#[test]
 fn openai_codex_model_metadata_matches_generated_catalog() {
     let models = get_models("openai-codex");
     assert_eq!(

@@ -340,9 +340,20 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("cerebras", "llama3.1-8b"),
     ("cerebras", "qwen-3-235b-a22b-instruct-2507"),
     ("cerebras", "zai-glm-4.7"),
+    ("xai", "grok-2"),
+    ("xai", "grok-2-1212"),
+    ("xai", "grok-2-latest"),
+    ("xai", "grok-2-vision"),
+    ("xai", "grok-2-vision-1212"),
+    ("xai", "grok-2-vision-latest"),
     ("xai", "grok-3"),
     ("xai", "grok-3-fast"),
+    ("xai", "grok-4.20-0309-non-reasoning"),
+    ("xai", "grok-4.20-0309-reasoning"),
+    ("xai", "grok-4.3"),
+    ("xai", "grok-beta"),
     ("xai", "grok-code-fast-1"),
+    ("xai", "grok-vision-beta"),
     ("mistral", "devstral-medium-latest"),
     ("mistral", "magistral-medium-latest"),
     ("mistral", "mistral-medium-3.5"),
@@ -595,6 +606,9 @@ fn apply_known_model_overrides(model: &mut Model) {
     }
 
     if model.provider == "deepseek" && apply_deepseek_generated_metadata(model) {
+        return;
+    }
+    if model.provider == "xai" && apply_xai_generated_metadata(model) {
         return;
     }
     if model.provider == "cerebras" && apply_cerebras_generated_metadata(model) {
@@ -884,6 +898,148 @@ fn apply_deepseek_generated_metadata(model: &mut Model) -> bool {
         "requiresReasoningContentOnAssistantMessages": true,
         "thinkingFormat": "deepseek",
     }));
+    true
+}
+
+fn apply_xai_generated_metadata(model: &mut Model) -> bool {
+    let metadata = match model.id.as_str() {
+        "grok-2" | "grok-2-1212" | "grok-2-latest" => Some((
+            false,
+            false,
+            131_072,
+            8_192,
+            ModelCost {
+                input: 2.0,
+                output: 10.0,
+                cache_read: 2.0,
+                cache_write: 0.0,
+            },
+        )),
+        "grok-2-vision" | "grok-2-vision-1212" | "grok-2-vision-latest" => Some((
+            false,
+            true,
+            8_192,
+            4_096,
+            ModelCost {
+                input: 2.0,
+                output: 10.0,
+                cache_read: 2.0,
+                cache_write: 0.0,
+            },
+        )),
+        "grok-3" => Some((
+            false,
+            false,
+            131_072,
+            8_192,
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.75,
+                cache_write: 0.0,
+            },
+        )),
+        "grok-3-fast" => Some((
+            false,
+            false,
+            131_072,
+            8_192,
+            ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 1.25,
+                cache_write: 0.0,
+            },
+        )),
+        "grok-4.20-0309-non-reasoning" => Some((
+            false,
+            true,
+            2_000_000,
+            30_000,
+            ModelCost {
+                input: 2.0,
+                output: 6.0,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+        )),
+        "grok-4.20-0309-reasoning" => Some((
+            true,
+            true,
+            2_000_000,
+            30_000,
+            ModelCost {
+                input: 2.0,
+                output: 6.0,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+        )),
+        "grok-4.3" => Some((
+            true,
+            true,
+            1_000_000,
+            30_000,
+            ModelCost {
+                input: 1.25,
+                output: 2.5,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+        )),
+        "grok-beta" => Some((
+            false,
+            false,
+            131_072,
+            4_096,
+            ModelCost {
+                input: 5.0,
+                output: 15.0,
+                cache_read: 5.0,
+                cache_write: 0.0,
+            },
+        )),
+        "grok-code-fast-1" => Some((
+            false,
+            false,
+            32_768,
+            8_192,
+            ModelCost {
+                input: 0.2,
+                output: 1.5,
+                cache_read: 0.02,
+                cache_write: 0.0,
+            },
+        )),
+        "grok-vision-beta" => Some((
+            false,
+            true,
+            8_192,
+            4_096,
+            ModelCost {
+                input: 5.0,
+                output: 15.0,
+                cache_read: 5.0,
+                cache_write: 0.0,
+            },
+        )),
+        _ => None,
+    };
+    let Some((reasoning, image_input, context_window, max_tokens, cost)) = metadata else {
+        return false;
+    };
+
+    model.api = "openai-completions".to_owned();
+    model.base_url = base_url_for_provider("xai").to_owned();
+    model.reasoning = reasoning;
+    model.thinking_level_map.clear();
+    model.input = vec![crate::types::InputKind::Text];
+    if image_input {
+        ensure_image_input(model);
+    }
+    model.cost = cost;
+    model.context_window = context_window;
+    model.max_tokens = max_tokens;
     true
 }
 
