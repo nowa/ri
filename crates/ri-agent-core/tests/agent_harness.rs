@@ -5337,6 +5337,122 @@ async fn agent_harness_abort_clears_steer_and_follow_up_but_preserves_next_turn(
 }
 
 #[tokio::test]
+async fn agent_harness_queue_shortcuts_preserve_images() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions {
+        tokens_per_second: Some(30.0),
+        token_size: Some(TokenSize { min: 1, max: 1 }),
+        ..Default::default()
+    });
+    let next_request_blocks = Arc::new(Mutex::new(Vec::<(String, Vec<String>)>::new()));
+    let next_request_blocks_ref = next_request_blocks.clone();
+    registration.set_responses(vec![
+        faux_assistant_message("abcdefghijklmnopqrstuvwxyz", Default::default()).into(),
+        faux_response_factory(move |context, _, _, _| {
+            let blocks = context
+                .messages
+                .iter()
+                .filter_map(|message| match message {
+                    Message::User(user) => Some(&user.content),
+                    _ => None,
+                })
+                .map(|content| match content {
+                    UserContentValue::Plain(text) => (text.clone(), Vec::new()),
+                    UserContentValue::Blocks(blocks) => {
+                        let text = blocks
+                            .iter()
+                            .filter_map(|block| match block {
+                                UserContent::Text(text) => Some(text.text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<String>();
+                        let images = blocks
+                            .iter()
+                            .filter_map(|block| match block {
+                                UserContent::Image(image) => Some(image.mime_type.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        (text, images)
+                    }
+                })
+                .collect::<Vec<_>>();
+            *next_request_blocks_ref.lock().expect("mutex") = blocks;
+            faux_assistant_message("second", Default::default())
+        }),
+    ]);
+    let harness = Arc::new(AgentHarness::new(AgentHarnessOptions::new(
+        test_env(),
+        Session::new(InMemorySessionStorage::new()),
+        registration.get_model(),
+    )));
+
+    let running = harness.clone();
+    let first_prompt = tokio::spawn(async move { running.prompt("first").await });
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    harness
+        .steer_with_images(
+            "steer",
+            vec![ImageContent {
+                data: "steer-image".to_owned(),
+                mime_type: "image/png".to_owned(),
+            }],
+        )
+        .expect("steer with images");
+    harness
+        .follow_up_with_images(
+            "follow",
+            vec![ImageContent {
+                data: "follow-image".to_owned(),
+                mime_type: "image/jpeg".to_owned(),
+            }],
+        )
+        .expect("follow up with images");
+    harness.next_turn_with_images(
+        "next",
+        vec![ImageContent {
+            data: "next-image".to_owned(),
+            mime_type: "image/webp".to_owned(),
+        }],
+    );
+    let abort_result = harness.abort();
+    first_prompt
+        .await
+        .expect("first prompt task")
+        .expect("first prompt");
+
+    assert!(matches!(
+        &abort_result.cleared_steer[0],
+        AgentMessage::User(UserMessage {
+            content: UserContentValue::Blocks(blocks),
+            ..
+        }) if blocks.iter().any(|block| matches!(
+            block,
+            UserContent::Image(ImageContent { mime_type, .. }) if mime_type == "image/png"
+        ))
+    ));
+    assert!(matches!(
+        &abort_result.cleared_follow_up[0],
+        AgentMessage::User(UserMessage {
+            content: UserContentValue::Blocks(blocks),
+            ..
+        }) if blocks.iter().any(|block| matches!(
+            block,
+            UserContent::Image(ImageContent { mime_type, .. }) if mime_type == "image/jpeg"
+        ))
+    ));
+
+    harness.prompt("second").await.expect("second prompt");
+
+    assert!(
+        next_request_blocks
+            .lock()
+            .expect("mutex")
+            .contains(&("next".to_owned(), vec!["image/webp".to_owned()]))
+    );
+    registration.unregister();
+}
+
+#[tokio::test]
 async fn agent_harness_abort_and_wait_emits_abort_after_idle_and_waits_for_listener() {
     let registration = register_faux_provider(RegisterFauxProviderOptions {
         tokens_per_second: Some(30.0),

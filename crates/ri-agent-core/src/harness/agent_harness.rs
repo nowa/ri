@@ -1165,6 +1165,14 @@ impl AgentHarness {
         self.steer_message(user_message(text))
     }
 
+    pub fn steer_with_images(
+        &self,
+        text: impl Into<String>,
+        images: Vec<ImageContent>,
+    ) -> Result<(), AgentHarnessError> {
+        self.steer_message(user_message_with_images(text.into(), images))
+    }
+
     pub fn steer_message(&self, message: Message) -> Result<(), AgentHarnessError> {
         self.require_running("Cannot steer while idle")?;
         self.steering_queue.enqueue(message);
@@ -1176,6 +1184,14 @@ impl AgentHarness {
         self.follow_up_message(user_message(text))
     }
 
+    pub fn follow_up_with_images(
+        &self,
+        text: impl Into<String>,
+        images: Vec<ImageContent>,
+    ) -> Result<(), AgentHarnessError> {
+        self.follow_up_message(user_message_with_images(text.into(), images))
+    }
+
     pub fn follow_up_message(&self, message: Message) -> Result<(), AgentHarnessError> {
         self.require_running("Cannot follow up while idle")?;
         self.follow_up_queue.enqueue(message);
@@ -1185,6 +1201,10 @@ impl AgentHarness {
 
     pub fn next_turn(&self, text: impl Into<String>) {
         self.next_turn_message(user_message(text));
+    }
+
+    pub fn next_turn_with_images(&self, text: impl Into<String>, images: Vec<ImageContent>) {
+        self.next_turn_message(user_message_with_images(text.into(), images));
     }
 
     pub fn next_turn_message(&self, message: Message) {
