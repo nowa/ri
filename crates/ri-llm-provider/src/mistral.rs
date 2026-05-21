@@ -15,6 +15,7 @@ use std::{
 };
 
 const MISTRAL_TOOL_CALL_ID_LENGTH: usize = 9;
+const MAX_MISTRAL_ERROR_BODY_CHARS: usize = 4000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MistralToolChoice {
@@ -152,6 +153,28 @@ pub fn build_mistral_request_headers(
         headers.insert("x-affinity".to_owned(), session_id.to_owned());
     }
     headers
+}
+
+pub(crate) fn format_mistral_http_error(status: u16, body: &str) -> String {
+    let body = body.trim();
+    if body.is_empty() {
+        return format!("Mistral API error ({status}): HTTP {status}");
+    }
+    format!(
+        "Mistral API error ({status}): {}",
+        truncate_mistral_error_text(body, MAX_MISTRAL_ERROR_BODY_CHARS)
+    )
+}
+
+fn truncate_mistral_error_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_owned();
+    }
+    let truncated = text.chars().take(max_chars).collect::<String>();
+    format!(
+        "{truncated}... [truncated {} chars]",
+        text.chars().count() - max_chars
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

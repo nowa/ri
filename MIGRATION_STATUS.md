@@ -404,10 +404,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1175 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1176 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 969 tests: 2 library tests, 336 `provider_core` tests, and
-  631 `provider_live` tests. This is 248 above the 721 direct simple source
+- `ri-llm-provider`: 970 tests: 2 library tests, 337 `provider_core` tests, and
+  631 `provider_live` tests. This is 249 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -442,7 +442,7 @@ Current Rust tests: 1175 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1175-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1176-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -465,6 +465,16 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-22 after aligning `providers/mistral.ts`
+  HTTP error formatting: built-in Mistral HTTP requests now report source-style
+  `Mistral API error (status): ...` messages for non-success responses, use an
+  `HTTP status` fallback for empty response bodies, and truncate raw error
+  bodies at 4000 characters with the omitted-character count:
+  `cargo test -p ri-llm-provider --test provider_core builtin_mistral_provider_formats_http_errors_with_status_and_truncated_body -- --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test -p ri-llm-provider -- --test-threads=1`,
+  `cargo test --workspace -- --list`, `cargo fmt --check`, and
+  `git diff --check` passed; the workspace list enumerated 1176 tests.
 - Latest local verification on 2026-05-22 after adding Cloudflare AI Gateway
   OpenAI Completions BYOK authorization coverage: `cargo test -p
   ri-llm-provider --test provider_core -- --test-threads=1`, `cargo test -p
@@ -1486,6 +1496,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1175 Rust tests cover the
+- Test parity is not certified by raw count alone: 1176 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

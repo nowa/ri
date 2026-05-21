@@ -31,6 +31,7 @@ use crate::{
     json_repair::parse_json_with_repair,
     mistral::{
         MistralChatStreamProcessor, build_mistral_request_headers, build_mistral_simple_payload,
+        format_mistral_http_error,
     },
     node_http_proxy::reqwest_client_for_target,
     openai_codex_responses::{
@@ -1737,7 +1738,7 @@ async fn stream_mistral_sse_json(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.map_err(|error| error.to_string())?;
-        return Err(provider_error_from_body(status.as_u16(), &body));
+        return Err(format_mistral_http_error(status.as_u16(), &body));
     }
 
     let mut byte_stream = response.bytes_stream();

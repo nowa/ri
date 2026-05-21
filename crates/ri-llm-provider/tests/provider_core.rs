@@ -15512,6 +15512,28 @@ async fn builtin_mistral_provider_posts_json_and_parses_sse() {
 }
 
 #[tokio::test]
+async fn builtin_mistral_provider_formats_http_errors_with_status_and_truncated_body() {
+    let body = format!("{}tail", "a".repeat(4001));
+    let (base_url, request_task) = mock_json_status_server(429, "Too Many Requests", body).await;
+    let mut model = Model::faux("mistral-conversations", "mistral", "mistral-small-latest");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("test-key".to_owned());
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete with provider error");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(message.stop_reason, StopReason::Error);
+    let error = message.error_message.as_deref().expect("error message");
+    assert!(error.starts_with("Mistral API error (429): "));
+    assert!(error.contains("... [truncated 5 chars]"));
+    assert!(!error.contains("tail"));
+    assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
+}
+
+#[tokio::test]
 async fn builtin_mistral_provider_emits_sse_events_incrementally() {
     let (base_url, request_task) = mock_delayed_sse_server(
         vec![
