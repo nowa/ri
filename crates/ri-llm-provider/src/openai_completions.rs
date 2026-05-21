@@ -897,7 +897,7 @@ fn format_tool(tool: &Tool, model: &Model, cache_control: Option<&Value>) -> Val
         "parameters": tool.parameters,
     });
     if supports_strict_mode(model) {
-        function["strict"] = Value::Bool(true);
+        function["strict"] = Value::Bool(false);
     }
     let mut formatted = json!({
         "type": "function",

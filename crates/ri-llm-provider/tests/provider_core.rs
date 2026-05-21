@@ -10471,7 +10471,7 @@ fn openai_completions_payload_forwards_tool_choice_and_strict_compat() {
         },
     );
     assert_eq!(payload["tool_choice"], "required");
-    assert_eq!(payload["tools"][0]["function"]["strict"], true);
+    assert_eq!(payload["tools"][0]["function"]["strict"], false);
 
     model.compat = Some(json!({ "supportsStrictMode": false }));
     let payload = build_openai_completions_payload(
