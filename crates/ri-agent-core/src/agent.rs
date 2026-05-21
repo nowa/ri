@@ -236,6 +236,7 @@ pub struct Agent {
     listeners: Arc<Mutex<BTreeMap<u64, Listener>>>,
     next_listener_id: AtomicU64,
     abort_flag: Arc<AtomicBool>,
+    active_run: AtomicBool,
     idle_notify: Notify,
 }
 
@@ -270,6 +271,7 @@ impl Agent {
             listeners: Arc::new(Mutex::new(BTreeMap::new())),
             next_listener_id: AtomicU64::new(1),
             abort_flag: Arc::new(AtomicBool::new(false)),
+            active_run: AtomicBool::new(false),
             idle_notify: Notify::new(),
         }
     }
@@ -341,7 +343,9 @@ impl Agent {
         state.pending_tool_calls.clear();
         state.error_message = None;
         drop(state);
-        self.abort_flag.store(false, Ordering::SeqCst);
+        if !self.active_run.load(Ordering::SeqCst) {
+            self.abort_flag.store(false, Ordering::SeqCst);
+        }
         self.clear_all_queues();
         self.idle_notify.notify_waiters();
     }
@@ -411,7 +415,7 @@ impl Agent {
     pub async fn wait_for_idle(&self) {
         loop {
             let notified = self.idle_notify.notified();
-            if !self.state.lock().is_streaming {
+            if !self.active_run.load(Ordering::SeqCst) && !self.state.lock().is_streaming {
                 return;
             }
             notified.await;
@@ -419,7 +423,7 @@ impl Agent {
     }
 
     pub async fn prompt(&self, prompt: impl Into<String>) -> Result<Vec<AgentMessage>, String> {
-        if self.state.lock().is_streaming {
+        if self.is_busy() {
             return Err(
                 "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion."
                     .to_owned(),
@@ -451,7 +455,7 @@ impl Agent {
     }
 
     pub async fn continue_run(&self) -> Result<Vec<AgentMessage>, String> {
-        if self.state.lock().is_streaming {
+        if self.is_busy() {
             return Err(
                 "Agent is already processing. Wait for completion before continuing.".to_owned(),
             );
@@ -483,7 +487,7 @@ impl Agent {
     where
         M: Into<AgentMessage>,
     {
-        if self.state.lock().is_streaming {
+        if self.is_busy() {
             return Err(
                 "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion."
                     .to_owned(),
@@ -518,10 +522,11 @@ impl Agent {
     {
         let (context, model, thinking_level) = {
             let mut state = self.state.lock();
-            if state.is_streaming {
+            if state.is_streaming || self.active_run.load(Ordering::SeqCst) {
                 return Err("Agent is already streaming".to_owned());
             }
 
+            self.active_run.store(true, Ordering::SeqCst);
             state.is_streaming = true;
             state.error_message = None;
             (
@@ -592,6 +597,11 @@ impl Agent {
         state.streaming_message = None;
         state.pending_tool_calls.clear();
         drop(state);
+        self.active_run.store(false, Ordering::SeqCst);
         self.idle_notify.notify_waiters();
+    }
+
+    fn is_busy(&self) -> bool {
+        self.active_run.load(Ordering::SeqCst) || self.state.lock().is_streaming
     }
 }

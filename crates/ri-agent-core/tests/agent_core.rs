@@ -4303,6 +4303,88 @@ async fn agent_reset_clears_state_and_queued_messages() {
 }
 
 #[tokio::test]
+async fn agent_reset_does_not_finish_active_run_or_allow_concurrent_prompt() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message("first", Default::default()).into(),
+        faux_assistant_message("second", Default::default()).into(),
+    ]);
+    let agent = Agent::new(AgentOptions::new(registration.get_model()));
+    let listener_started = Arc::new(tokio::sync::Notify::new());
+    let release_listener = Arc::new(tokio::sync::Notify::new());
+    let did_block = Arc::new(AtomicBool::new(false));
+    let listener_started_ref = listener_started.clone();
+    let release_listener_ref = release_listener.clone();
+    let did_block_ref = did_block.clone();
+    agent.subscribe_async(move |event| {
+        let listener_started = listener_started_ref.clone();
+        let release_listener = release_listener_ref.clone();
+        let did_block = did_block_ref.clone();
+        async move {
+            if matches!(
+                event,
+                AgentEvent::MessageEnd {
+                    message: AgentMessage::Assistant(_)
+                }
+            ) && !did_block.swap(true, Ordering::SeqCst)
+            {
+                listener_started.notify_waiters();
+                release_listener.notified().await;
+            }
+        }
+    });
+
+    let first_prompt = agent.prompt("first");
+    tokio::pin!(first_prompt);
+    tokio::select! {
+        result = &mut first_prompt => panic!("prompt resolved before listener blocked: {result:?}"),
+        _ = listener_started.notified() => {}
+    }
+    assert!(agent.state().is_streaming);
+
+    agent.reset();
+    assert!(!agent.state().is_streaming);
+    assert!(agent.state().messages.is_empty());
+
+    let prompt_error = agent
+        .prompt("concurrent")
+        .await
+        .expect_err("reset must not clear active run guard");
+    assert_eq!(
+        prompt_error,
+        "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion."
+    );
+
+    let idle = agent.wait_for_idle();
+    tokio::pin!(idle);
+    tokio::select! {
+        _ = &mut idle => panic!("wait_for_idle resolved while the pre-reset run was still active"),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+    }
+
+    release_listener.notify_one();
+    let (first_messages, ()) = tokio::join!(first_prompt, idle);
+    assert_eq!(
+        first_messages
+            .expect("first prompt")
+            .iter()
+            .map(role_of)
+            .collect::<Vec<_>>(),
+        vec!["user", "assistant"]
+    );
+    assert!(!agent.state().is_streaming);
+    assert!(agent.state().messages.is_empty());
+
+    let second_messages = agent.prompt("after reset").await.expect("second prompt");
+    assert_eq!(
+        second_messages.iter().map(role_of).collect::<Vec<_>>(),
+        vec!["user", "assistant"]
+    );
+    assert_eq!(agent.state().messages.len(), 2);
+    registration.unregister();
+}
+
+#[tokio::test]
 async fn agent_continue_from_user_tail_gets_assistant_response() {
     let registration = register_faux_provider(RegisterFauxProviderOptions::default());
     let observed_user_texts = Arc::new(Mutex::new(Vec::new()));
