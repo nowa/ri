@@ -216,6 +216,22 @@ impl AgentStreamProvider for EndOnlyStreamProvider {
     }
 }
 
+struct FailingAfterAbortStreamProvider;
+
+impl AgentStreamProvider for FailingAfterAbortStreamProvider {
+    fn stream(
+        &self,
+        _model: &Model,
+        _context: Context,
+        options: SimpleStreamOptions,
+    ) -> Result<AssistantMessageEventStream, String> {
+        if let Some(abort_flag) = options.stream.abort_flag {
+            abort_flag.store(true, Ordering::SeqCst);
+        }
+        Err("provider exploded".to_owned())
+    }
+}
+
 struct ConditionalTerminateExecutor;
 
 #[async_trait]
@@ -4143,6 +4159,58 @@ async fn agent_stateful_wrapper_persists_provider_start_failures_as_error_messag
     assert_eq!(
         agent.state().error_message.as_deref(),
         Some("No API provider registered for api: missing-agent-test-api")
+    );
+    assert!(!agent.state().is_streaming);
+    assert_eq!(
+        *seen.lock().expect("mutex"),
+        vec![
+            "agent_start",
+            "turn_start",
+            "message_start",
+            "message_end",
+            "message_start",
+            "message_end",
+            "turn_end",
+            "agent_end",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn agent_stateful_wrapper_marks_run_failure_as_aborted_when_abort_flag_is_set() {
+    let mut options = AgentOptions::new(Model::faux(
+        "abort-error-api",
+        "abort-error-provider",
+        "abort-error-model",
+    ));
+    options.stream_provider = Some(Arc::new(FailingAfterAbortStreamProvider));
+    let agent = Agent::new(options);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_for_listener = seen.clone();
+    agent.subscribe(move |event| {
+        seen_for_listener
+            .lock()
+            .expect("mutex")
+            .push(event_name(event).to_owned());
+    });
+
+    let messages = agent.prompt("hello").await.expect("prompt resolves");
+
+    assert_eq!(
+        messages.iter().map(role_of).collect::<Vec<_>>(),
+        vec!["user", "assistant"]
+    );
+    let AgentMessage::Assistant(assistant) = messages.last().expect("assistant") else {
+        panic!("assistant");
+    };
+    assert_eq!(assistant.stop_reason, StopReason::Aborted);
+    assert_eq!(
+        assistant.error_message.as_deref(),
+        Some("provider exploded")
+    );
+    assert_eq!(
+        agent.state().error_message.as_deref(),
+        Some("provider exploded")
     );
     assert!(!agent.state().is_streaming);
     assert_eq!(

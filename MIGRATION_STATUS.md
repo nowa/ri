@@ -316,9 +316,10 @@ counterparts that pass.
     reset preserving the active-run guard and `wait_for_idle` settlement for a
     run already in progress while clearing public transcript/runtime state,
     abort handles that cancel active provider streams without clearing
-    low-level `Agent` queues, and provider start failures persisted as
-    assistant error messages with Pi-shaped empty text content and lifecycle
-    events.
+    low-level `Agent` queues, provider start failures persisted as assistant
+    error messages with Pi-shaped empty text content and lifecycle events, and
+    abort-triggered stream-provider run failures classified as aborted while
+    preserving the failure message.
   - Custom stream-provider hooks for the low-level loop and `Agent` wrapper,
     dynamic per-request API key providers for low-level LLM calls with static
     key fallback, including a Rust-native `agent/src/proxy.ts` counterpart that
@@ -398,16 +399,16 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1171 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1172 enumerated by `cargo test --workspace -- --list`.
 
 - `ri-llm-provider`: 968 tests: 2 library tests, 335 `provider_core` tests, and
   631 `provider_live` tests. This is 247 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
-- `ri-agent-core`: 203 tests across `agent_core`, `agent_harness`,
+- `ri-agent-core`: 204 tests across `agent_core`, `agent_harness`,
   `execution_env`, `harness_compaction`, `harness_truncate`, `proxy`,
-  `resources`, and `session_storage`. This is 52 above the 150 direct simple
+  `resources`, and `session_storage`. This is 54 above the 150 direct simple
   source cases counted under `packages/agent/test`, because several Rust tests
   cover grouped source behavior plus Rust-specific session, harness, and
   execution-environment contracts.
@@ -436,7 +437,7 @@ Current Rust tests: 1171 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1171-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1172-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -459,7 +460,19 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
-- Latest local verification on 2026-05-21 after aligning `AgentHarness`
+- Latest local verification on 2026-05-21 after aligning stateful `Agent`
+  run-failure abort classification with Pi `Agent.handleRunFailure`:
+  stream-provider failures observed after the active abort flag is set now
+  persist the assistant failure message with `stop_reason: aborted` instead of
+  `error`, while preserving the failure message and full lifecycle event
+  sequence:
+  `cargo test -p ri-agent-core --test agent_core agent_stateful_wrapper_marks_run_failure_as_aborted_when_abort_flag_is_set -- --exact --test-threads=1`,
+  `cargo test -p ri-agent-core --test agent_core -- --test-threads=1`,
+  `cargo fmt`, `cargo test --workspace -- --list` (1172 tests enumerated),
+  `cargo test -p ri-agent-core -- --test-threads=1`, `cargo fmt --check`,
+  `git diff --check`, and `cargo test --workspace -- --test-threads=1`
+  passed.
+- Previous local verification on 2026-05-21 after aligning `AgentHarness`
   `message_end` persistence with Pi `handleAgentEvent`: high-level harness
   agent-message events now append LLM messages to the session before notifying
   subscribers, so listeners that read session context during `message_end` see
@@ -1339,6 +1352,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1171 Rust tests cover the
+- Test parity is not certified by raw count alone: 1172 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

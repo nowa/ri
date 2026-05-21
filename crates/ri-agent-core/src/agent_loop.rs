@@ -266,6 +266,17 @@ async fn finish_agent_loop_with_error(
     original_len: usize,
     error: String,
 ) -> Vec<AgentMessage> {
+    let stop_reason = if config
+        .stream_options
+        .stream
+        .abort_flag
+        .as_ref()
+        .is_some_and(|abort_flag| abort_flag.load(std::sync::atomic::Ordering::SeqCst))
+    {
+        StopReason::Aborted
+    } else {
+        StopReason::Error
+    };
     let assistant = AssistantMessage {
         content: vec![AssistantContent::text("")],
         api: config.model.api.clone(),
@@ -275,7 +286,7 @@ async fn finish_agent_loop_with_error(
         response_id: None,
         diagnostics: Vec::new(),
         usage: Usage::zero(),
-        stop_reason: StopReason::Error,
+        stop_reason,
         error_message: Some(error),
         timestamp: now_millis(),
     };
