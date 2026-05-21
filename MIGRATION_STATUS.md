@@ -42,7 +42,8 @@ counterparts that pass.
     preservation through Rust `StreamOptions`.
   - Built-in model registry seed and thinking-level helpers, including
     Anthropic generated-catalog metadata parity for the current Claude
-    3/3.5/3.7/4.x model slice, plus
+    3/3.5/3.7/4.x model slice, Zai generated-catalog metadata parity for the
+    current GLM coding model slice, plus
     OpenAI and Azure OpenAI Responses generated-catalog metadata parity for the
     current GPT-4/GPT-4.1/GPT-4o, GPT-5/GPT-5.1/GPT-5.2/GPT-5.3/GPT-5.4/GPT-5.5,
     and o-series model slices, plus OpenAI Codex generated-catalog metadata
@@ -771,6 +772,18 @@ This migration is not complete.
   `cargo test -p ri-llm-provider --test provider_core anthropic_model_metadata_matches_generated_catalog -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core supports_xhigh_model_metadata_port -- --exact --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core anthropic_ -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed; the list command enumerated 1192
+  tests.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` Zai catalog metadata: Rust now exposes the generated
+  `glm-5v-turbo` model, maps the source Zai coding API base URL for the GLM
+  slice, preserves `zaiToolStream` compat for supported models, keeps
+  `glm-4.5-air` as non-tool-stream, and maps the source text/image capability
+  and context/output windows:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core openai_completions_zai_tool_stream_metadata_override_and_no_tools_match_provider -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_completions_ -- --test-threads=1`,
   `cargo fmt --check`, `git diff --check`, and
   `cargo test --workspace -- --list` passed; the list command enumerated 1192
   tests.

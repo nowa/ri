@@ -13414,9 +13414,26 @@ fn openai_completions_payload_maps_detected_and_explicit_thinking_formats() {
 
 #[test]
 fn openai_completions_zai_tool_stream_metadata_override_and_no_tools_match_provider() {
-    for model_id in ["glm-5.1", "glm-4.7", "glm-5-turbo"] {
+    for (model_id, expected_input, context_window, max_tokens) in [
+        ("glm-5.1", vec![InputKind::Text], 200_000, 131_072),
+        ("glm-4.7", vec![InputKind::Text], 204_800, 131_072),
+        ("glm-5-turbo", vec![InputKind::Text], 200_000, 131_072),
+        (
+            "glm-5v-turbo",
+            vec![InputKind::Text, InputKind::Image],
+            200_000,
+            131_072,
+        ),
+    ] {
         let model = get_model("zai", model_id).expect("zai model");
         assert!(model.reasoning, "{model_id}");
+        assert_eq!(
+            model.base_url, "https://api.z.ai/api/coding/paas/v4",
+            "{model_id}"
+        );
+        assert_eq!(model.input, expected_input, "{model_id}");
+        assert_eq!(model.context_window, context_window, "{model_id}");
+        assert_eq!(model.max_tokens, max_tokens, "{model_id}");
         assert_eq!(
             model
                 .compat
@@ -13447,6 +13464,13 @@ fn openai_completions_zai_tool_stream_metadata_override_and_no_tools_match_provi
     }
     let unsupported_model = get_model("zai", "glm-4.5-air").expect("unsupported zai model");
     assert!(unsupported_model.reasoning);
+    assert_eq!(
+        unsupported_model.base_url,
+        "https://api.z.ai/api/coding/paas/v4"
+    );
+    assert_eq!(unsupported_model.input, vec![InputKind::Text]);
+    assert_eq!(unsupported_model.context_window, 131_072);
+    assert_eq!(unsupported_model.max_tokens, 98_304);
     assert_eq!(
         unsupported_model
             .compat

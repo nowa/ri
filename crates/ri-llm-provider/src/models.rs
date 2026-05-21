@@ -372,6 +372,7 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("zai", "glm-4.7"),
     ("zai", "glm-5-turbo"),
     ("zai", "glm-5.1"),
+    ("zai", "glm-5v-turbo"),
     ("xiaomi", "mimo-v2.5-pro"),
     ("xiaomi-token-plan-cn", "mimo-v2.5-pro"),
     ("xiaomi-token-plan-ams", "mimo-v2.5-pro"),
@@ -584,6 +585,9 @@ fn apply_known_model_overrides(model: &mut Model) {
         ensure_image_input(model);
     }
 
+    if model.provider == "zai" && apply_zai_generated_metadata(model) {
+        return;
+    }
     if model.provider == "anthropic" && apply_anthropic_generated_metadata(model) {
         return;
     }
@@ -821,6 +825,39 @@ struct AnthropicGeneratedMetadata {
     context_window: u64,
     max_tokens: u64,
     cost: ModelCost,
+}
+
+fn apply_zai_generated_metadata(model: &mut Model) -> bool {
+    let Some((context_window, max_tokens, image_input, tool_stream)) = (match model.id.as_str() {
+        "glm-4.5-air" => Some((131_072, 98_304, false, false)),
+        "glm-4.7" => Some((204_800, 131_072, false, true)),
+        "glm-5-turbo" | "glm-5.1" => Some((200_000, 131_072, false, true)),
+        "glm-5v-turbo" => Some((200_000, 131_072, true, true)),
+        _ => None,
+    }) else {
+        return false;
+    };
+
+    model.api = "openai-completions".to_owned();
+    model.base_url = base_url_for_provider("zai").to_owned();
+    model.reasoning = true;
+    model.thinking_level_map.clear();
+    model.input = vec![crate::types::InputKind::Text];
+    if image_input {
+        ensure_image_input(model);
+    }
+    model.context_window = context_window;
+    model.max_tokens = max_tokens;
+    model.cost = ModelCost::default();
+    let mut compat = json!({
+        "supportsDeveloperRole": false,
+        "thinkingFormat": "zai",
+    });
+    if tool_stream {
+        compat["zaiToolStream"] = Value::Bool(true);
+    }
+    model.compat = Some(compat);
+    true
 }
 
 fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMetadata> {
@@ -1803,7 +1840,7 @@ fn base_url_for_provider(provider: &str) -> &'static str {
         "minimax-cn" => "https://api.minimaxi.com/anthropic",
         "kimi-coding" => "https://api.kimi.com/coding",
         "vercel-ai-gateway" => "https://ai-gateway.vercel.sh",
-        "zai" => "https://open.bigmodel.cn/api/paas/v4",
+        "zai" => "https://api.z.ai/api/coding/paas/v4",
         "xiaomi" => "https://api.xiaomimimo.com/v1",
         "xiaomi-token-plan-cn" => "https://token-plan-cn.xiaomimimo.com/v1",
         "xiaomi-token-plan-ams" => "https://token-plan-ams.xiaomimimo.com/v1",
@@ -1871,7 +1908,10 @@ fn compat_for_model(provider: &str, model_id: &str) -> Option<Value> {
             "supportsDeveloperRole": false,
             "thinkingFormat": "zai",
         });
-        if matches!(model_id, "glm-4.7" | "glm-5-turbo" | "glm-5.1") {
+        if matches!(
+            model_id,
+            "glm-4.7" | "glm-5-turbo" | "glm-5.1" | "glm-5v-turbo"
+        ) {
             compat["zaiToolStream"] = Value::Bool(true);
         }
         Some(compat)
