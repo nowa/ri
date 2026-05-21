@@ -468,6 +468,125 @@ fn supports_xhigh_model_metadata_port() {
     );
 }
 
+#[test]
+fn openai_codex_model_metadata_matches_generated_catalog() {
+    let models = get_models("openai-codex");
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "gpt-5.2",
+            "gpt-5.3-codex",
+            "gpt-5.3-codex-spark",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.5",
+        ]
+    );
+
+    for (model_id, cost, input) in [
+        (
+            "gpt-5.2",
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+            vec![InputKind::Text, InputKind::Image],
+        ),
+        (
+            "gpt-5.3-codex",
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+            vec![InputKind::Text, InputKind::Image],
+        ),
+        (
+            "gpt-5.3-codex-spark",
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+            vec![InputKind::Text],
+        ),
+        (
+            "gpt-5.4",
+            ModelCost {
+                input: 2.5,
+                output: 15.0,
+                cache_read: 0.25,
+                cache_write: 0.0,
+            },
+            vec![InputKind::Text, InputKind::Image],
+        ),
+        (
+            "gpt-5.4-mini",
+            ModelCost {
+                input: 0.75,
+                output: 4.5,
+                cache_read: 0.075,
+                cache_write: 0.0,
+            },
+            vec![InputKind::Text, InputKind::Image],
+        ),
+        (
+            "gpt-5.5",
+            ModelCost {
+                input: 5.0,
+                output: 30.0,
+                cache_read: 0.5,
+                cache_write: 0.0,
+            },
+            vec![InputKind::Text, InputKind::Image],
+        ),
+    ] {
+        let model = get_model("openai-codex", model_id).expect(model_id);
+        assert_eq!(model.api, "openai-codex-responses", "{model_id} api");
+        assert_eq!(model.provider, "openai-codex", "{model_id} provider");
+        assert_eq!(
+            model.base_url, "https://chatgpt.com/backend-api",
+            "{model_id} base URL"
+        );
+        assert!(model.reasoning, "{model_id} reasoning");
+        assert_eq!(
+            model.thinking_level_map,
+            BTreeMap::from([
+                (ThinkingLevel::Minimal, Some("low".to_owned())),
+                (ThinkingLevel::XHigh, Some("xhigh".to_owned())),
+            ]),
+            "{model_id} thinking levels"
+        );
+        assert_eq!(model.input, input, "{model_id} input");
+        assert_eq!(model.context_window, 272_000, "{model_id} context");
+        assert_eq!(model.max_tokens, 128_000, "{model_id} output");
+        assert_eq!(model.cost, cost, "{model_id} cost");
+    }
+
+    let mut usage = Usage {
+        input: 1_000_000,
+        output: 1_000_000,
+        cache_read: 1_000_000,
+        cache_write: 1_000_000,
+        total_tokens: 4_000_000,
+        cost: UsageCost::default(),
+    };
+    let gpt_55 = get_model("openai-codex", "gpt-5.5").expect("gpt-5.5");
+    let cost = calculate_cost(&gpt_55, &mut usage);
+    assert_cost_close("gpt-5.5 input cost", cost.input, 5.0);
+    assert_cost_close("gpt-5.5 output cost", cost.output, 30.0);
+    assert_cost_close("gpt-5.5 cache read cost", cost.cache_read, 0.5);
+    assert_cost_close("gpt-5.5 cache write cost", cost.cache_write, 0.0);
+    assert_cost_close("gpt-5.5 total cost", cost.total, 35.5);
+}
+
 #[tokio::test]
 async fn unsupported_xhigh_reasoning_returns_error_message_without_network() {
     for api in ["openai-responses", "openai-completions"] {

@@ -40,7 +40,10 @@ counterparts that pass.
   - `stream`, `complete`, `stream_simple`, `complete_simple`, including
     source-style provider `reasoningEffort` / Bedrock `reasoning` option
     preservation through Rust `StreamOptions`.
-  - Built-in model registry seed and thinking-level helpers.
+  - Built-in model registry seed and thinking-level helpers, including
+    OpenAI Codex generated-catalog metadata parity for the six current
+    ChatGPT backend models, base URL, context/output windows, image-input
+    capability, thinking-level map, and usage cost table.
   - Faux provider with queued responses, multi-model registrations,
     model-aware response factories, event deltas, terminal error/abort events,
     abort flags before and during paced streams, usage estimates, session cache
@@ -421,10 +424,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1178 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1187 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 971 tests: 2 library tests, 338 `provider_core` tests, and
-  631 `provider_live` tests. This is 250 above the 721 direct simple source
+- `ri-llm-provider`: 980 tests: 2 library tests, 347 `provider_core` tests, and
+  631 `provider_live` tests. This is 259 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -675,6 +678,17 @@ This migration is not complete.
   `cargo fmt`,
   `cargo test -p ri-llm-provider --test provider_core oauth_ -- --test-threads=1`,
   `cargo fmt --check`, and `git diff --check` passed.
+- Latest local verification on 2026-05-22 after aligning Pi
+  `models.generated.ts` OpenAI Codex generated catalog metadata: Rust now
+  exposes the six current `openai-codex` ChatGPT backend models with the source
+  base URL, `openai-codex-responses` API, context/output windows, text-only
+  Spark input capability, thinking-level map, and non-zero usage cost table:
+  `cargo fmt`,
+  `cargo test -p ri-llm-provider --test provider_core openai_codex_model_metadata_matches_generated_catalog -- --exact --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core openai_codex -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --list` passed; the list command enumerated 1187
+  tests.
 - Latest local verification on 2026-05-22 after aligning
   `session/jsonl-repo.ts` list ordering: JSONL repo listing now sorts by parsed
   RFC3339 timestamp values, matching Pi's `new Date(createdAt).getTime()`
@@ -1614,6 +1628,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1178 Rust tests cover the
+- Test parity is not certified by raw count alone: 1187 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

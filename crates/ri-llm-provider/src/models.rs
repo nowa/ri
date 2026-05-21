@@ -194,8 +194,11 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("openai", "gpt-5.4"),
     ("openai", "gpt-5.4-mini"),
     ("openai", "gpt-5.5"),
+    ("openai-codex", "gpt-5.2"),
     ("openai-codex", "gpt-5.3-codex"),
+    ("openai-codex", "gpt-5.3-codex-spark"),
     ("openai-codex", "gpt-5.4"),
+    ("openai-codex", "gpt-5.4-mini"),
     ("openai-codex", "gpt-5.5"),
     ("azure-openai-responses", "gpt-4o-mini"),
     ("github-copilot", "gpt-4o"),
@@ -629,6 +632,7 @@ fn apply_known_model_overrides(model: &mut Model) {
             | "gpt-5.4-mini"
             | "gpt-5.5",
         ) => {
+            model.base_url = "https://chatgpt.com/backend-api".to_owned();
             model.reasoning = true;
             model
                 .thinking_level_map
@@ -636,7 +640,39 @@ fn apply_known_model_overrides(model: &mut Model) {
             model
                 .thinking_level_map
                 .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
-            ensure_image_input(model);
+            model.context_window = 272_000;
+            model.max_tokens = 128_000;
+            model.cost = match model.id.as_str() {
+                "gpt-5.4" => ModelCost {
+                    input: 2.5,
+                    output: 15.0,
+                    cache_read: 0.25,
+                    cache_write: 0.0,
+                },
+                "gpt-5.4-mini" => ModelCost {
+                    input: 0.75,
+                    output: 4.5,
+                    cache_read: 0.075,
+                    cache_write: 0.0,
+                },
+                "gpt-5.5" => ModelCost {
+                    input: 5.0,
+                    output: 30.0,
+                    cache_read: 0.5,
+                    cache_write: 0.0,
+                },
+                _ => ModelCost {
+                    input: 1.75,
+                    output: 14.0,
+                    cache_read: 0.175,
+                    cache_write: 0.0,
+                },
+            };
+            if model.id == "gpt-5.3-codex-spark" {
+                model.input = vec![crate::types::InputKind::Text];
+            } else {
+                ensure_image_input(model);
+            }
         }
         _ => {}
     }
@@ -876,7 +912,7 @@ fn base_url_for_provider(provider: &str) -> &'static str {
         "google-vertex" => "https://{location}-aiplatform.googleapis.com",
         "openai" => "https://api.openai.com/v1",
         "azure-openai-responses" => "https://example.openai.azure.com/openai/v1",
-        "openai-codex" => "https://chatgpt.com/backend-api/codex",
+        "openai-codex" => "https://chatgpt.com/backend-api",
         "mistral" => "https://api.mistral.ai",
         "fireworks" => "https://api.fireworks.ai/inference",
         "together" => "https://api.together.ai/v1",
