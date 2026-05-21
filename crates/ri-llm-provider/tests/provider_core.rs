@@ -16933,6 +16933,12 @@ async fn builtin_openai_codex_provider_uses_websocket_transport_and_parses_frame
         request
             .handshake
             .to_ascii_lowercase()
+            .contains("openai-beta: responses_websockets=2026-02-06")
+    );
+    assert!(
+        request
+            .handshake
+            .to_ascii_lowercase()
             .contains("session_id: ws-session")
     );
     let body: Value = serde_json::from_str(&request.message).expect("websocket request JSON");

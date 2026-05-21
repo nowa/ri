@@ -415,12 +415,7 @@ impl OpenAICodexWebSocket {
             let lower = name.to_ascii_lowercase();
             if matches!(
                 lower.as_str(),
-                "host"
-                    | "upgrade"
-                    | "connection"
-                    | "sec-websocket-version"
-                    | "sec-websocket-key"
-                    | "openai-beta"
+                "host" | "upgrade" | "connection" | "sec-websocket-version" | "sec-websocket-key"
             ) {
                 continue;
             }

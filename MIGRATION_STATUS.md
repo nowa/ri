@@ -681,14 +681,18 @@ This migration is not complete.
   `cargo test -p ri-llm-provider --lib oauth_auth_storage -- --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`, and
   `cargo test --workspace -- --list` (1169 tests enumerated) passed.
-- Latest local verification on 2026-05-21 after aligning Codex header
+- Latest local verification on 2026-05-22 after aligning Codex header
   construction with Fetch `Headers.set/delete` semantics: OpenAI Codex SSE and
   WebSocket header builders now override or delete caller/model headers
   case-insensitively for forced authorization, account, originator,
   user-agent, beta, content, and session-affinity fields, matching
   `providers/openai-codex-responses.ts` instead of preserving duplicate
-  differently-cased `BTreeMap` keys:
+  differently-cased `BTreeMap` keys. The actual WebSocket handshake now also
+  transmits the forced `OpenAI-Beta: responses_websockets=2026-02-06` header
+  instead of filtering it after construction:
   `cargo test -p ri-llm-provider --test provider_core openai_codex_responses_extracts_account_id_and_builds_transport_headers -- --exact --test-threads=1`
+  and
+  `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_uses_websocket_transport_and_parses_frames -- --test-threads=1`
   passed.
 - Latest local verification on 2026-05-21 after aligning
   `providers/openai-codex-responses.ts` session-scoped WebSocket connection and
