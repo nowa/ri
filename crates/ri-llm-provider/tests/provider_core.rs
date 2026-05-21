@@ -10371,11 +10371,24 @@ fn openai_codex_responses_extracts_account_id_and_builds_transport_headers() {
     let model_headers = BTreeMap::from([
         ("x-model".to_owned(), "model".to_owned()),
         ("accept".to_owned(), "application/json".to_owned()),
+        ("Content-Type".to_owned(), "text/plain".to_owned()),
+        ("user-agent".to_owned(), "wrong-agent".to_owned()),
     ]);
     let option_headers = BTreeMap::from([
         ("x-option".to_owned(), "option".to_owned()),
-        ("Authorization".to_owned(), "Bearer wrong".to_owned()),
+        ("authorization".to_owned(), "Bearer wrong".to_owned()),
+        ("CHATGPT-ACCOUNT-ID".to_owned(), "wrong-account".to_owned()),
+        ("Originator".to_owned(), "wrong-origin".to_owned()),
+        ("openai-beta".to_owned(), "wrong-beta".to_owned()),
+        ("SESSION_ID".to_owned(), "wrong-session".to_owned()),
+        ("X-Client-Request-Id".to_owned(), "wrong-request".to_owned()),
     ]);
+    let matching_header_count = |headers: &BTreeMap<String, String>, name: &str| {
+        headers
+            .keys()
+            .filter(|key| key.eq_ignore_ascii_case(name))
+            .count()
+    };
     let sse = build_openai_codex_sse_headers(
         &model_headers,
         &option_headers,
@@ -10385,31 +10398,44 @@ fn openai_codex_responses_extracts_account_id_and_builds_transport_headers() {
     );
 
     assert_eq!(sse.get("Authorization"), Some(&format!("Bearer {token}")));
+    assert_eq!(matching_header_count(&sse, "authorization"), 1);
     assert_eq!(
         sse.get("chatgpt-account-id").map(String::as_str),
         Some("acc_test")
     );
+    assert_eq!(matching_header_count(&sse, "chatgpt-account-id"), 1);
     assert_eq!(
         sse.get("OpenAI-Beta").map(String::as_str),
         Some("responses=experimental")
     );
+    assert_eq!(matching_header_count(&sse, "openai-beta"), 1);
     assert_eq!(sse.get("originator").map(String::as_str), Some("pi"));
+    assert_eq!(matching_header_count(&sse, "originator"), 1);
+    assert_eq!(
+        sse.get("User-Agent").map(String::as_str),
+        Some("pi (browser)")
+    );
+    assert_eq!(matching_header_count(&sse, "user-agent"), 1);
     assert_eq!(
         sse.get("accept").map(String::as_str),
         Some("text/event-stream")
     );
+    assert_eq!(matching_header_count(&sse, "accept"), 1);
     assert_eq!(
         sse.get("content-type").map(String::as_str),
         Some("application/json")
     );
+    assert_eq!(matching_header_count(&sse, "content-type"), 1);
     assert_eq!(
         sse.get("session_id").map(String::as_str),
         Some("session-123")
     );
+    assert_eq!(matching_header_count(&sse, "session_id"), 1);
     assert_eq!(
         sse.get("x-client-request-id").map(String::as_str),
         Some("session-123")
     );
+    assert_eq!(matching_header_count(&sse, "x-client-request-id"), 1);
     assert!(!sse.contains_key("x-api-key"));
     assert_eq!(sse.get("x-model").map(String::as_str), Some("model"));
     assert_eq!(sse.get("x-option").map(String::as_str), Some("option"));
@@ -10425,16 +10451,21 @@ fn openai_codex_responses_extracts_account_id_and_builds_transport_headers() {
         websocket.get("OpenAI-Beta").map(String::as_str),
         Some(OPENAI_CODEX_WEBSOCKET_BETA)
     );
-    assert!(!websocket.contains_key("accept"));
-    assert!(!websocket.contains_key("content-type"));
+    assert_eq!(matching_header_count(&websocket, "openai-beta"), 1);
+    assert_eq!(matching_header_count(&websocket, "accept"), 0);
+    assert_eq!(matching_header_count(&websocket, "content-type"), 0);
     assert_eq!(
         websocket.get("session_id").map(String::as_str),
         Some("request-456")
     );
+    assert_eq!(matching_header_count(&websocket, "session_id"), 1);
     assert_eq!(
         websocket.get("x-client-request-id").map(String::as_str),
         Some("request-456")
     );
+    assert_eq!(matching_header_count(&websocket, "x-client-request-id"), 1);
+    assert_eq!(matching_header_count(&websocket, "authorization"), 1);
+    assert_eq!(matching_header_count(&websocket, "chatgpt-account-id"), 1);
 }
 
 #[test]

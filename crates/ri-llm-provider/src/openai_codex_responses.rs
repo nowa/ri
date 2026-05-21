@@ -226,15 +226,12 @@ pub fn build_openai_codex_sse_headers(
 ) -> BTreeMap<String, String> {
     let mut headers =
         build_openai_codex_base_headers(model_headers, option_headers, account_id, token);
-    headers.insert(
-        "OpenAI-Beta".to_owned(),
-        "responses=experimental".to_owned(),
-    );
-    headers.insert("accept".to_owned(), "text/event-stream".to_owned());
-    headers.insert("content-type".to_owned(), "application/json".to_owned());
+    set_header_case_insensitive(&mut headers, "OpenAI-Beta", "responses=experimental");
+    set_header_case_insensitive(&mut headers, "accept", "text/event-stream");
+    set_header_case_insensitive(&mut headers, "content-type", "application/json");
     if let Some(session_id) = session_id {
-        headers.insert("session_id".to_owned(), session_id.to_owned());
-        headers.insert("x-client-request-id".to_owned(), session_id.to_owned());
+        set_header_case_insensitive(&mut headers, "session_id", session_id);
+        set_header_case_insensitive(&mut headers, "x-client-request-id", session_id);
     }
     headers
 }
@@ -248,16 +245,11 @@ pub fn build_openai_codex_websocket_headers(
 ) -> BTreeMap<String, String> {
     let mut headers =
         build_openai_codex_base_headers(model_headers, option_headers, account_id, token);
-    headers.remove("accept");
-    headers.remove("content-type");
-    headers.remove("OpenAI-Beta");
-    headers.remove("openai-beta");
-    headers.insert(
-        "OpenAI-Beta".to_owned(),
-        OPENAI_CODEX_WEBSOCKET_BETA.to_owned(),
-    );
-    headers.insert("x-client-request-id".to_owned(), request_id.to_owned());
-    headers.insert("session_id".to_owned(), request_id.to_owned());
+    remove_header_case_insensitive(&mut headers, "accept");
+    remove_header_case_insensitive(&mut headers, "content-type");
+    set_header_case_insensitive(&mut headers, "OpenAI-Beta", OPENAI_CODEX_WEBSOCKET_BETA);
+    set_header_case_insensitive(&mut headers, "x-client-request-id", request_id);
+    set_header_case_insensitive(&mut headers, "session_id", request_id);
     headers
 }
 
@@ -1058,11 +1050,27 @@ fn build_openai_codex_base_headers(
 ) -> BTreeMap<String, String> {
     let mut headers = model_headers.clone();
     headers.extend(option_headers.clone());
-    headers.insert("Authorization".to_owned(), format!("Bearer {token}"));
-    headers.insert("chatgpt-account-id".to_owned(), account_id.to_owned());
-    headers.insert("originator".to_owned(), "pi".to_owned());
-    headers.insert("User-Agent".to_owned(), "pi (browser)".to_owned());
+    set_header_case_insensitive(&mut headers, "Authorization", &format!("Bearer {token}"));
+    set_header_case_insensitive(&mut headers, "chatgpt-account-id", account_id);
+    set_header_case_insensitive(&mut headers, "originator", "pi");
+    set_header_case_insensitive(&mut headers, "User-Agent", "pi (browser)");
     headers
+}
+
+fn set_header_case_insensitive(headers: &mut BTreeMap<String, String>, name: &str, value: &str) {
+    remove_header_case_insensitive(headers, name);
+    headers.insert(name.to_owned(), value.to_owned());
+}
+
+fn remove_header_case_insensitive(headers: &mut BTreeMap<String, String>, name: &str) {
+    let keys = headers
+        .keys()
+        .filter(|key| key.eq_ignore_ascii_case(name))
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in keys {
+        headers.remove(&key);
+    }
 }
 
 fn format_openai_codex_tool(tool: &Tool) -> Value {

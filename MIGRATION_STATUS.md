@@ -392,10 +392,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1161 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1166 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 960 tests: 2 library tests, 327 `provider_core` tests, and
-  631 `provider_live` tests. This is 239 above the 721 direct simple source
+- `ri-llm-provider`: 965 tests: 2 library tests, 332 `provider_core` tests, and
+  631 `provider_live` tests. This is 244 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -430,7 +430,7 @@ Current Rust tests: 1161 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1161-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1166-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -453,6 +453,15 @@ This migration is not complete.
   cover the main contracts. High-level compaction and branch-summary
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
+- Latest local verification on 2026-05-21 after aligning Codex header
+  construction with Fetch `Headers.set/delete` semantics: OpenAI Codex SSE and
+  WebSocket header builders now override or delete caller/model headers
+  case-insensitively for forced authorization, account, originator,
+  user-agent, beta, content, and session-affinity fields, matching
+  `providers/openai-codex-responses.ts` instead of preserving duplicate
+  differently-cased `BTreeMap` keys:
+  `cargo test -p ri-llm-provider --test provider_core openai_codex_responses_extracts_account_id_and_builds_transport_headers -- --exact --test-threads=1`
+  passed.
 - Latest local verification on 2026-05-21 after aligning
   `providers/openai-codex-responses.ts` session-scoped WebSocket connection and
   fallback behavior: plain `transport: "websocket"` requests now reuse the
@@ -1295,6 +1304,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1161 Rust tests cover the
+- Test parity is not certified by raw count alone: 1166 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.
