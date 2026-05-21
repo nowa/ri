@@ -16454,6 +16454,40 @@ async fn builtin_openai_codex_provider_retries_sse_network_errors_before_streami
 }
 
 #[tokio::test]
+async fn builtin_openai_codex_provider_maps_usage_limit_errors_to_friendly_message() {
+    let (base_url, request_task) =
+        mock_http_sequence_server(vec![MockHttpSequenceResponse {
+            status: 429,
+            reason: "Too Many Requests",
+            content_type: "application/json",
+            headers: vec![],
+            body: "{\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"raw provider limit\",\"plan_type\":\"PLUS\"}}",
+        }])
+        .await;
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.session_id = Some("codex-friendly-error-session".to_owned());
+    options.stream.transport = Some(Transport::Sse);
+    options.stream.max_retries = Some(0);
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete with provider error");
+    let requests = request_task.await.expect("request task");
+
+    assert_eq!(message.stop_reason, StopReason::Error);
+    assert_eq!(
+        message.error_message.as_deref(),
+        Some("You have hit your ChatGPT usage limit (plus plan).")
+    );
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("POST /codex/responses HTTP/1.1"));
+    assert!(requests[0].contains("\"prompt_cache_key\":\"codex-friendly-error-session\""));
+}
+
+#[tokio::test]
 async fn builtin_openai_codex_provider_respects_abort_flag_while_streaming() {
     let (base_url, request_task) = mock_delayed_sse_server(
         vec![

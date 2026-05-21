@@ -998,6 +998,58 @@ pub fn openai_codex_retry_delay_ms_with_limits(
     Some(max_retry_delay_ms.map_or(delay_ms, |max| delay_ms.min(max)))
 }
 
+pub fn openai_codex_error_message_from_response(status: u16, body: &str, now_ms: i64) -> String {
+    let mut message = if body.is_empty() {
+        "Request failed".to_owned()
+    } else {
+        body.to_owned()
+    };
+    let mut friendly_message = None;
+
+    if let Ok(value) = parse_json_with_repair::<Value>(body)
+        && let Some(error) = value.get("error").and_then(Value::as_object)
+    {
+        let code = error
+            .get("code")
+            .or_else(|| error.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if status == 429
+            || code.contains("usage_limit_reached")
+            || code.contains("usage_not_included")
+            || code.contains("rate_limit_exceeded")
+        {
+            let plan = error
+                .get("plan_type")
+                .and_then(Value::as_str)
+                .filter(|plan| !plan.is_empty())
+                .map(|plan| format!(" ({} plan)", plan.to_ascii_lowercase()))
+                .unwrap_or_default();
+            let when = error
+                .get("resets_at")
+                .and_then(Value::as_f64)
+                .filter(|resets_at| *resets_at > 0.0)
+                .map(|resets_at| {
+                    let millis = resets_at * 1000.0 - now_ms as f64;
+                    let minutes = (millis / 60_000.0).round().max(0.0) as i64;
+                    format!(" Try again in ~{minutes} min.")
+                })
+                .unwrap_or_default();
+            friendly_message = Some(format!(
+                "You have hit your ChatGPT usage limit{plan}.{when}"
+            ));
+        }
+        if let Some(error_message) = error.get("message").and_then(Value::as_str) {
+            message = error_message.to_owned();
+        } else if let Some(friendly_message) = &friendly_message {
+            message = friendly_message.clone();
+        }
+    }
+
+    friendly_message.unwrap_or(message)
+}
+
 fn build_openai_codex_base_headers(
     model_headers: &BTreeMap<String, String>,
     option_headers: &BTreeMap<String, String>,

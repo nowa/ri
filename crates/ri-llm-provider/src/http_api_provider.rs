@@ -38,8 +38,8 @@ use crate::{
         OpenAICodexWebSocket, build_openai_codex_cached_websocket_continuation,
         build_openai_codex_cached_websocket_request_body, build_openai_codex_responses_payload,
         build_openai_codex_sse_headers, build_openai_codex_websocket_headers,
-        extract_openai_codex_account_id, openai_codex_retry_delay_ms_with_limits,
-        openai_codex_websocket_sse_fallback_active,
+        extract_openai_codex_account_id, openai_codex_error_message_from_response,
+        openai_codex_retry_delay_ms_with_limits, openai_codex_websocket_sse_fallback_active,
         record_openai_codex_websocket_failure_for_session,
         record_openai_codex_websocket_request_stats_for_session,
         record_openai_codex_websocket_sse_fallback_for_session, resolve_openai_codex_url,
@@ -1409,7 +1409,7 @@ async fn stream_openai_codex_sse_json(
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         let body = response.text().await.map_err(|error| error.to_string())?;
-        let error = provider_error_from_body(status, &body);
+        let error = openai_codex_error_message_from_response(status, &body, now_millis());
         let max_retries = openai_codex_max_retries(options);
         let Some(delay_ms) = openai_codex_retry_delay_ms_with_limits(
             status,
