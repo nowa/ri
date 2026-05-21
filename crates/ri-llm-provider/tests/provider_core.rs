@@ -12293,6 +12293,20 @@ fn openai_completions_messages_add_empty_reasoning_content_when_required() {
 
     assert_eq!(messages[1]["content"], "visible answer");
     assert_eq!(messages[1]["reasoning_content"], "");
+
+    let mut inferred_model = Model::faux("openai-completions", "deepseek", "deepseek-v4-pro");
+    inferred_model.base_url = "https://api.deepseek.com".to_owned();
+    inferred_model.reasoning = true;
+    let messages = convert_openai_completions_messages(
+        &inferred_model,
+        &openai_completions_replay_context(
+            &inferred_model,
+            vec![AssistantContent::Text(TextContent::new("visible answer"))],
+        ),
+    );
+
+    assert_eq!(messages[1]["content"], "visible answer");
+    assert_eq!(messages[1]["reasoning_content"], "");
 }
 
 #[tokio::test]

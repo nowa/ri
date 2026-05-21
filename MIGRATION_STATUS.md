@@ -452,12 +452,14 @@ This migration is not complete.
   align Zai/Groq/OpenRouter reasoning-model metadata used by those transforms,
   keep Pi's default `strict: false` tool schema marker when strict fields are
   supported while omitting it for Pi-detected unsupported compatible endpoints,
-  and forward OpenRouter plus Vercel AI Gateway routing preferences only for
-  matching gateway base URLs. Anthropic-format cache-control markers now carry
-  Pi's `ttl: "1h"` on long retention when supported while still omitting TTL
-  when long cache retention is disabled, and standard assistant tool-call turns
-  now preserve Pi's `content: null` while compatibility providers that require
-  assistant bridge text continue to use an empty string:
+  infer DeepSeek's required assistant `reasoning_content` field for matching
+  custom endpoints, and forward OpenRouter plus Vercel AI Gateway routing
+  preferences only for matching gateway base URLs. Anthropic-format
+  cache-control markers now carry Pi's `ttl: "1h"` on long retention when
+  supported while still omitting TTL when long cache retention is disabled, and
+  standard assistant tool-call turns now preserve Pi's `content: null` while
+  compatibility providers that require assistant bridge text continue to use an
+  empty string:
   `cargo test -p ri-llm-provider --test provider_core openai_completions_messages_keep_null_content_for_standard_tool_call_turns -- --exact`,
   `cargo test -p ri-llm-provider --test provider_core openai_completions_system_prompt_uses_developer_role_for_standard_reasoning_models -- --exact`,
   `cargo test -p ri-llm-provider --test provider_core openai_completions_ -- --test-threads=1`,

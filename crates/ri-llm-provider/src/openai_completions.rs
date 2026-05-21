@@ -1068,7 +1068,12 @@ fn requires_assistant_after_tool_result(model: &Model) -> bool {
 }
 
 fn requires_reasoning_content_on_assistant_messages(model: &Model) -> bool {
-    compat_bool(model, "requiresReasoningContentOnAssistantMessages")
+    model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("requiresReasoningContentOnAssistantMessages"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| is_deepseek_openai_completions_model(model))
 }
 
 fn send_session_affinity_headers(model: &Model) -> bool {
