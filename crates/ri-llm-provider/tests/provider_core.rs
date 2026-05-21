@@ -5669,6 +5669,37 @@ fn google_vertex_client_config_resolves_api_keys_adc_and_custom_base_urls() {
     assert_eq!(env_placeholder_config.api_key, None);
     remove_env("GOOGLE_CLOUD_API_KEY");
 
+    set_env("GOOGLE_CLOUD_PROJECT", "");
+    set_env("GCLOUD_PROJECT", "fallback-project");
+    set_env("GOOGLE_CLOUD_LOCATION", "europe-west4");
+    let env_fallback_config =
+        resolve_google_vertex_client_config(&model, GoogleVertexOptions::default())
+            .expect("env fallback config");
+    assert_eq!(
+        env_fallback_config.project.as_deref(),
+        Some("fallback-project")
+    );
+    assert_eq!(
+        env_fallback_config.location.as_deref(),
+        Some("europe-west4")
+    );
+    remove_env("GOOGLE_CLOUD_PROJECT");
+    remove_env("GCLOUD_PROJECT");
+    remove_env("GOOGLE_CLOUD_LOCATION");
+
+    let internal_gt_api_key_config = resolve_google_vertex_client_config(
+        &model,
+        GoogleVertexOptions {
+            api_key: Some("<invalid>placeholder>".to_owned()),
+            ..Default::default()
+        },
+    )
+    .expect("internal > is not a placeholder");
+    assert_eq!(
+        internal_gt_api_key_config.api_key.as_deref(),
+        Some("<invalid>placeholder>")
+    );
+
     let api_key_config = resolve_google_vertex_client_config(
         &model,
         GoogleVertexOptions {
@@ -6172,6 +6203,35 @@ fn google_simple_payload_maps_reasoning_to_budget_or_level() {
     assert_eq!(
         custom_payload["config"]["thinkingConfig"],
         json!({ "includeThoughts": true, "thinkingBudget": 1234 })
+    );
+
+    let flash_lite = get_model("google", "gemini-2.5-flash-lite").expect("flash lite");
+    let flash_lite_payload = build_google_simple_payload(
+        &flash_lite,
+        &context,
+        SimpleStreamOptions {
+            reasoning: Some(ThinkingLevel::Minimal),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        flash_lite_payload["config"]["thinkingConfig"],
+        json!({ "includeThoughts": true, "thinkingBudget": 512 })
+    );
+
+    let vertex_flash_lite =
+        get_model("google-vertex", "gemini-2.5-flash-lite").expect("vertex flash lite");
+    let vertex_flash_lite_payload = build_google_simple_payload(
+        &vertex_flash_lite,
+        &context,
+        SimpleStreamOptions {
+            reasoning: Some(ThinkingLevel::Minimal),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        vertex_flash_lite_payload["config"]["thinkingConfig"],
+        json!({ "includeThoughts": true, "thinkingBudget": 128 })
     );
 
     let pro = get_model("google", "gemini-3.1-pro-preview").expect("gemini 3 pro");

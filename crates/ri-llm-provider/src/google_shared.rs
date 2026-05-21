@@ -101,8 +101,8 @@ pub fn build_google_simple_payload(
         } else {
             Some(GoogleThinkingOptions {
                 enabled: true,
-                budget_tokens: Some(google_thinking_budget(
-                    &model.id,
+                budget_tokens: Some(google_thinking_budget_for_model(
+                    model,
                     effort,
                     options.thinking_budgets.as_ref(),
                 )),
@@ -233,6 +233,23 @@ pub fn google_thinking_budget(
     effort: ThinkingLevel,
     custom_budgets: Option<&ThinkingBudgets>,
 ) -> i64 {
+    google_thinking_budget_for_api("google-generative-ai", model_id, effort, custom_budgets)
+}
+
+fn google_thinking_budget_for_model(
+    model: &Model,
+    effort: ThinkingLevel,
+    custom_budgets: Option<&ThinkingBudgets>,
+) -> i64 {
+    google_thinking_budget_for_api(&model.api, &model.id, effort, custom_budgets)
+}
+
+fn google_thinking_budget_for_api(
+    api: &str,
+    model_id: &str,
+    effort: ThinkingLevel,
+    custom_budgets: Option<&ThinkingBudgets>,
+) -> i64 {
     let budget = match effort {
         ThinkingLevel::Minimal => custom_budgets.and_then(|budgets| budgets.minimal),
         ThinkingLevel::Low => custom_budgets.and_then(|budgets| budgets.low),
@@ -252,7 +269,7 @@ pub fn google_thinking_budget(
             ThinkingLevel::Medium => 8_192,
             ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Off => 32_768,
         }
-    } else if model_id.contains("2.5-flash-lite") {
+    } else if api != "google-vertex" && model_id.contains("2.5-flash-lite") {
         match effort {
             ThinkingLevel::Minimal => 512,
             ThinkingLevel::Low => 2_048,

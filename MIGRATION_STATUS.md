@@ -440,6 +440,18 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-21 after tightening
+  `providers/google-vertex.ts` parity: empty `GOOGLE_CLOUD_PROJECT` now falls
+  through to `GCLOUD_PROJECT`, placeholder API-key matching follows the source
+  `<[^>]+>` rule, and Vertex `gemini-2.5-flash-lite` reasoning budgets follow
+  the source Vertex branch while Google Gemini API keeps its flash-lite budget:
+  `cargo test -p ri-llm-provider --test provider_core google_vertex_client_config_resolves_api_keys_adc_and_custom_base_urls -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core google_simple_payload_maps_reasoning_to_budget_or_level -- --exact`,
+  `cargo test -p ri-llm-provider --test provider_core google_ -- --test-threads=1`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
+  `cargo test --workspace -- --test-threads=1`, `cargo fmt --check`,
+  `git diff --check`, and `cargo test --workspace -- --list` (1139 tests
+  enumerated) passed.
+- Previous local verification on 2026-05-21 after tightening
   `providers/google-shared.ts` thought-signature validation: same-model
   Google/Vertex history now preserves only source-valid base64
   `thoughtSignature` values and drops malformed padding/embedded `=` values

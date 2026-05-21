@@ -352,10 +352,10 @@ fn build_google_vertex_http_options(
 
 fn resolve_google_vertex_project(project: Option<&str>) -> Result<String, String> {
     project
-        .map(ToOwned::to_owned)
-        .or_else(|| std::env::var("GOOGLE_CLOUD_PROJECT").ok())
-        .or_else(|| std::env::var("GCLOUD_PROJECT").ok())
         .filter(|project| !project.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| env_var_nonempty("GOOGLE_CLOUD_PROJECT"))
+        .or_else(|| env_var_nonempty("GCLOUD_PROJECT"))
         .ok_or_else(|| {
             "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.".to_owned()
         })
@@ -363,9 +363,9 @@ fn resolve_google_vertex_project(project: Option<&str>) -> Result<String, String
 
 fn resolve_google_vertex_location(location: Option<&str>) -> Result<String, String> {
     location
-        .map(ToOwned::to_owned)
-        .or_else(|| std::env::var("GOOGLE_CLOUD_LOCATION").ok())
         .filter(|location| !location.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| env_var_nonempty("GOOGLE_CLOUD_LOCATION"))
         .ok_or_else(|| {
             "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options."
                 .to_owned()
@@ -373,7 +373,14 @@ fn resolve_google_vertex_location(location: Option<&str>) -> Result<String, Stri
 }
 
 fn is_placeholder_api_key(api_key: &str) -> bool {
-    api_key.starts_with('<') && api_key.ends_with('>') && api_key.len() > 2
+    api_key
+        .strip_prefix('<')
+        .and_then(|inner| inner.strip_suffix('>'))
+        .is_some_and(|inner| !inner.is_empty() && !inner.contains('>'))
+}
+
+fn env_var_nonempty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
 fn is_google_vertex_api_version_segment(part: &str) -> bool {
