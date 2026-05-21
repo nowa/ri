@@ -758,13 +758,11 @@ async fn write_oauth_callback_response(
     message: &str,
     details: Option<&str>,
 ) -> Result<(), String> {
-    let details = details
-        .map(|details| format!("<p>{}</p>", html_escape(details)))
-        .unwrap_or_default();
-    let body = format!(
-        "<!doctype html><html><body><h1>{}</h1>{details}</body></html>",
-        html_escape(message)
-    );
+    let body = if status == 200 {
+        oauth_success_html(message)
+    } else {
+        oauth_error_html(message, details)
+    };
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
@@ -773,6 +771,51 @@ async fn write_oauth_callback_response(
         .write_all(response.as_bytes())
         .await
         .map_err(|error| error.to_string())
+}
+
+pub fn oauth_success_html(message: &str) -> String {
+    render_oauth_page(
+        "Authentication successful",
+        "Authentication successful",
+        message,
+        None,
+    )
+}
+
+pub fn oauth_error_html(message: &str, details: Option<&str>) -> String {
+    render_oauth_page(
+        "Authentication failed",
+        "Authentication failed",
+        message,
+        details,
+    )
+}
+
+fn render_oauth_page(title: &str, heading: &str, message: &str, details: Option<&str>) -> String {
+    let title = html_escape(title);
+    let heading = html_escape(heading);
+    let message = html_escape(message);
+    let details = details
+        .map(|details| format!(r#"<div class="details">{}</div>"#, html_escape(details)))
+        .unwrap_or_default();
+
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+</head>
+<body>
+  <main>
+    <h1>{heading}</h1>
+    <p>{message}</p>
+    {details}
+  </main>
+</body>
+</html>"#
+    )
 }
 
 fn parse_query_params(query: &str) -> BTreeMap<String, String> {
@@ -792,6 +835,8 @@ fn html_escape(value: &str) -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn oauth_callback_host() -> String {

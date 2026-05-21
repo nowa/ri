@@ -104,6 +104,60 @@ fn builtin_api_provider_registry_exposes_main_provider_surfaces() {
 }
 
 #[test]
+fn simple_stream_defaults_match_pi_base_options_max_tokens() {
+    let mut model = Model::faux("openai-responses", "openai", "small-output");
+    model.context_window = 128_000;
+    model.max_tokens = 8_192;
+    let options = apply_simple_stream_defaults(&model, SimpleStreamOptions::default());
+    assert_eq!(options.stream.max_tokens, Some(8_192));
+
+    let mut capped = Model::faux("openai-responses", "openai", "full-window-output");
+    capped.context_window = 128_000;
+    capped.max_tokens = 128_000;
+    let options = apply_simple_stream_defaults(&capped, SimpleStreamOptions::default());
+    assert_eq!(options.stream.max_tokens, Some(32_000));
+
+    let mut explicit = SimpleStreamOptions::default();
+    explicit.stream.max_tokens = Some(777);
+    let options = apply_simple_stream_defaults(&capped, explicit);
+    assert_eq!(options.stream.max_tokens, Some(777));
+
+    let mut unknown = Model::faux("openai-responses", "openai", "unknown-output");
+    unknown.max_tokens = 0;
+    let options = apply_simple_stream_defaults(&unknown, SimpleStreamOptions::default());
+    assert_eq!(options.stream.max_tokens, None);
+}
+
+#[test]
+fn simple_stream_thinking_adjustment_matches_pi_budget_rules() {
+    let adjusted = adjust_max_tokens_for_thinking(3_000, 3_000, ThinkingLevel::High, None);
+    assert_eq!(
+        adjusted,
+        ThinkingTokenAdjustment {
+            max_tokens: 3_000,
+            thinking_budget: 1_976,
+        }
+    );
+
+    let adjusted = adjust_max_tokens_for_thinking(
+        4_096,
+        32_000,
+        ThinkingLevel::XHigh,
+        Some(&ThinkingBudgets {
+            high: Some(1_234),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(
+        adjusted,
+        ThinkingTokenAdjustment {
+            max_tokens: 5_330,
+            thinking_budget: 1_234,
+        }
+    );
+}
+
+#[test]
 fn registered_model_apis_have_builtin_provider_implementations() {
     ensure_builtin_api_providers();
 
@@ -1850,10 +1904,27 @@ async fn anthropic_oauth_callback_server_rejects_state_mismatch_then_accepts_cod
 
     let mismatch = oauth_callback_get(port, "/callback?code=manual-code&state=wrong-state").await;
     assert!(mismatch.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(mismatch.contains("<title>Authentication failed</title>"));
+    assert!(mismatch.contains("<h1>Authentication failed</h1>"));
     assert!(mismatch.contains("State mismatch"));
+
+    let provider_error = oauth_callback_get(
+        port,
+        "/callback?error=%3Cscript%3Ebad%26quote%3D%22yes%22%3C%2Fscript%3E",
+    )
+    .await;
+    assert!(provider_error.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(provider_error.contains("Authentication did not complete."));
+    assert!(
+        provider_error
+            .contains("Error: &lt;script&gt;bad&amp;quote=&quot;yes&quot;&lt;/script&gt;")
+    );
+    assert!(!provider_error.contains("<script>"));
 
     let response = oauth_callback_get(port, "/callback?code=manual-code&state=state-value").await;
     assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("<title>Authentication successful</title>"));
+    assert!(response.contains("<h1>Authentication successful</h1>"));
     assert!(response.contains("Anthropic authentication completed"));
     let callback = server
         .wait_for_code()
@@ -4697,6 +4768,33 @@ fn bedrock_payload_uses_model_name_for_application_profile_fixed_budget_thinking
 }
 
 #[test]
+fn bedrock_payload_forwards_simple_inference_config() {
+    let model = get_model(
+        "amazon-bedrock",
+        "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    )
+    .expect("model");
+
+    let payload = build_bedrock_payload(
+        &model,
+        &bedrock_context(),
+        BedrockPayloadOptions {
+            max_tokens: Some(12_345),
+            temperature: Some(0.4),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(
+        payload["inferenceConfig"],
+        json!({
+            "maxTokens": 12_345,
+            "temperature": 0.4,
+        })
+    );
+}
+
+#[test]
 fn bedrock_payload_preserves_image_tool_results_in_converse_messages() {
     let mut model = get_model(
         "amazon-bedrock",
@@ -7297,6 +7395,46 @@ fn anthropic_simple_payload_disables_adaptive_reasoning_when_thinking_is_off() {
         assert_eq!(payload["thinking"], json!({ "type": "disabled" }));
         assert!(payload.get("output_config").is_none());
     }
+}
+
+#[test]
+fn anthropic_simple_payload_applies_base_options_and_budget_adjustment() {
+    let mut model = get_model("anthropic", "claude-sonnet-4-5").expect("model");
+    model.context_window = 10_000;
+    model.max_tokens = 3_000;
+
+    let payload = build_anthropic_simple_payload(
+        &model,
+        &user_context("Hello"),
+        SimpleStreamOptions {
+            reasoning: Some(ThinkingLevel::High),
+            ..Default::default()
+        },
+    );
+    assert_eq!(payload["max_tokens"], 3_000);
+    assert_eq!(
+        payload["thinking"],
+        json!({
+            "type": "enabled",
+            "budget_tokens": 1_976,
+            "display": "summarized",
+        })
+    );
+
+    let payload = build_anthropic_simple_payload(
+        &model,
+        &user_context("Hello"),
+        SimpleStreamOptions {
+            stream: StreamOptions {
+                temperature: Some(0.2),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    assert_eq!(payload["max_tokens"], 3_000);
+    assert_eq!(payload["temperature"], 0.2);
+    assert_eq!(payload["thinking"], json!({ "type": "disabled" }));
 }
 
 #[test]
@@ -12177,6 +12315,27 @@ fn json_repair_and_hash_match_core_semantics() {
 }
 
 #[test]
+fn parse_streaming_json_recovers_common_partial_tool_arguments() {
+    assert_eq!(
+        parse_streaming_json(Some(r#"{"path":"src/main.rs""#)),
+        json!({ "path": "src/main.rs" })
+    );
+    assert_eq!(
+        parse_streaming_json(Some(r#"{"count":2,"nested":{"ok":true}"#)),
+        json!({ "count": 2, "nested": { "ok": true } })
+    );
+    assert_eq!(
+        parse_streaming_json(Some(r#"{"items":[1,2,]"#)),
+        json!({ "items": [1, 2] })
+    );
+    assert_eq!(
+        parse_streaming_json(Some(r#"{"unfinished":"value"#)),
+        json!({ "unfinished": "value" })
+    );
+    assert_eq!(parse_streaming_json(Some(r#"{"waiting":"#)), json!({}));
+}
+
+#[test]
 fn unicode_surrogate_repair_preserves_pairs_and_replaces_unpaired_escapes() {
     let paired: Value =
         parse_json_with_repair(r#"{"text":"emoji \uD83D\uDE48 stays"}"#).expect("paired");
@@ -12224,6 +12383,32 @@ async fn builtin_openai_completions_provider_posts_json_and_parses_sse() {
     );
     assert!(request.contains("\"stream\":true"));
     assert!(request.contains("\"prompt_cache_key\":\"session-1\""));
+}
+
+#[tokio::test]
+async fn builtin_openai_responses_simple_provider_applies_default_max_output_tokens() {
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_default_max\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_default_max\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Default max\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_default_max\",\"content\":[{\"type\":\"output_text\",\"text\":\"Default max\"}]}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_default_max\",\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":2,\"total_tokens\":4}}}\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let mut model = Model::faux("openai-responses", "openai", "full-window-output");
+    model.base_url = base_url;
+    model.context_window = 128_000;
+    model.max_tokens = 128_000;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("test-key".to_owned());
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(text_of(&message), Some("Default max"));
+    assert!(request.contains("\"max_output_tokens\":32000"));
 }
 
 #[tokio::test]

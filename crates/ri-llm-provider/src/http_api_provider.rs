@@ -769,6 +769,8 @@ impl ApiProvider for BedrockConverseStreamHttpProvider {
             &context,
             BedrockPayloadOptions {
                 cache_retention: options.stream.cache_retention,
+                max_tokens: options.stream.max_tokens,
+                temperature: options.stream.temperature,
                 reasoning: options.reasoning,
                 region: config.region.clone(),
                 thinking_budgets: options.thinking_budgets.clone(),

@@ -6,6 +6,7 @@ use crate::{
     anthropic_compat::{from_claude_code_tool_name, to_claude_code_tool_name},
     json_repair::{parse_json_with_repair, parse_streaming_json, sanitize_surrogates},
     message_transform::transform_messages,
+    simple_options::{adjust_max_tokens_for_thinking, apply_simple_stream_defaults},
 };
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -534,9 +535,11 @@ fn map_anthropic_stop_reason(reason: &str) -> StopReason {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct AnthropicPayloadOptions {
     pub cache_retention: Option<CacheRetention>,
+    pub max_tokens: Option<u64>,
+    pub temperature: Option<f64>,
     pub thinking_enabled: Option<bool>,
     pub thinking_budget_tokens: Option<u64>,
     pub effort: Option<String>,
@@ -590,17 +593,25 @@ pub fn build_anthropic_simple_payload_for_client(
     options: SimpleStreamOptions,
     use_claude_code_tool_names: bool,
 ) -> Value {
+    let options = apply_simple_stream_defaults(model, options);
     let mut payload_options = AnthropicPayloadOptions::default();
+    payload_options.cache_retention = options.stream.cache_retention;
+    payload_options.max_tokens = options.stream.max_tokens;
+    payload_options.temperature = options.stream.temperature;
     if let Some(reasoning) = options.reasoning {
         payload_options.thinking_enabled = Some(true);
         if supports_anthropic_adaptive_thinking(&model.id) {
             payload_options.effort =
                 Some(map_anthropic_thinking_level_to_effort(model, reasoning).to_owned());
         } else {
-            payload_options.thinking_budget_tokens = Some(anthropic_thinking_budget(
+            let adjusted = adjust_max_tokens_for_thinking(
+                options.stream.max_tokens.unwrap_or(0),
+                model.max_tokens,
                 reasoning,
                 options.thinking_budgets.as_ref(),
-            ));
+            );
+            payload_options.max_tokens = Some(adjusted.max_tokens);
+            payload_options.thinking_budget_tokens = Some(adjusted.thinking_budget);
         }
     } else {
         payload_options.thinking_enabled = Some(false);
@@ -625,9 +636,15 @@ pub fn build_anthropic_payload(
             cache_control.as_ref(),
             use_claude_code_tool_names,
         ),
-        "max_tokens": model.max_tokens / 3,
+        "max_tokens": options.max_tokens.unwrap_or(model.max_tokens / 3),
         "stream": true,
     });
+
+    if let Some(temperature) = options.temperature
+        && options.thinking_enabled != Some(true)
+    {
+        payload["temperature"] = json!(temperature);
+    }
 
     if let Some(system_prompt) = &context.system_prompt {
         let mut block = json!({
@@ -1249,19 +1266,5 @@ fn map_anthropic_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -
         ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
         ThinkingLevel::Medium => "medium",
         ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Off => "high",
-    }
-}
-
-fn anthropic_thinking_budget(
-    level: ThinkingLevel,
-    budgets: Option<&crate::ThinkingBudgets>,
-) -> u64 {
-    match level {
-        ThinkingLevel::Minimal => budgets.and_then(|budget| budget.minimal).unwrap_or(1_024),
-        ThinkingLevel::Low => budgets.and_then(|budget| budget.low).unwrap_or(2_048),
-        ThinkingLevel::Medium => budgets.and_then(|budget| budget.medium).unwrap_or(8_192),
-        ThinkingLevel::High => budgets.and_then(|budget| budget.high).unwrap_or(16_384),
-        ThinkingLevel::XHigh => budgets.and_then(|budget| budget.high).unwrap_or(16_384),
-        ThinkingLevel::Off => 1_024,
     }
 }

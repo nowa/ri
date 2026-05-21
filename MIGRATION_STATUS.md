@@ -38,8 +38,15 @@ counterparts that pass.
     abort flags before and during paced streams, usage estimates, session cache
     simulation, and unregister behavior. Faux response factories can inspect
     `SimpleStreamOptions` for helper tests.
-  - JSON repair/hash helpers, including malformed control-character repair and
-    unpaired UTF-16 surrogate escape replacement.
+  - Rust-native `providers/simple-options.ts` parity for simple stream defaults:
+    default `max_tokens` selection, 32k output cap when model output reaches the
+    context window, explicit caller override preservation, xhigh-to-high budget
+    clamping, and thinking-budget/max-token adjustment for budget-based
+    reasoning models.
+  - JSON repair/hash helpers, including malformed control-character repair,
+    invalid escape repair, conservative partial streamed tool-argument parsing
+    for common incomplete object/array/string cases, and unpaired UTF-16
+    surrogate escape replacement.
   - Assistant-message diagnostics helpers mirroring `utils/diagnostics.ts`,
     represented as typed Rust structs that serialize to the pi
     `{ type, timestamp, error, details }` diagnostic shape.
@@ -98,10 +105,11 @@ counterparts that pass.
     assistant-history replay, stream inbound restoration, and built-in provider
     wiring integration.
   - Anthropic OAuth helpers for PKCE generation, authorization URL
-    construction, local callback server/state validation, manual redirect input
-    login flow, token/refresh JSON requests, localhost callback preservation,
-    token response parsing, and proxy-aware async authorization-code/refresh
-    token exchange primitives.
+    construction, local callback server/state validation with pi-style
+    success/error HTML pages and escaped details, manual redirect input login
+    flow, token/refresh JSON requests, localhost callback preservation, token
+    response parsing, and proxy-aware async authorization-code/refresh token
+    exchange primitives.
   - OpenAI Codex OAuth helpers for authorization URL construction,
     local callback server/state validation, callback-driven login flow,
     form-encoded token/refresh requests, refresh failure message formatting,
@@ -299,10 +307,10 @@ counterparts that pass.
 
 ## Rust Test Coverage Now
 
-Current Rust tests: 1089 enumerated by `cargo test --workspace -- --list`.
+Current Rust tests: 1095 enumerated by `cargo test --workspace -- --list`.
 
-- `ri-llm-provider`: 915 tests: 1 library test, 283 `provider_core` tests, and
-  631 `provider_live` tests. This is 194 above the 721 direct simple source
+- `ri-llm-provider`: 921 tests: 1 library test, 289 `provider_core` tests, and
+  631 `provider_live` tests. This is 200 above the 721 direct simple source
   cases counted under `packages/ai/test`, because the Rust suite also includes
   Rust-specific registry, HTTP, proxy, transport, OAuth auth-storage, and gated
   live/E2E coverage.
@@ -337,7 +345,7 @@ Current Rust tests: 1089 enumerated by `cargo test --workspace -- --list`.
   stateful wrapper, high-level `AgentHarness` hooks, compaction and branch
   summary persistence, JSONL/session storage, resources, prompt templates,
   skills, truncation, and local execution environment behavior.
-- The raw 1089-vs-871 count is not completion proof. Rust tests sometimes
+- The raw 1095-vs-871 count is not completion proof. Rust tests sometimes
   aggregate several source assertions, some source cases are Node/SDK-loader
   specific, and many provider live/E2E tests require credentials, local
   services, or manual OAuth interaction before they prove external parity.
@@ -363,14 +371,18 @@ This migration is not complete.
 - Latest local verification on 2026-05-21 after adding Rust-native
   `session-resources.ts` parity for OpenAI Codex WebSocket cache cleanup and
   `utils/diagnostics.ts` parity for Codex transport fallback diagnostics, plus
-  `agent/src/proxy.ts` stream-provider/proxy parity:
+  `agent/src/proxy.ts` stream-provider/proxy parity and
+  `providers/simple-options.ts` simple stream default/max-token parity,
+  `utils/oauth/oauth-page.ts` callback HTML parity, and
+  `utils/json-parse.ts` partial streamed JSON parsing parity:
   `cargo fmt --check`,
+  `cargo test -p ri-llm-provider --test provider_core -- --test-threads=1`,
   `cargo test -p ri-llm-provider --test provider_core session_resource_cleanup_removes_openai_codex_websocket_cache_for_session -- --exact`,
   `cargo test -p ri-llm-provider --test provider_core builtin_openai_codex_provider_auto_falls_back_to_sse_when_websocket_fails_before_events -- --exact`,
   `cargo test -p ri-agent-core --test proxy -- --test-threads=1`,
   `cargo test --workspace -- --list`, and
   `cargo test --workspace -- --test-threads=1` passed; the list command
-  enumerated 1089 tests.
+  enumerated 1095 tests.
 - Previous full local verification on 2026-05-20 after removing the meta-tests and
   adding summary hook removal, Bedrock runtime proxy coverage, and OpenRouter
   Images custom authorization preservation:
@@ -400,6 +412,6 @@ This migration is not complete.
   edge cases, before/after lifecycle hook ordering, async listener settlement,
   and session/harness integration behavior outside the covered high-level
   compaction and branch-summary hook contracts.
-- Test parity is not certified by raw count alone: 1089 Rust tests cover the
+- Test parity is not certified by raw count alone: 1095 Rust tests cover the
   current Rust-representable provider and agent matrix, but the 871 source-case
   denominator is not one-to-one with Rust tests and excludes `packages/coding-agent`.

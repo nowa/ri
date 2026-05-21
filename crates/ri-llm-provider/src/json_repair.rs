@@ -144,7 +144,78 @@ pub fn parse_streaming_json(partial_json: Option<&str>) -> Value {
         return Value::Object(Default::default());
     }
 
-    parse_json_with_repair(partial_json).unwrap_or_else(|_| Value::Object(Default::default()))
+    if let Ok(value) = parse_json_with_repair(partial_json) {
+        return value;
+    }
+    if let Some(candidate) = complete_partial_json(partial_json)
+        && let Ok(value) = parse_json_with_repair(&candidate)
+    {
+        return value;
+    }
+    Value::Object(Default::default())
+}
+
+fn complete_partial_json(partial_json: &str) -> Option<String> {
+    let repaired = repair_json(partial_json);
+    let mut completed = String::with_capacity(repaired.len() + 8);
+    let mut closers = Vec::<char>::new();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for ch in repaired.chars() {
+        completed.push(ch);
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => closers.push('}'),
+            '[' => closers.push(']'),
+            '}' | ']' => {
+                completed.pop();
+                trim_trailing_json_whitespace(&mut completed);
+                if completed.ends_with(',') {
+                    completed.pop();
+                }
+                completed.push(ch);
+                if closers.pop() != Some(ch) {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if in_string {
+        completed.push('"');
+    }
+
+    while let Some(closer) = closers.pop() {
+        trim_trailing_json_whitespace(&mut completed);
+        if completed.ends_with(':') {
+            return None;
+        }
+        if completed.ends_with(',') {
+            completed.pop();
+        }
+        completed.push(closer);
+    }
+
+    Some(completed)
+}
+
+fn trim_trailing_json_whitespace(value: &mut String) {
+    while value.ends_with(char::is_whitespace) {
+        value.pop();
+    }
 }
 
 pub fn short_hash(input: &str) -> String {

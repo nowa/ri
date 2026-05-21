@@ -661,6 +661,8 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BedrockPayloadOptions {
     pub cache_retention: Option<CacheRetention>,
+    pub max_tokens: Option<u64>,
+    pub temperature: Option<f64>,
     pub reasoning: Option<ThinkingLevel>,
     pub region: Option<String>,
     pub thinking_budgets: Option<ThinkingBudgets>,
@@ -683,6 +685,16 @@ pub fn build_bedrock_payload(
         build_bedrock_system_prompt(context.system_prompt.as_deref(), model, cache_retention)
     {
         payload["system"] = system;
+    }
+    if options.max_tokens.is_some() || options.temperature.is_some() {
+        let mut inference_config = Map::new();
+        if let Some(max_tokens) = options.max_tokens {
+            inference_config.insert("maxTokens".to_owned(), json!(max_tokens));
+        }
+        if let Some(temperature) = options.temperature {
+            inference_config.insert("temperature".to_owned(), json!(temperature));
+        }
+        payload["inferenceConfig"] = Value::Object(inference_config);
     }
     if let Some(fields) = build_bedrock_additional_model_request_fields(model, &options) {
         payload["additionalModelRequestFields"] = fields;

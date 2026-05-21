@@ -3,6 +3,7 @@ use crate::{
     event_stream::{AssistantMessageEventStream, assistant_message_event_stream},
     http_api_provider::ensure_builtin_api_providers,
     models::get_supported_thinking_levels,
+    simple_options::apply_simple_stream_defaults,
     types::{
         AssistantMessage, AssistantMessageEvent, Context, Model, SimpleStreamOptions, StopReason,
         StreamOptions, ThinkingLevel, Usage, now_millis,
@@ -37,6 +38,7 @@ pub fn stream_simple(
     if let Some(error) = unsupported_reasoning_error(model, options.reasoning) {
         return Ok(error_stream(model, error));
     }
+    let options = apply_simple_stream_defaults(model, options);
     let provider =
         get_api_provider(&model.api).ok_or_else(|| ProviderError::MissingApi(model.api.clone()))?;
     provider.stream_simple(model, context, options)

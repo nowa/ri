@@ -6,6 +6,7 @@ use crate::{
     json_repair::{parse_streaming_json, sanitize_surrogates, short_hash},
     message_transform::transform_messages,
     models::{calculate_cost, clamp_thinking_level},
+    simple_options::apply_simple_stream_defaults,
 };
 use serde_json::{Value, json};
 use std::{
@@ -38,6 +39,7 @@ pub fn build_mistral_simple_payload(
     context: &Context,
     options: SimpleStreamOptions,
 ) -> Value {
+    let options = apply_simple_stream_defaults(model, options);
     let reasoning = options
         .reasoning
         .map(|level| clamp_thinking_level(model, level))

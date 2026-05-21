@@ -4,6 +4,7 @@ use crate::{
     ThinkingBudgets, ThinkingContent, ThinkingLevel, Tool, ToolCall, ToolResultContent, Usage,
     UserContent, UserContentValue, json_repair::sanitize_surrogates,
     message_transform::transform_messages, models::calculate_cost,
+    simple_options::apply_simple_stream_defaults,
 };
 use serde_json::{Map, Value, json};
 
@@ -80,6 +81,7 @@ pub fn build_google_simple_payload(
     context: &Context,
     options: SimpleStreamOptions,
 ) -> Value {
+    let options = apply_simple_stream_defaults(model, options);
     let thinking = if let Some(reasoning) = options.reasoning {
         let clamped = crate::clamp_thinking_level(model, reasoning);
         let effort = if clamped == ThinkingLevel::Off {

@@ -28,9 +28,10 @@ provider credentials.
 
 The test suite covers provider metadata, payload generation, streaming parsers,
 SSE and eventstream behavior, abort handling, response IDs, usage accounting,
-message transforms, tool calling, reasoning/thinking controls, agent loop
-control flow, stateful agents, custom stream providers, proxy streaming, tool
-execution, compaction, resources, session storage, and harness utilities.
+message transforms, simple stream option defaults, tool calling,
+reasoning/thinking controls, agent loop control flow, stateful agents, custom
+stream providers, proxy streaming, tool execution, compaction, resources,
+session storage, and harness utilities.
 
 Live provider E2E tests are not run by default. Provider behavior is covered
 locally through mock HTTP servers, payload assertions, parser tests, and stream
@@ -79,12 +80,15 @@ credentials, local model services where applicable, and manual OAuth flows.
   related compatibility layers.
 - Tool calling with streamed partial arguments.
 - Text, image, thinking, and tool-result content blocks.
+- Conservative parsing for common incomplete streamed tool-argument JSON.
 - Reasoning levels including `off`, `minimal`, `low`, `medium`, `high`, and
   `xhigh`, with provider-specific wire mappings.
+- Pi-style simple stream defaults for output token limits and budget-based
+  thinking token adjustment.
 - Usage and cost accounting, response IDs, diagnostics, abort flags, retry
   configuration, session IDs, and provider-specific extra options.
 - OAuth helpers for providers such as OpenAI Codex, Anthropic, GitHub Copilot,
-  and Google Vertex.
+  and Google Vertex, including local callback pages for browser-based flows.
 
 `ri-agent-core` includes:
 
