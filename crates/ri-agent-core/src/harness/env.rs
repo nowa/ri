@@ -419,8 +419,9 @@ impl LocalExecutionEnv {
     }
 
     pub fn create_temp_file(&self, prefix: &str, suffix: &str) -> Result<String, FileError> {
+        let dir = PathBuf::from(self.create_temp_dir("tmp-")?);
         for _ in 0..100 {
-            let path = std::env::temp_dir().join(format!("{prefix}{}{suffix}", unique_suffix()));
+            let path = dir.join(format!("{prefix}{}{suffix}", unique_suffix()));
             match fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)

@@ -466,6 +466,18 @@ This migration is not complete.
   persistence hooks have direct Rust behavior coverage, including hook removal,
   supplied-summary, cancel/skip, error, event, and JSONL persistence paths.
 - Latest local verification on 2026-05-22 after aligning
+  `harness/env/nodejs.ts` temporary file creation:
+  `LocalExecutionEnv::create_temp_file` now creates a `tmp-...` temporary
+  directory first and places the requested `prefix + unique + suffix` file
+  inside it, matching Pi's `createTempDir("tmp-")` plus `join(dir, fileName)`
+  path shape:
+  `cargo test -p ri-agent-core --test execution_env local_execution_env_appends_creates_temps_and_removes_recursively -- --exact --test-threads=1`,
+  `cargo fmt`,
+  `cargo test -p ri-agent-core --test execution_env -- --test-threads=1`,
+  `cargo test -p ri-agent-core -- --test-threads=1`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test --workspace -- --test-threads=1` passed.
+- Latest local verification on 2026-05-22 after aligning
   `harness/env/nodejs.ts` `exists`: `LocalExecutionEnv::exists` now returns
   `Result<bool, FileError>` and uses symlink metadata so missing paths return
   `Ok(false)` while other file-info failures propagate, matching Pi's

@@ -222,6 +222,19 @@ fn local_execution_env_appends_creates_temps_and_removes_recursively() {
     assert!(PathBuf::from(&temp_dir).is_dir());
     let temp_file = env.create_temp_file("prefix-", ".txt").expect("temp file");
     assert!(PathBuf::from(&temp_file).is_file());
+    assert!(
+        PathBuf::from(&temp_file)
+            .parent()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("tmp-"))
+    );
+    assert!(
+        PathBuf::from(&temp_file)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("prefix-"))
+    );
     assert!(temp_file.ends_with(".txt"));
 
     env.write_file("dir/child/file.txt", b"hello")
