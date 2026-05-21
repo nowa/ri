@@ -212,6 +212,14 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("openai", "gpt-5.4-pro"),
     ("openai", "gpt-5.5"),
     ("openai", "gpt-5.5-pro"),
+    ("openai", "o1"),
+    ("openai", "o1-pro"),
+    ("openai", "o3"),
+    ("openai", "o3-deep-research"),
+    ("openai", "o3-mini"),
+    ("openai", "o3-pro"),
+    ("openai", "o4-mini"),
+    ("openai", "o4-mini-deep-research"),
     ("openai-codex", "gpt-5.2"),
     ("openai-codex", "gpt-5.3-codex"),
     ("openai-codex", "gpt-5.3-codex-spark"),
@@ -243,6 +251,14 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("azure-openai-responses", "gpt-5.4-pro"),
     ("azure-openai-responses", "gpt-5.5"),
     ("azure-openai-responses", "gpt-5.5-pro"),
+    ("azure-openai-responses", "o1"),
+    ("azure-openai-responses", "o1-pro"),
+    ("azure-openai-responses", "o3"),
+    ("azure-openai-responses", "o3-deep-research"),
+    ("azure-openai-responses", "o3-mini"),
+    ("azure-openai-responses", "o3-pro"),
+    ("azure-openai-responses", "o4-mini"),
+    ("azure-openai-responses", "o4-mini-deep-research"),
     ("github-copilot", "gpt-4o"),
     ("github-copilot", "gpt-5-mini"),
     ("github-copilot", "gpt-5.2-codex"),
@@ -540,6 +556,14 @@ fn apply_known_model_overrides(model: &mut Model) {
     }
     if model.provider == "azure-openai-responses"
         && apply_azure_openai_gpt5_generated_metadata(model)
+    {
+        return;
+    }
+    if model.provider == "openai" && apply_openai_o_series_generated_metadata(model) {
+        return;
+    }
+    if model.provider == "azure-openai-responses"
+        && apply_azure_openai_o_series_generated_metadata(model)
     {
         return;
     }
@@ -998,6 +1022,89 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
     }
 }
 
+struct OSeriesGeneratedMetadata {
+    text_only: bool,
+    cost: ModelCost,
+}
+
+fn o_series_generated_metadata(model_id: &str) -> Option<OSeriesGeneratedMetadata> {
+    match model_id {
+        "o1" => Some(OSeriesGeneratedMetadata {
+            text_only: false,
+            cost: ModelCost {
+                input: 15.0,
+                output: 60.0,
+                cache_read: 7.5,
+                cache_write: 0.0,
+            },
+        }),
+        "o1-pro" => Some(OSeriesGeneratedMetadata {
+            text_only: false,
+            cost: ModelCost {
+                input: 150.0,
+                output: 600.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        }),
+        "o3" => Some(OSeriesGeneratedMetadata {
+            text_only: false,
+            cost: ModelCost {
+                input: 2.0,
+                output: 8.0,
+                cache_read: 0.5,
+                cache_write: 0.0,
+            },
+        }),
+        "o3-deep-research" => Some(OSeriesGeneratedMetadata {
+            text_only: false,
+            cost: ModelCost {
+                input: 10.0,
+                output: 40.0,
+                cache_read: 2.5,
+                cache_write: 0.0,
+            },
+        }),
+        "o3-mini" => Some(OSeriesGeneratedMetadata {
+            text_only: true,
+            cost: ModelCost {
+                input: 1.1,
+                output: 4.4,
+                cache_read: 0.55,
+                cache_write: 0.0,
+            },
+        }),
+        "o3-pro" => Some(OSeriesGeneratedMetadata {
+            text_only: false,
+            cost: ModelCost {
+                input: 20.0,
+                output: 80.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        }),
+        "o4-mini" => Some(OSeriesGeneratedMetadata {
+            text_only: false,
+            cost: ModelCost {
+                input: 1.1,
+                output: 4.4,
+                cache_read: 0.28,
+                cache_write: 0.0,
+            },
+        }),
+        "o4-mini-deep-research" => Some(OSeriesGeneratedMetadata {
+            text_only: false,
+            cost: ModelCost {
+                input: 2.0,
+                output: 8.0,
+                cache_read: 0.5,
+                cache_write: 0.0,
+            },
+        }),
+        _ => None,
+    }
+}
+
 fn apply_openai_gpt5_generated_metadata(model: &mut Model) -> bool {
     let Some(metadata) = gpt5_generated_metadata(model.id.as_str()) else {
         return false;
@@ -1013,6 +1120,36 @@ fn apply_azure_openai_gpt5_generated_metadata(model: &mut Model) -> bool {
     model.base_url.clear();
     apply_gpt5_generated_metadata(model, &metadata, None);
     true
+}
+
+fn apply_openai_o_series_generated_metadata(model: &mut Model) -> bool {
+    let Some(metadata) = o_series_generated_metadata(model.id.as_str()) else {
+        return false;
+    };
+    model.api = "openai-responses".to_owned();
+    apply_o_series_generated_metadata(model, metadata);
+    true
+}
+
+fn apply_azure_openai_o_series_generated_metadata(model: &mut Model) -> bool {
+    let Some(metadata) = o_series_generated_metadata(model.id.as_str()) else {
+        return false;
+    };
+    model.base_url.clear();
+    apply_o_series_generated_metadata(model, metadata);
+    true
+}
+
+fn apply_o_series_generated_metadata(model: &mut Model, metadata: OSeriesGeneratedMetadata) {
+    model.reasoning = true;
+    model.thinking_level_map.clear();
+    model.input = vec![crate::types::InputKind::Text];
+    if !metadata.text_only {
+        ensure_image_input(model);
+    }
+    model.context_window = 200_000;
+    model.max_tokens = 100_000;
+    model.cost = metadata.cost;
 }
 
 fn apply_gpt5_generated_metadata(
@@ -1241,6 +1378,12 @@ fn base_url_for_model(provider: &str, model_id: &str) -> String {
 }
 
 fn api_for_provider(provider: &str, model_id: &str) -> &'static str {
+    if provider == "openai"
+        && (model_id.starts_with("gpt-5") || o_series_generated_metadata(model_id).is_some())
+    {
+        return "openai-responses";
+    }
+
     match provider {
         "anthropic" | "github-copilot" if model_id.contains("claude") => "anthropic-messages",
         "opencode" if model_id.contains("claude") => "anthropic-messages",
@@ -1255,7 +1398,6 @@ fn api_for_provider(provider: &str, model_id: &str) -> &'static str {
         "google-vertex" => "google-vertex",
         "azure-openai-responses" => "azure-openai-responses",
         "openai-codex" => "openai-codex-responses",
-        "openai" if model_id.starts_with("gpt-5") => "openai-responses",
         "mistral" => "mistral-conversations",
         "kimi-coding" | "minimax" | "minimax-cn" | "vercel-ai-gateway" => "anthropic-messages",
         _ => "openai-completions",

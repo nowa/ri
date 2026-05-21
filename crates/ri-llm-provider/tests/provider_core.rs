@@ -1000,6 +1000,158 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
     assert_cost_close("gpt-5.5 priority total cost", usage.cost.total, 87.5);
 }
 
+#[test]
+fn openai_and_azure_o_series_model_metadata_matches_generated_catalog() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(&[
+        "AZURE_OPENAI_BASE_URL",
+        "AZURE_OPENAI_RESOURCE_NAME",
+        "AZURE_OPENAI_API_VERSION",
+    ]);
+    let openai_model_ids = get_models("openai")
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+    let azure_model_ids = get_models("azure-openai-responses")
+        .into_iter()
+        .map(|model| model.id)
+        .collect::<Vec<_>>();
+
+    for (model_id, cost) in [
+        (
+            "o1",
+            ModelCost {
+                input: 15.0,
+                output: 60.0,
+                cache_read: 7.5,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "o1-pro",
+            ModelCost {
+                input: 150.0,
+                output: 600.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "o3",
+            ModelCost {
+                input: 2.0,
+                output: 8.0,
+                cache_read: 0.5,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "o3-deep-research",
+            ModelCost {
+                input: 10.0,
+                output: 40.0,
+                cache_read: 2.5,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "o3-mini",
+            ModelCost {
+                input: 1.1,
+                output: 4.4,
+                cache_read: 0.55,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "o3-pro",
+            ModelCost {
+                input: 20.0,
+                output: 80.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "o4-mini",
+            ModelCost {
+                input: 1.1,
+                output: 4.4,
+                cache_read: 0.28,
+                cache_write: 0.0,
+            },
+        ),
+        (
+            "o4-mini-deep-research",
+            ModelCost {
+                input: 2.0,
+                output: 8.0,
+                cache_read: 0.5,
+                cache_write: 0.0,
+            },
+        ),
+    ] {
+        assert!(
+            openai_model_ids.contains(&model_id.to_owned()),
+            "OpenAI catalog should expose {model_id}: {openai_model_ids:?}"
+        );
+        assert!(
+            azure_model_ids.contains(&model_id.to_owned()),
+            "Azure OpenAI catalog should expose {model_id}: {azure_model_ids:?}"
+        );
+
+        let expected_input = if model_id == "o3-mini" {
+            vec![InputKind::Text]
+        } else {
+            vec![InputKind::Text, InputKind::Image]
+        };
+
+        let openai = get_model("openai", model_id).expect(model_id);
+        assert_eq!(openai.api, "openai-responses", "{model_id} api");
+        assert_eq!(openai.provider, "openai", "{model_id} provider");
+        assert_eq!(openai.base_url, "https://api.openai.com/v1");
+        assert!(openai.reasoning, "{model_id} reasoning");
+        assert!(
+            openai.thinking_level_map.is_empty(),
+            "{model_id} thinking map"
+        );
+        assert_eq!(openai.input, expected_input, "{model_id} input");
+        assert_eq!(openai.context_window, 200_000, "{model_id} context");
+        assert_eq!(openai.max_tokens, 100_000, "{model_id} output");
+        assert_eq!(openai.cost, cost, "{model_id} cost");
+
+        let azure = get_model("azure-openai-responses", model_id).expect(model_id);
+        assert_eq!(azure.api, "azure-openai-responses", "{model_id} api");
+        assert_eq!(azure.provider, "azure-openai-responses", "{model_id}");
+        assert_eq!(azure.base_url, "", "{model_id} base URL");
+        assert!(azure.reasoning, "{model_id} reasoning");
+        assert!(
+            azure.thinking_level_map.is_empty(),
+            "{model_id} thinking map"
+        );
+        assert_eq!(azure.input, openai.input, "{model_id} input");
+        assert_eq!(azure.context_window, 200_000, "{model_id} context");
+        assert_eq!(azure.max_tokens, 100_000, "{model_id} output");
+        assert_eq!(azure.cost, openai.cost, "{model_id} cost");
+    }
+
+    let model = get_model("openai", "o1").expect("o1");
+    let usage = parse_openai_responses_usage(
+        &json!({
+            "input_tokens": 2_000_000,
+            "output_tokens": 1_000_000,
+            "total_tokens": 3_000_000,
+            "input_tokens_details": { "cached_tokens": 1_000_000 }
+        }),
+        &model,
+        None,
+    );
+    assert_cost_close("o1 input cost", usage.cost.input, 15.0);
+    assert_cost_close("o1 output cost", usage.cost.output, 60.0);
+    assert_cost_close("o1 cache read cost", usage.cost.cache_read, 7.5);
+    assert_cost_close("o1 total cost", usage.cost.total, 82.5);
+}
+
 #[tokio::test]
 async fn unsupported_xhigh_reasoning_returns_error_message_without_network() {
     for api in ["openai-responses", "openai-completions"] {
