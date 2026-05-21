@@ -898,6 +898,52 @@ async fn agent_harness_provider_payload_hooks_chain_payloads() {
 }
 
 #[tokio::test]
+async fn agent_harness_emits_after_provider_response_before_assistant_stream() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message("ok", Default::default()).into(),
+    ]);
+
+    let harness = AgentHarness::new(AgentHarnessOptions::new(
+        test_env(),
+        Session::new(InMemorySessionStorage::new()),
+        registration.get_model(),
+    ));
+    let events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let events_ref = events.clone();
+    harness.subscribe(move |event| match event {
+        AgentHarnessEvent::AfterProviderResponse(event) => {
+            let provider = event
+                .headers
+                .get("x-faux-provider")
+                .map(String::as_str)
+                .unwrap_or("");
+            events_ref
+                .lock()
+                .expect("mutex")
+                .push(format!("response:{}:{provider}", event.status));
+        }
+        AgentHarnessEvent::Agent(AgentEvent::MessageStart {
+            message: AgentMessage::Assistant(_),
+        }) => {
+            events_ref
+                .lock()
+                .expect("mutex")
+                .push("assistant_start".to_owned());
+        }
+        _ => {}
+    });
+
+    harness.prompt("hello").await.expect("prompt");
+
+    assert_eq!(
+        *events.lock().expect("mutex"),
+        vec!["response:200:faux", "assistant_start"]
+    );
+    registration.unregister();
+}
+
+#[tokio::test]
 async fn agent_harness_removes_registered_listeners_and_hooks() {
     let registration = register_faux_provider(RegisterFauxProviderOptions::default());
     let removed = Arc::new(Mutex::new(Vec::<String>::new()));

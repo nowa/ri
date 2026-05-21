@@ -31,8 +31,9 @@ SSE and eventstream behavior, abort handling, response IDs, usage accounting,
 message transforms, simple stream option defaults, tool calling,
 reasoning/thinking controls, agent loop control flow, stateful agents, custom
 stream providers, proxy streaming, tool execution with partial update events,
-compaction, resources, session storage, bash execution session messages, local
-execution environment behavior, and harness utilities.
+provider request/payload/response hooks, compaction, resources, session
+storage, bash execution session messages, local execution environment behavior,
+and harness utilities.
 
 Live provider E2E tests are not run by default. Provider behavior is covered
 locally through mock HTTP servers, payload assertions, parser tests, and stream
@@ -90,6 +91,8 @@ credentials, local model services where applicable, and manual OAuth flows.
   thinking token adjustment.
 - Usage and cost accounting, response IDs, diagnostics, abort flags, retry
   configuration, session IDs, and provider-specific extra options.
+- Provider payload and response hooks for Rust-native inspection/adaptation of
+  request bodies and HTTP/faux response metadata.
 - GitHub Copilot dynamic headers for user/agent initiation and image-capable
   requests across supported OpenAI/Anthropic-compatible paths.
 - OAuth helpers for providers such as OpenAI Codex, Anthropic, GitHub Copilot,
@@ -118,6 +121,8 @@ credentials, local model services where applicable, and manual OAuth flows.
 - Persistent and in-memory session storage.
 - System prompt formatting with model, thinking level, active tools, resources,
   session, and local environment context.
+- Provider request, payload, and after-response events for harness subscribers
+  and hooks.
 - Skills and prompt template loading.
 - Branch summary and context compaction helpers.
 - Local execution environment utilities for file and shell operations.

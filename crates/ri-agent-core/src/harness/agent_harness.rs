@@ -20,8 +20,8 @@ use futures::future::BoxFuture;
 use parking_lot::Mutex;
 use ri_llm_provider::{
     AssistantMessage, CacheRetention, ImageContent, Message, Model, ProviderPayloadHook,
-    SimpleStreamOptions, ThinkingLevel, Transport, UserContent, UserContentValue, UserMessage,
-    now_millis,
+    ProviderResponse, ProviderResponseHook, SimpleStreamOptions, ThinkingLevel, Transport,
+    UserContent, UserContentValue, UserMessage, now_millis,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -226,6 +226,12 @@ pub struct BeforeProviderPayloadResult {
     pub payload: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AfterProviderResponseEvent {
+    pub status: u16,
+    pub headers: BTreeMap<String, String>,
+}
+
 pub type BeforeProviderPayloadHook = Arc<
     dyn Fn(
             BeforeProviderPayloadEvent,
@@ -356,6 +362,7 @@ pub enum AgentHarnessEvent {
     SessionCompact(SessionCompactEvent),
     SessionBranchSummary(SessionBranchSummaryEvent),
     SessionTree(SessionTreeEvent),
+    AfterProviderResponse(AfterProviderResponseEvent),
     Compaction(CompactionResult),
     BranchSummary(BranchSummaryResult),
     SavePoint { had_pending_mutations: bool },
@@ -606,6 +613,7 @@ struct HarnessNextTurnPreparer {
     get_api_key_and_headers: Option<ProviderAuthProvider>,
     provider_request_hooks: Arc<Mutex<BTreeMap<u64, BeforeProviderRequestHook>>>,
     provider_payload_hooks: Arc<Mutex<BTreeMap<u64, BeforeProviderPayloadHook>>>,
+    listeners: Arc<Mutex<BTreeMap<u64, AgentHarnessListenerEntry>>>,
     abort_flag: Arc<AtomicBool>,
     resources: Arc<Mutex<AgentHarnessResources>>,
     tools: Arc<Mutex<Vec<AgentTool>>>,
@@ -632,6 +640,7 @@ impl AgentNextTurnPreparer for HarnessNextTurnPreparer {
             self.get_api_key_and_headers.as_ref(),
             &self.provider_request_hooks,
             &self.provider_payload_hooks,
+            &self.listeners,
             self.abort_flag.clone(),
         )
         .map_err(|error| error.message)?;
@@ -1670,6 +1679,7 @@ impl AgentHarness {
             self.get_api_key_and_headers.as_ref(),
             &self.provider_request_hooks,
             &self.provider_payload_hooks,
+            &self.listeners,
             self.abort_flag.clone(),
         )?;
         let config = AgentLoopConfig {
@@ -1697,6 +1707,7 @@ impl AgentHarness {
                 get_api_key_and_headers: self.get_api_key_and_headers.clone(),
                 provider_request_hooks: self.provider_request_hooks.clone(),
                 provider_payload_hooks: self.provider_payload_hooks.clone(),
+                listeners: self.listeners.clone(),
                 abort_flag: self.abort_flag.clone(),
                 resources: self.resources.clone(),
                 tools: self.tools.clone(),
@@ -2152,6 +2163,31 @@ impl ProviderPayloadHook for HarnessProviderPayloadHook {
     }
 }
 
+struct HarnessProviderResponseHook {
+    listeners: Arc<Mutex<BTreeMap<u64, AgentHarnessListenerEntry>>>,
+}
+
+impl ProviderResponseHook for HarnessProviderResponseHook {
+    fn on_response(
+        &self,
+        _model: Model,
+        response: ProviderResponse,
+    ) -> BoxFuture<'static, Result<(), String>> {
+        let listeners = self.listeners.clone();
+        Box::pin(async move {
+            emit_to_async(
+                &listeners,
+                AgentHarnessEvent::AfterProviderResponse(AfterProviderResponseEvent {
+                    status: response.status,
+                    headers: response.headers,
+                }),
+            )
+            .await;
+            Ok(())
+        })
+    }
+}
+
 fn resolve_provider_stream_options(
     model: &Model,
     thinking_level: ThinkingLevel,
@@ -2160,6 +2196,7 @@ fn resolve_provider_stream_options(
     get_api_key_and_headers: Option<&ProviderAuthProvider>,
     provider_request_hooks: &Arc<Mutex<BTreeMap<u64, BeforeProviderRequestHook>>>,
     provider_payload_hooks: &Arc<Mutex<BTreeMap<u64, BeforeProviderPayloadHook>>>,
+    listeners: &Arc<Mutex<BTreeMap<u64, AgentHarnessListenerEntry>>>,
     abort_flag: Arc<AtomicBool>,
 ) -> Result<SimpleStreamOptions, AgentHarnessError> {
     let mut options = base_stream_options;
@@ -2193,6 +2230,11 @@ fn resolve_provider_stream_options(
                 hooks: provider_payload_hooks.clone(),
             }));
     }
+    options
+        .response_hooks
+        .push(Arc::new(HarnessProviderResponseHook {
+            listeners: listeners.clone(),
+        }));
     options.stream.abort_flag = Some(abort_flag);
     Ok(options)
 }

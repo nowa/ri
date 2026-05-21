@@ -49,8 +49,8 @@ use crate::{
         resolve_openai_responses_cache_retention,
     },
     types::{
-        AssistantMessage, AssistantMessageEvent, Context, Model, SimpleStreamOptions, StopReason,
-        Tool, Transport, Usage, now_millis,
+        AssistantMessage, AssistantMessageEvent, Context, Model, ProviderResponse,
+        SimpleStreamOptions, StopReason, Tool, Transport, Usage, now_millis,
     },
 };
 use futures::StreamExt;
@@ -1013,6 +1013,7 @@ fn spawn_anthropic_sse_request(
     tokio::spawn(async move {
         let mut output = empty_assistant_message(&model);
         if let Err(error) = stream_anthropic_sse_json(
+            &model,
             &options,
             &url,
             &headers,
@@ -1197,6 +1198,7 @@ async fn stream_openai_completions_sse_json(
 
     let request = build_json_request(model, options, url, headers, payload)?;
     let response = request.send().await.map_err(|error| error.to_string())?;
+    emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.map_err(|error| error.to_string())?;
@@ -1252,6 +1254,7 @@ async fn stream_openai_responses_sse_json(
 
     let request = build_json_request(model, options, url, headers, payload)?;
     let response = request.send().await.map_err(|error| error.to_string())?;
+    emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.map_err(|error| error.to_string())?;
@@ -1278,6 +1281,7 @@ async fn stream_openai_codex_sse_json(
 
         let request = build_json_request(model, options, url, headers, payload.clone())?;
         let response = request.send().await.map_err(|error| error.to_string())?;
+        emit_simple_response_hooks(model, options, &response).await?;
         let status = response.status();
         if status.is_success() {
             return stream_openai_responses_sse_response(model, options, response, sender, output)
@@ -1404,6 +1408,7 @@ async fn stream_google_sse_json(
     }
     let request = build_json_request_without_default_auth(options, url, &request_headers, payload)?;
     let response = request.send().await.map_err(|error| error.to_string())?;
+    emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.map_err(|error| error.to_string())?;
@@ -1488,6 +1493,7 @@ async fn stream_bedrock_eventstream_json(
         request = request.timeout(std::time::Duration::from_millis(timeout_ms));
     }
     let response = request.send().await.map_err(|error| error.to_string())?;
+    emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.map_err(|error| error.to_string())?;
@@ -1529,6 +1535,7 @@ async fn stream_bedrock_eventstream_json(
 }
 
 async fn stream_anthropic_sse_json(
+    model: &Model,
     options: &SimpleStreamOptions,
     url: &str,
     headers: &BTreeMap<String, String>,
@@ -1544,6 +1551,7 @@ async fn stream_anthropic_sse_json(
 
     let request = build_json_request_without_default_auth(options, url, headers, payload)?;
     let response = request.send().await.map_err(|error| error.to_string())?;
+    emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.map_err(|error| error.to_string())?;
@@ -1601,6 +1609,7 @@ async fn stream_mistral_sse_json(
 
     let request = build_json_request(model, options, url, headers, payload)?;
     let response = request.send().await.map_err(|error| error.to_string())?;
+    emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.map_err(|error| error.to_string())?;
@@ -1759,6 +1768,28 @@ fn build_json_request_without_default_auth(
         request = request.timeout(std::time::Duration::from_millis(timeout_ms));
     }
     Ok(request)
+}
+
+async fn emit_simple_response_hooks(
+    model: &Model,
+    options: &SimpleStreamOptions,
+    response: &reqwest::Response,
+) -> Result<(), String> {
+    options
+        .emit_response_hooks(
+            model,
+            ProviderResponse {
+                status: response.status().as_u16(),
+                headers: response
+                    .headers()
+                    .iter()
+                    .filter_map(|(name, value)| {
+                        Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+                    })
+                    .collect(),
+            },
+        )
+        .await
 }
 
 fn endpoint_url(base_url: &str, path: &str) -> String {

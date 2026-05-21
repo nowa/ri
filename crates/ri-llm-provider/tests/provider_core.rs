@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use futures::StreamExt;
+use futures::{StreamExt, future::BoxFuture};
 use ri_llm_provider::*;
 use serde_json::{Map, Value, json};
 use std::{
@@ -1445,6 +1445,24 @@ struct ErrorImagesPayloadHook {
 impl ImagesPayloadHook for ErrorImagesPayloadHook {
     fn on_payload(&self, _model: &ImagesModel, _payload: Value) -> Result<Value, String> {
         Err(self.message.to_owned())
+    }
+}
+
+struct RecordingProviderResponseHook {
+    seen: Arc<Mutex<Vec<ProviderResponse>>>,
+}
+
+impl ProviderResponseHook for RecordingProviderResponseHook {
+    fn on_response(
+        &self,
+        _model: Model,
+        response: ProviderResponse,
+    ) -> BoxFuture<'static, Result<(), String>> {
+        let seen = self.seen.clone();
+        Box::pin(async move {
+            seen.lock().expect("seen responses").push(response);
+            Ok(())
+        })
     }
 }
 
@@ -12603,6 +12621,51 @@ async fn builtin_openai_completions_provider_posts_json_and_parses_sse() {
     );
     assert!(request.contains("\"stream\":true"));
     assert!(request.contains("\"prompt_cache_key\":\"session-1\""));
+}
+
+#[tokio::test]
+async fn builtin_openai_completions_provider_applies_response_hooks() {
+    let sse = concat!(
+        "data: {\"id\":\"chatcmpl_hook\",\"choices\":[{\"delta\":{\"content\":\"Hooked\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base_url, request_task) = mock_http_sequence_server(vec![MockHttpSequenceResponse {
+        status: 200,
+        reason: "OK",
+        content_type: "text/event-stream",
+        headers: vec![("x-ri-response-hook", "seen")],
+        body: sse,
+    }])
+    .await;
+    let mut model = Model::faux("openai-completions", "openai", "mock-model");
+    model.base_url = base_url;
+    let seen_responses = Arc::new(Mutex::new(Vec::<ProviderResponse>::new()));
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("test-key".to_owned());
+    options
+        .response_hooks
+        .push(Arc::new(RecordingProviderResponseHook {
+            seen: seen_responses.clone(),
+        }));
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let requests = request_task.await.expect("request task");
+
+    assert_eq!(text_of(&message), Some("Hooked"));
+    assert_eq!(requests.len(), 1);
+    let seen_responses = seen_responses.lock().expect("seen responses");
+    assert_eq!(seen_responses.len(), 1);
+    assert_eq!(seen_responses[0].status, 200);
+    assert_eq!(
+        seen_responses[0]
+            .headers
+            .get("x-ri-response-hook")
+            .map(String::as_str),
+        Some("seen")
+    );
 }
 
 #[tokio::test]

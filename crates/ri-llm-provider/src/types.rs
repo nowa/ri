@@ -1,3 +1,4 @@
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
@@ -415,6 +416,20 @@ impl std::fmt::Debug for dyn ProviderPayloadHook {
     }
 }
 
+pub trait ProviderResponseHook: Send + Sync {
+    fn on_response(
+        &self,
+        model: Model,
+        response: ProviderResponse,
+    ) -> BoxFuture<'static, Result<(), String>>;
+}
+
+impl std::fmt::Debug for dyn ProviderResponseHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ProviderResponseHook")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SimpleStreamOptions {
@@ -426,6 +441,8 @@ pub struct SimpleStreamOptions {
     pub thinking_budgets: Option<ThinkingBudgets>,
     #[serde(skip)]
     pub payload_hooks: Vec<Arc<dyn ProviderPayloadHook>>,
+    #[serde(skip)]
+    pub response_hooks: Vec<Arc<dyn ProviderResponseHook>>,
 }
 
 impl PartialEq for SimpleStreamOptions {
@@ -442,6 +459,17 @@ impl SimpleStreamOptions {
             payload = hook.on_payload(model, payload)?;
         }
         Ok(payload)
+    }
+
+    pub async fn emit_response_hooks(
+        &self,
+        model: &Model,
+        response: ProviderResponse,
+    ) -> Result<(), String> {
+        for hook in &self.response_hooks {
+            hook.on_response(model.clone(), response.clone()).await?;
+        }
+        Ok(())
     }
 }
 

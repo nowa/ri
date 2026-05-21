@@ -8,9 +8,9 @@ use crate::{
     },
     types::{
         AssistantContent, AssistantMessage, AssistantMessageEvent, CacheRetention, Context,
-        ImageContent, Message, Model, ModelCost, SimpleStreamOptions, StopReason, StreamOptions,
-        TextContent, ThinkingContent, ToolCall, ToolResultContent, ToolResultMessage, Usage,
-        now_millis,
+        ImageContent, Message, Model, ModelCost, ProviderResponse, SimpleStreamOptions, StopReason,
+        StreamOptions, TextContent, ThinkingContent, ToolCall, ToolResultContent,
+        ToolResultMessage, Usage, now_millis,
     },
 };
 use futures::FutureExt;
@@ -390,6 +390,30 @@ impl FauxProvider {
                     return;
                 }
             };
+
+            if let Err(error) = options
+                .emit_response_hooks(
+                    &model,
+                    ProviderResponse {
+                        status: 200,
+                        headers: BTreeMap::from([("x-faux-provider".to_owned(), provider.clone())]),
+                    },
+                )
+                .await
+            {
+                let error = with_usage_estimate(
+                    create_error_message(error, &api, &provider, &model.id),
+                    &context,
+                    &options.stream,
+                    &prompt_cache,
+                );
+                sender.push(AssistantMessageEvent::Error {
+                    reason: StopReason::Error,
+                    error: error.clone(),
+                });
+                sender.end(error);
+                return;
+            }
 
             let mut message = clone_message(message, &api, &provider, &model.id);
             message = with_usage_estimate(message, &context, &options.stream, &prompt_cache);
