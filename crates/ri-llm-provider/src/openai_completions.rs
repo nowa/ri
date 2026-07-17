@@ -455,6 +455,7 @@ pub struct OpenAICompletionsStreamProcessor {
     tool_calls_by_index: BTreeMap<i64, usize>,
     tool_calls_by_id: BTreeMap<String, usize>,
     tool_call_partial_args: BTreeMap<usize, String>,
+    last_tool_call_index: Option<usize>,
 }
 
 impl OpenAICompletionsStreamProcessor {
@@ -537,6 +538,7 @@ impl OpenAICompletionsStreamProcessor {
                     &mut self.tool_calls_by_index,
                     &mut self.tool_calls_by_id,
                     &mut self.tool_call_partial_args,
+                    &mut self.last_tool_call_index,
                 );
                 let argument_delta = tool_call
                     .get("function")
@@ -668,6 +670,7 @@ fn ensure_openai_completions_tool_call_block(
     tool_calls_by_index: &mut BTreeMap<i64, usize>,
     tool_calls_by_id: &mut BTreeMap<String, usize>,
     tool_call_partial_args: &mut BTreeMap<usize, String>,
+    last_tool_call_index: &mut Option<usize>,
 ) -> usize {
     let stream_index = tool_call.get("index").and_then(|index| {
         index
@@ -688,6 +691,17 @@ fn ensure_openai_completions_tool_call_block(
     let content_index = stream_index
         .and_then(|stream_index| tool_calls_by_index.get(&stream_index).copied())
         .or_else(|| id.and_then(|id| tool_calls_by_id.get(id).copied()))
+        // A bare argument-continuation delta (no index, no id, no name — some
+        // OpenAI-compat gateways emit these mid-call) belongs to the tool call
+        // currently being streamed. Creating a fresh block here would strand
+        // the arguments on a phantom entry and leave the real call with `{}`.
+        .or_else(|| {
+            if stream_index.is_none() && id.is_none() && name.is_none() {
+                *last_tool_call_index
+            } else {
+                None
+            }
+        })
         .unwrap_or_else(|| {
             let block = ToolCall {
                 id: id.unwrap_or_default().to_owned(),
@@ -711,6 +725,7 @@ fn ensure_openai_completions_tool_call_block(
     if let Some(id) = id {
         tool_calls_by_id.insert(id.to_owned(), content_index);
     }
+    *last_tool_call_index = Some(content_index);
     if let Some(AssistantContent::ToolCall(block)) = output.content.get_mut(content_index) {
         if block.id.is_empty()
             && let Some(id) = id

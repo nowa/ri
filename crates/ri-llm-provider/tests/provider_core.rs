@@ -16789,6 +16789,76 @@ async fn openai_completions_stream_coalesces_tool_call_deltas_by_stable_index() 
 }
 
 #[tokio::test]
+async fn openai_completions_stream_routes_bare_argument_deltas_to_current_tool_call() {
+    // Anthropic→OpenAI translation gateways have been observed emitting
+    // argument-continuation chunks with no `index`, no `id`, and no
+    // `function.name`. Those deltas must land on the tool call currently
+    // being streamed — a phantom block would strand the arguments and leave
+    // the real call finalized as `{}` (observed live as read_file calls
+    // failing schema validation with empty input).
+    let mut model = get_model("openai", "gpt-4o-mini").expect("model");
+    model.api = "openai-completions".to_owned();
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, stream) = assistant_message_event_stream();
+
+    process_openai_completions_chunks(
+        [
+            json!({
+                "id": "chatcmpl-bare-continuation",
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "toolu_01ABC",
+                            "type": "function",
+                            "function": { "name": "read_file", "arguments": "" },
+                        }],
+                    },
+                    "finish_reason": null,
+                }],
+            }),
+            json!({
+                "id": "chatcmpl-bare-continuation",
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "function": { "arguments": "{\"path\":\"seed" },
+                        }],
+                    },
+                    "finish_reason": null,
+                }],
+            }),
+            json!({
+                "id": "chatcmpl-bare-continuation",
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "function": { "arguments": ".md\"}" },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+            }),
+        ],
+        &mut output,
+        &sender,
+        &model,
+    )
+    .expect("process chunks");
+    drop(sender);
+    let _ = collect_events(stream).await;
+
+    assert_eq!(output.stop_reason, StopReason::ToolUse);
+    assert_eq!(output.content.len(), 1, "no phantom tool-call block");
+    let AssistantContent::ToolCall(tool_call) = &output.content[0] else {
+        panic!("tool call");
+    };
+    assert_eq!(tool_call.id, "toolu_01ABC");
+    assert_eq!(tool_call.name, "read_file");
+    assert_eq!(tool_call.arguments, object(json!({ "path": "seed.md" })));
+}
+
+#[tokio::test]
 async fn openai_completions_stream_accumulates_mixed_deltas_independently() {
     let mut model = get_model("openai", "gpt-4o-mini").expect("model");
     model.api = "openai-completions".to_owned();
