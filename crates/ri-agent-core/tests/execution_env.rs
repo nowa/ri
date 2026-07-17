@@ -17,7 +17,9 @@ use std::os::unix::fs::PermissionsExt;
 fn temp_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ri-env-test-{}", uuidv7()));
     fs::create_dir_all(&dir).expect("temp dir");
-    dir
+    // Canonicalize so assertions on $PWD match on macOS, where the temp dir
+    // lives behind the /var -> /private/var symlink.
+    fs::canonicalize(&dir).expect("canonical temp dir")
 }
 
 #[test]
