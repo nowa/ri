@@ -690,6 +690,20 @@ fn ensure_openai_completions_tool_call_block(
 
     let content_index = stream_index
         .and_then(|stream_index| tool_calls_by_index.get(&stream_index).copied())
+        // A header chunk (non-empty id AND name) whose id conflicts with the
+        // block already mapped at this index means a NEW tool call, not a
+        // continuation. Seen live: an Anthropic→OpenAI translation gateway
+        // emits every parallel tool call with index 0, so keying by index
+        // alone concatenates call B's arguments onto call A (both finalize
+        // as `{}` after the JSON parse fails). The `name` requirement keeps
+        // this from splitting streams (e.g. kimi) whose continuation chunks
+        // carry rotating junk ids but never a name.
+        .filter(|&content_index| match (id, name, output.content.get(content_index)) {
+            (Some(id), Some(_), Some(AssistantContent::ToolCall(block))) => {
+                block.id.is_empty() || block.id == id
+            }
+            _ => true,
+        })
         .or_else(|| id.and_then(|id| tool_calls_by_id.get(id).copied()))
         // A bare argument-continuation delta (no index, no id, no name — some
         // OpenAI-compat gateways emit these mid-call) belongs to the tool call
