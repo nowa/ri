@@ -99,7 +99,8 @@ pub fn build_azure_openai_responses_payload(
         payload["prompt_cache_key"] = Value::String(session_id);
     }
     if let Some(max_tokens) = options.max_tokens.filter(|value| *value > 0) {
-        payload["max_output_tokens"] = Value::Number(max_tokens.into());
+        // OpenAI Responses rejects max_output_tokens below 16.
+        payload["max_output_tokens"] = Value::Number(max_tokens.max(16).into());
     }
     if let Some(temperature) = options.temperature {
         payload["temperature"] = json!(temperature);

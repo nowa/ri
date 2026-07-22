@@ -286,6 +286,7 @@ impl ApiProvider for OpenAIResponsesHttpProvider {
                 session_id: options.stream.session_id.clone(),
                 max_tokens: options.stream.max_tokens,
                 temperature: options.stream.temperature,
+                tool_choice: options.stream.extra.get("toolChoice").cloned(),
                 service_tier: options
                     .stream
                     .extra
@@ -707,6 +708,12 @@ impl ApiProvider for OpenAICodexResponsesHttpProvider {
             OpenAICodexResponsesPayloadOptions {
                 session_id: options.stream.session_id.clone(),
                 temperature: options.stream.temperature,
+                tool_choice: options
+                    .stream
+                    .extra
+                    .get("toolChoice")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 service_tier: options
                     .stream
                     .extra
@@ -1514,6 +1521,9 @@ async fn stream_openai_responses_sse_response(
     }
     if push_abort_if_requested(sender, options, output) {
         return Ok(());
+    }
+    if !processor.is_terminal() {
+        return Err("OpenAI Responses stream ended before a terminal response event".to_owned());
     }
     finish_openai_responses_processor(processor, sender, output);
     Ok(())

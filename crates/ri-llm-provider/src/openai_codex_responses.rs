@@ -39,6 +39,8 @@ pub struct OpenAICodexResponsesPayloadOptions {
     pub text_verbosity: Option<String>,
     pub reasoning_effort: Option<ThinkingLevel>,
     pub reasoning_summary: Option<String>,
+    /// Forwarded `tool_choice` value ("auto"/"none"/"required").
+    pub tool_choice: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -150,6 +152,11 @@ fn update_openai_codex_websocket_debug_stats(
     update(stats);
 }
 
+/// OpenAI rejects prompt cache keys longer than 64 characters.
+pub fn clamp_openai_prompt_cache_key(key: &str) -> String {
+    key.chars().take(64).collect()
+}
+
 pub fn build_openai_codex_responses_payload(
     model: &Model,
     context: &Context,
@@ -180,12 +187,12 @@ pub fn build_openai_codex_responses_payload(
         "input": messages,
         "text": { "verbosity": options.text_verbosity.unwrap_or_else(|| "low".to_owned()) },
         "include": ["reasoning.encrypted_content"],
-        "tool_choice": "auto",
+        "tool_choice": options.tool_choice.clone().unwrap_or_else(|| "auto".to_owned()),
         "parallel_tool_calls": true,
     });
 
     if let Some(session_id) = options.session_id {
-        payload["prompt_cache_key"] = Value::String(session_id);
+        payload["prompt_cache_key"] = Value::String(clamp_openai_prompt_cache_key(&session_id));
     }
     if let Some(temperature) = options.temperature {
         payload["temperature"] = json!(temperature);
@@ -246,7 +253,7 @@ pub fn build_openai_codex_sse_headers(
     set_header_case_insensitive(&mut headers, "accept", "text/event-stream");
     set_header_case_insensitive(&mut headers, "content-type", "application/json");
     if let Some(session_id) = session_id {
-        set_header_case_insensitive(&mut headers, "session_id", session_id);
+        set_header_case_insensitive(&mut headers, "session-id", session_id);
         set_header_case_insensitive(&mut headers, "x-client-request-id", session_id);
     }
     headers
@@ -265,7 +272,7 @@ pub fn build_openai_codex_websocket_headers(
     remove_header_case_insensitive(&mut headers, "content-type");
     set_header_case_insensitive(&mut headers, "OpenAI-Beta", OPENAI_CODEX_WEBSOCKET_BETA);
     set_header_case_insensitive(&mut headers, "x-client-request-id", request_id);
-    set_header_case_insensitive(&mut headers, "session_id", request_id);
+    set_header_case_insensitive(&mut headers, "session-id", request_id);
     headers
 }
 

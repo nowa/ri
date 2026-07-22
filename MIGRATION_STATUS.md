@@ -1989,6 +1989,21 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Aligned the pi OpenAI Responses/Codex fix batch: SSE streams that end
+  before a terminal response event now fail with "OpenAI Responses stream
+  ended before a terminal response event" instead of settling silently, and
+  `response.incomplete` still maps to a length stop (`#5526`);
+  `max_output_tokens` is clamped to the OpenAI minimum of 16 for OpenAI and
+  Azure Responses payloads (`2e4ad6a0`); the system prompt uses the
+  `developer` role only when `supportsDeveloperRole` compat is not `false`
+  (`b8f6f660`); `toolChoice` stream options forward to Responses
+  (`tool_choice` payload field, string or function-object) and Codex
+  (`"auto"/"none"/"required"`, default `"auto"`) (`#6588`); Codex prompt
+  cache keys clamp to 64 characters (`#6653`) and Codex transport headers use
+  the hyphenated `session-id` name (`26f1e00f`). Null Responses
+  `output_item.done` message content was already tolerated by ri's
+  Option-based access, matching `2d597f02`. Verified with
+  `cargo test -p ri-llm-provider --test provider_core` (387 tests).
 - Aligned the pi Anthropic and overflow provider-fix batch: overflow
   detection gains the DS4 "configured context size", parenthesized
   OpenAI-compatible, and OpenRouter/Poolside "maximum allowed input length"

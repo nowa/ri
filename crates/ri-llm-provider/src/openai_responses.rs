@@ -17,6 +17,9 @@ pub struct OpenAIResponsesPayloadOptions {
     pub service_tier: Option<String>,
     pub reasoning_effort: Option<ThinkingLevel>,
     pub reasoning_summary: Option<String>,
+    /// Forwarded `tool_choice` value ("auto"/"none"/"required" or a
+    /// function-object choice).
+    pub tool_choice: Option<Value>,
 }
 
 fn supports_openai_responses_tool_search(model: &Model) -> bool {
@@ -27,6 +30,10 @@ fn supports_openai_responses_tool_search(model: &Model) -> bool {
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }
+
+// OpenAI Responses rejects max_output_tokens below 16:
+// https://github.com/earendil-works/pi/issues/6265
+const OPENAI_RESPONSES_MIN_OUTPUT_TOKENS: u64 = 16;
 
 pub fn build_openai_responses_payload(
     model: &Model,
@@ -64,7 +71,9 @@ pub fn build_openai_responses_payload(
         payload["prompt_cache_retention"] = Value::String("24h".to_owned());
     }
     if let Some(max_tokens) = options.max_tokens.filter(|value| *value > 0) {
-        payload["max_output_tokens"] = Value::Number(max_tokens.into());
+        // OpenAI Responses rejects max_output_tokens below 16.
+        payload["max_output_tokens"] =
+            Value::Number(max_tokens.max(OPENAI_RESPONSES_MIN_OUTPUT_TOKENS).into());
     }
     if let Some(temperature) = options.temperature {
         payload["temperature"] = json!(temperature);
@@ -74,6 +83,9 @@ pub fn build_openai_responses_payload(
     }
     if let Some(service_tier) = options.service_tier {
         payload["service_tier"] = Value::String(service_tier);
+    }
+    if let Some(tool_choice) = options.tool_choice {
+        payload["tool_choice"] = tool_choice;
     }
     if model.reasoning {
         let reasoning_summary = options
@@ -264,7 +276,18 @@ pub fn convert_openai_responses_messages_with_deferred(
     if include_system_prompt {
         if let Some(system_prompt) = &context.system_prompt {
             messages.push(json!({
-                "role": if model.reasoning { "developer" } else { "system" },
+                "role": if model.reasoning
+                    && model
+                        .compat
+                        .as_ref()
+                        .and_then(|compat| compat.get("supportsDeveloperRole"))
+                        .and_then(Value::as_bool)
+                        != Some(false)
+                {
+                    "developer"
+                } else {
+                    "system"
+                },
                 "content": system_prompt,
             }));
         }

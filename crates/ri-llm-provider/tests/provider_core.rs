@@ -15486,10 +15486,10 @@ fn openai_codex_responses_extracts_account_id_and_builds_transport_headers() {
     );
     assert_eq!(matching_header_count(&sse, "content-type"), 1);
     assert_eq!(
-        sse.get("session_id").map(String::as_str),
+        sse.get("session-id").map(String::as_str),
         Some("session-123")
     );
-    assert_eq!(matching_header_count(&sse, "session_id"), 1);
+    assert_eq!(matching_header_count(&sse, "session-id"), 1);
     assert_eq!(
         sse.get("x-client-request-id").map(String::as_str),
         Some("session-123")
@@ -15514,10 +15514,10 @@ fn openai_codex_responses_extracts_account_id_and_builds_transport_headers() {
     assert_eq!(matching_header_count(&websocket, "accept"), 0);
     assert_eq!(matching_header_count(&websocket, "content-type"), 0);
     assert_eq!(
-        websocket.get("session_id").map(String::as_str),
+        websocket.get("session-id").map(String::as_str),
         Some("request-456")
     );
-    assert_eq!(matching_header_count(&websocket, "session_id"), 1);
+    assert_eq!(matching_header_count(&websocket, "session-id"), 1);
     assert_eq!(
         websocket.get("x-client-request-id").map(String::as_str),
         Some("request-456")
@@ -21796,7 +21796,7 @@ async fn builtin_openai_codex_provider_posts_json_and_parses_sse() {
     assert!(
         request
             .to_ascii_lowercase()
-            .contains("session_id: codex-session")
+            .contains("session-id: codex-session")
     );
     assert!(request.contains("\"store\":false"));
     assert!(request.contains("\"stream\":true"));
@@ -22158,7 +22158,7 @@ async fn builtin_openai_codex_provider_uses_websocket_transport_and_parses_frame
         request
             .handshake
             .to_ascii_lowercase()
-            .contains("session_id: ws-session")
+            .contains("session-id: ws-session")
     );
     let body: Value = serde_json::from_str(&request.message).expect("websocket request JSON");
     assert_eq!(body["type"], "response.create");
@@ -22340,7 +22340,7 @@ async fn builtin_openai_codex_websocket_routes_through_resolved_proxy() {
         request
             .handshake
             .to_ascii_lowercase()
-            .contains("session_id: ws-proxy-session")
+            .contains("session-id: ws-proxy-session")
     );
     let body: Value = serde_json::from_str(&request.message).expect("websocket request JSON");
     assert_eq!(body["type"], "response.create");
@@ -25486,4 +25486,85 @@ fn anthropic_temperature_and_adaptive_thinking_follow_compat_overrides() {
     let payload = build_anthropic_simple_payload(&alias, &user_context("hi"), simple_options);
     assert_eq!(payload["thinking"]["type"], json!("adaptive"));
     assert_eq!(payload["output_config"]["effort"], json!("high"));
+}
+
+#[test]
+fn openai_responses_payload_honors_floor_tool_choice_and_developer_role_compat() {
+    let model = get_model("openai", "gpt-5-mini").expect("model");
+    let mut options = OpenAIResponsesPayloadOptions::default();
+    options.max_tokens = Some(4);
+    options.tool_choice = Some(json!("required"));
+    let payload = build_openai_responses_payload(
+        &model,
+        &Context {
+            system_prompt: Some("system".to_owned()),
+            messages: vec![Message::User(UserMessage::text("hi"))],
+            tools: Vec::new(),
+        },
+        options,
+    );
+    // OpenAI Responses rejects max_output_tokens below 16.
+    assert_eq!(payload["max_output_tokens"], json!(16));
+    assert_eq!(payload["tool_choice"], json!("required"));
+    // Reasoning models default to the developer role.
+    assert_eq!(payload["input"][0]["role"], json!("developer"));
+
+    // supportsDeveloperRole: false downgrades to system.
+    let mut compat_model = get_model("openai", "gpt-5-mini").expect("model");
+    compat_model.compat = Some(json!({ "supportsDeveloperRole": false }));
+    let payload = build_openai_responses_payload(
+        &compat_model,
+        &Context {
+            system_prompt: Some("system".to_owned()),
+            messages: vec![Message::User(UserMessage::text("hi"))],
+            tools: Vec::new(),
+        },
+        OpenAIResponsesPayloadOptions::default(),
+    );
+    assert_eq!(payload["input"][0]["role"], json!("system"));
+}
+
+#[test]
+fn openai_codex_payload_forwards_tool_choice_and_clamps_prompt_cache_key() {
+    let model = get_model("openai-codex", "gpt-5.5").expect("model");
+    let long_session_id = "s".repeat(80);
+    let mut options = OpenAICodexResponsesPayloadOptions::default();
+    options.session_id = Some(long_session_id.clone());
+    options.tool_choice = Some("required".to_owned());
+    let payload = build_openai_codex_responses_payload(&model, &user_context("hello"), options);
+    assert_eq!(payload["tool_choice"], json!("required"));
+    // OpenAI rejects prompt cache keys longer than 64 characters.
+    assert_eq!(payload["prompt_cache_key"], json!("s".repeat(64)));
+
+    let payload = build_openai_codex_responses_payload(
+        &model,
+        &user_context("hello"),
+        OpenAICodexResponsesPayloadOptions::default(),
+    );
+    assert_eq!(payload["tool_choice"], json!("auto"));
+}
+
+#[tokio::test]
+async fn builtin_openai_responses_provider_fails_streams_without_terminal_event() {
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_no_terminal\"}}\n\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_1\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
+    );
+    let (base_url, request_task) = mock_sse_server(sse).await;
+    let mut model = Model::faux("openai-responses", "openai", "no-terminal-model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("test-key".to_owned());
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete");
+    let _request = request_task.await.expect("request task");
+
+    assert_eq!(message.stop_reason, StopReason::Error);
+    assert_eq!(
+        message.error_message.as_deref(),
+        Some("OpenAI Responses stream ended before a terminal response event")
+    );
 }
