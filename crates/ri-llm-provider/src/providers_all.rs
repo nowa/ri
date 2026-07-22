@@ -196,3 +196,13 @@ pub fn builtin_models(options: CreateModelsOptions) -> Models {
     }
     models
 }
+
+/// Process-wide `Models` collection backing the compat stream surface (pi
+/// `compat.ts` `compatModels`). Lazily initialized on first use; clones share
+/// providers and credential state.
+pub fn compat_models() -> Models {
+    static COMPAT_MODELS: std::sync::OnceLock<Models> = std::sync::OnceLock::new();
+    COMPAT_MODELS
+        .get_or_init(|| builtin_models(CreateModelsOptions::default()))
+        .clone()
+}

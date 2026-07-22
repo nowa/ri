@@ -26879,3 +26879,84 @@ mod interactive_oauth_login {
         assert_eq!(authorization.state, "test-state");
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn compat_stream_routes_builtin_models_through_runtime_and_respects_overrides() {
+    let _lock = ENV_LOCK.lock().expect("env lock");
+    let _guard = EnvGuard::clearing(&[
+        "CLOUDFLARE_AI_GATEWAY_API_KEY",
+        "CLOUDFLARE_ACCOUNT_ID",
+        "CLOUDFLARE_GATEWAY_ID",
+        "ANTHROPIC_API_KEY",
+    ]);
+
+    // A cloudflare model without resolved auth routes through the compat
+    // Models collection, which reports the unconfigured provider.
+    let model = get_model("cloudflare-ai-gateway", "claude-sonnet-4-5").expect("cf model");
+    let message = complete_simple(
+        &model,
+        user_context("hello"),
+        SimpleStreamOptions::default(),
+    )
+    .await
+    .expect("cf stream");
+    assert_eq!(message.stop_reason, StopReason::Error);
+    assert!(
+        message
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Provider is not configured: cloudflare-ai-gateway"),
+        "unexpected error: {:?}",
+        message.error_message
+    );
+
+    // Overriding the api registry entry takes precedence over the runtime
+    // provider for builtin catalog models.
+    struct StaticErrorApiProvider;
+    impl ApiProvider for StaticErrorApiProvider {
+        fn api(&self) -> &str {
+            "anthropic-messages"
+        }
+        fn stream(
+            &self,
+            model: &Model,
+            _context: Context,
+            _options: StreamOptions,
+        ) -> Result<AssistantMessageEventStream, ProviderError> {
+            let (sender, stream) = assistant_message_event_stream();
+            let mut message = empty_assistant_for_model(model);
+            message.stop_reason = StopReason::Error;
+            message.error_message = Some("override provider".to_owned());
+            sender.push(AssistantMessageEvent::Error {
+                reason: StopReason::Error,
+                error: message,
+            });
+            Ok(stream)
+        }
+        fn stream_simple(
+            &self,
+            model: &Model,
+            context: Context,
+            options: SimpleStreamOptions,
+        ) -> Result<AssistantMessageEventStream, ProviderError> {
+            self.stream(model, context, options.stream)
+        }
+    }
+
+    register_api_provider(
+        std::sync::Arc::new(StaticErrorApiProvider),
+        Some("compat-routing-test".to_owned()),
+    );
+    let model = get_model("anthropic", "claude-sonnet-4-5").expect("anthropic model");
+    let message = complete_simple(
+        &model,
+        user_context("hello"),
+        SimpleStreamOptions::default(),
+    )
+    .await
+    .expect("override stream");
+    assert_eq!(message.error_message.as_deref(), Some("override provider"));
+    unregister_api_providers("compat-routing-test");
+    ensure_builtin_api_providers();
+}

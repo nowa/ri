@@ -71,7 +71,7 @@ use std::{
 
 static OPENAI_CODEX_WS_CACHE: OnceLock<tokio::sync::Mutex<BTreeMap<String, CachedCodexWebSocket>>> =
     OnceLock::new();
-const BUILTIN_API_PROVIDER_SOURCE_ID: &str = "builtin-http";
+pub const BUILTIN_API_PROVIDER_SOURCE_ID: &str = "builtin-http";
 
 struct CachedCodexWebSocket {
     socket: OpenAICodexWebSocket,

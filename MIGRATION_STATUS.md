@@ -2076,6 +2076,18 @@ not part of this pass.
   policy enabling. `BuiltInOAuthAdapter::login` now delegates here, so
   `Models::login` performs real interactive logins for the built-in OAuth
   providers.
+- Compat stream surface rebuilt over the Models runtime (pi phase 7,
+  `compat.ts`): the global `stream`/`stream_simple` now route built-in
+  catalog models through the runtime `Provider` from a process-wide
+  `compat_models()` collection (lazily-built `builtin_models()`), falling
+  back to the raw api-registry when the api entry has been overridden
+  (`api_provider_source_matches`, mirroring pi's builtin-instance check) or
+  the model is not in the built-in catalog. Cloudflare gateway models
+  without resolved auth (`api_key`/`cf-aig-authorization`) route through
+  `Models::stream` so credential-store and provider-env resolution apply.
+  With this, the harness's global fallback path is runtime-backed as well;
+  `AgentHarnessOptions.models` stays optional as ri's staged equivalent of
+  pi's required-Models flip.
 - Models runtime harness integration (pi phase 6, transitional):
   `AgentHarnessOptions.models` accepts a `Models` collection. When present it
   is the harness's stream path (the agent loop's stream provider dispatches

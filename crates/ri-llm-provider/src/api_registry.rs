@@ -98,6 +98,16 @@ pub fn get_api_provider(api: &str) -> Option<Arc<dyn ApiProvider>> {
         .map(|entry| entry.provider.clone())
 }
 
+/// Whether the registered provider for `api` came from `source_id`. Lets the
+/// compat stream surface detect overrides (tests, extensions) that replaced a
+/// built-in registration.
+pub fn api_provider_source_matches(api: &str, source_id: &str) -> bool {
+    API_PROVIDER_REGISTRY
+        .read()
+        .get(api)
+        .is_some_and(|entry| entry.source_id.as_deref() == Some(source_id))
+}
+
 pub fn get_api_providers() -> Vec<Arc<dyn ApiProvider>> {
     API_PROVIDER_REGISTRY
         .read()
