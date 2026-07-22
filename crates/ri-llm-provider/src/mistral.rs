@@ -332,6 +332,7 @@ fn parse_mistral_usage(model: &Model, usage: &Value) -> Usage {
         output: output_tokens,
         cache_read: 0,
         cache_write: 0,
+        reasoning: None,
         total_tokens,
         cost: Default::default(),
     };

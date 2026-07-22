@@ -643,6 +643,7 @@ fn with_usage_estimate(
         output: output_tokens,
         cache_read,
         cache_write,
+        reasoning: None,
         total_tokens: input + output_tokens + cache_read + cache_write,
         cost: Default::default(),
     };

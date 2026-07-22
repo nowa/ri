@@ -1980,6 +1980,26 @@ gap after the 2026-05-22 source-by-source audit of `packages/ai` and
   `cargo test --workspace -- --test-threads=1` passed; the list command
   enumerated 1086 tests.
 
+## Upstream Increment Alignment (pi > v0.75.4)
+
+The sections above describe parity with the pi source tree as of the
+2026-05-22 cutoff (pi `ced73b39`, v0.75.4). pi has since moved on (v0.81.1 as
+of 2026-07-21). This section tracks the incremental behavior/provider
+alignments ported from that window, item by item, newest first. The pi Models
+runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
+not part of this pass.
+
+- Aligned pi `d7868b09` "feat(ai): add reasoning token counts to Usage":
+  `Usage` gains an optional `reasoning` field (subset of `output`, omitted from
+  the wire when unset). Populated for Anthropic
+  (`output_tokens_details.thinking_tokens`, carried across message deltas),
+  OpenAI Responses/Codex/Azure (`output_tokens_details.reasoning_tokens`,
+  defaulting to 0), OpenAI Completions
+  (`completion_tokens_details.reasoning_tokens`, defaulting to 0), and
+  Google/Vertex (`thoughtsTokenCount`, defaulting to 0). Bedrock, Mistral, faux,
+  and OpenRouter Images leave it unset, matching pi. Verified with
+  `cargo test -p ri-llm-provider --test provider_core -- usage_reports_reasoning_token_breakdown_for_supported_providers google_stream_chunks_preserve_response_id --test-threads=1`.
+
 ## Known Missing Work
 
 This migration is locally complete but not externally certified.

@@ -1046,6 +1046,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
         output: 1_000_000,
         cache_read: 1_000_000,
         cache_write: 1_000_000,
+        reasoning: None,
         total_tokens: 4_000_000,
         cost: UsageCost::default(),
     };
@@ -3257,6 +3258,7 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
         output: 1_000_000,
         cache_read: 1_000_000,
         cache_write: 1_000_000,
+        reasoning: None,
         total_tokens: 4_000_000,
         cost: UsageCost::default(),
     };
@@ -11080,6 +11082,7 @@ async fn google_stream_chunks_preserve_response_id_signatures_usage_and_tool_cal
     assert_eq!(output.usage.input, 6);
     assert_eq!(output.usage.output, 5);
     assert_eq!(output.usage.cache_read, 4);
+    assert_eq!(output.usage.reasoning, Some(2));
     assert_eq!(output.usage.total_tokens, 15);
     assert_usage_total_matches_components("google stream usage", &output.usage);
     assert!(matches!(
@@ -14536,6 +14539,85 @@ fn usage_total_tokens_match_components_for_provider_parsers() {
         &get_image_model("openrouter", "google/gemini-2.5-flash-image").expect("image model"),
     );
     assert_usage_total_matches_components("openrouter images", &openrouter_images);
+}
+
+#[test]
+fn usage_reports_reasoning_token_breakdown_for_supported_providers() {
+    let anthropic_model = get_model("anthropic", "claude-haiku-4-5").expect("anthropic model");
+    let mut events = minimal_anthropic_sse_events();
+    let delta_index = events.len() - 2;
+    events[delta_index] = (
+        "message_delta",
+        json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "end_turn" },
+            "usage": {
+                "input_tokens": 12,
+                "output_tokens": 9,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens_details": { "thinking_tokens": 4 },
+            },
+        })
+        .to_string(),
+    );
+    let anthropic = process_anthropic_sse_body(&anthropic_model, &anthropic_sse_body(events))
+        .expect("anthropic sse")
+        .usage;
+    assert_eq!(anthropic.reasoning, Some(4));
+
+    let without_details = process_anthropic_sse_body(
+        &anthropic_model,
+        &anthropic_sse_body(minimal_anthropic_sse_events()),
+    )
+    .expect("anthropic sse without details")
+    .usage;
+    assert_eq!(without_details.reasoning, None);
+
+    let openai = get_model("openai", "gpt-5-mini").expect("openai model");
+    let openai_responses = parse_openai_responses_usage(
+        &json!({
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "total_tokens": 120,
+            "output_tokens_details": { "reasoning_tokens": 15 }
+        }),
+        &openai,
+        None,
+    );
+    assert_eq!(openai_responses.reasoning, Some(15));
+    let openai_responses_without_details = parse_openai_responses_usage(
+        &json!({ "input_tokens": 100, "output_tokens": 20, "total_tokens": 120 }),
+        &openai,
+        None,
+    );
+    assert_eq!(openai_responses_without_details.reasoning, Some(0));
+
+    let mut openai_completions_model =
+        get_model("openrouter", "google/gemini-2.5-flash").expect("openrouter model");
+    openai_completions_model.api = "openai-completions".to_owned();
+    let openai_completions = parse_openai_completions_chunk_usage(
+        &json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 12,
+            "completion_tokens_details": { "reasoning_tokens": 7 },
+        }),
+        &openai_completions_model,
+    );
+    assert_eq!(openai_completions.reasoning, Some(7));
+    let openai_completions_without_details = parse_openai_completions_chunk_usage(
+        &json!({ "prompt_tokens": 100, "completion_tokens": 12 }),
+        &openai_completions_model,
+    );
+    assert_eq!(openai_completions_without_details.reasoning, Some(0));
+
+    let serialized = serde_json::to_value(&without_details).expect("serialize usage");
+    assert!(
+        serialized.get("reasoning").is_none(),
+        "unset reasoning must stay off the wire"
+    );
+    let serialized_with_reasoning = serde_json::to_value(&anthropic).expect("serialize usage");
+    assert_eq!(serialized_with_reasoning["reasoning"], json!(4));
 }
 
 #[test]

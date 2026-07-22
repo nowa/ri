@@ -1091,6 +1091,12 @@ pub fn parse_openai_responses_usage(
         output,
         cache_read: cached_tokens,
         cache_write: 0,
+        reasoning: Some(
+            value
+                .pointer("/output_tokens_details/reasoning_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        ),
         total_tokens: value
             .get("total_tokens")
             .and_then(Value::as_u64)

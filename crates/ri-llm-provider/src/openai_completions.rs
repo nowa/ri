@@ -866,6 +866,12 @@ pub fn parse_openai_completions_chunk_usage(raw_usage: &Value, model: &Model) ->
         output: output_tokens,
         cache_read,
         cache_write,
+        reasoning: Some(
+            raw_usage
+                .pointer("/completion_tokens_details/reasoning_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        ),
         total_tokens: input + output_tokens + cache_read + cache_write,
         cost: Default::default(),
     };

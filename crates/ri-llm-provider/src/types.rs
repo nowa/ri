@@ -112,6 +112,12 @@ pub struct Usage {
     pub output: u64,
     pub cache_read: u64,
     pub cache_write: u64,
+    /// Reasoning/thinking tokens, when the provider reports them. This is a
+    /// subset of `output`: `output` already includes these tokens. Set to a
+    /// number (possibly 0) by providers that expose a reasoning breakdown;
+    /// left `None` by providers that don't.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<u64>,
     pub total_tokens: u64,
     pub cost: UsageCost,
 }
@@ -123,6 +129,7 @@ impl Usage {
             output: 0,
             cache_read: 0,
             cache_write: 0,
+            reasoning: None,
             total_tokens: 0,
             cost: UsageCost::default(),
         }

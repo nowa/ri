@@ -642,16 +642,15 @@ fn apply_google_chunk_metadata(output: &mut AssistantMessage, model: &Model, chu
         .and_then(Value::as_u64)
         .unwrap_or_default();
     let input = prompt.saturating_sub(cache_read);
+    let thoughts_tokens = usage
+        .get("thoughtsTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     let output_tokens = usage
         .get("candidatesTokenCount")
         .and_then(Value::as_u64)
         .unwrap_or_default()
-        .saturating_add(
-            usage
-                .get("thoughtsTokenCount")
-                .and_then(Value::as_u64)
-                .unwrap_or_default(),
-        );
+        .saturating_add(thoughts_tokens);
     let total_tokens = usage
         .get("totalTokenCount")
         .and_then(Value::as_u64)
@@ -665,6 +664,7 @@ fn apply_google_chunk_metadata(output: &mut AssistantMessage, model: &Model, chu
         output: output_tokens,
         cache_read,
         cache_write: 0,
+        reasoning: Some(thoughts_tokens),
         total_tokens,
         cost: Default::default(),
     };

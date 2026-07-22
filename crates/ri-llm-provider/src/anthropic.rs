@@ -537,11 +537,18 @@ fn parse_anthropic_usage(model: &Model, usage: &Value, previous: &Usage) -> Usag
         .get("cache_creation_input_tokens")
         .and_then(Value::as_u64)
         .unwrap_or(previous.cache_write);
+    // Anthropic reports reasoning tokens in `output_tokens_details.thinking_tokens`
+    // on the final message_delta usage (a subset of output_tokens).
+    let reasoning = usage
+        .pointer("/output_tokens_details/thinking_tokens")
+        .and_then(Value::as_u64)
+        .or(previous.reasoning);
     let mut usage = Usage {
         input,
         output,
         cache_read,
         cache_write,
+        reasoning,
         total_tokens: input + output + cache_read + cache_write,
         cost: Default::default(),
     };
