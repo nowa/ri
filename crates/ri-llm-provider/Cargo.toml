@@ -16,6 +16,7 @@ parking_lot.workspace = true
 regex.workspace = true
 uuid.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+zstd = "0.13"
 ring = "0.17.14"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pki-types = "1"

@@ -2076,6 +2076,13 @@ not part of this pass.
   policy enabling. `BuiltInOAuthAdapter::login` now delegates here, so
   `Models::login` performs real interactive logins for the built-in OAuth
   providers.
+- Codex zstd SSE request compression (pi 0ac3cfe0): the SSE responses path
+  compresses the request body once per stream with zstd level 3 and sends
+  `Content-Encoding: zstd` (reused across retries); compression failure
+  falls back to the uncompressed JSON, and the websocket transport keeps
+  uncompressed frames, matching the official Codex client. Uses the `zstd`
+  crate; test mocks decode compressed bodies transparently so payload
+  assertions run against the decoded JSON.
 - Full catalog refresh via pi's generator pipeline: ran
   `npm run generate-models` in the pi checkout (models.dev + pi overrides,
   regenerated 2026-07-23) and embedded the 37 per-provider data JSONs
@@ -2397,12 +2404,10 @@ Alignment; the following upstream increments remain open:
   storage keeps the full entry set in an in-memory mirror (like the JSONL
   backend), so the caches only pay off once ri adopts pi's lazy
   cursor-based reads; the schema tables are already in place.
-- Codex zstd SSE request compression (deferred: requires the C-binding
-  `zstd` crate; uncompressed bodies remain accepted). SSE header-timeout
-  tuning needs no port: pi 54113731 replaced the fixed 20s pre-header
-  timeout with the caller's `timeoutMs`, and ri already applies
-  `StreamOptions.timeout_ms` as the request timeout (none when unset),
-  which matches pi HEAD's observable behavior.
+- Codex SSE header-timeout tuning needs no port: pi 54113731 replaced the
+  fixed 20s pre-header timeout with the caller's `timeoutMs`, and ri
+  already applies `StreamOptions.timeout_ms` as the request timeout (none
+  when unset), which matches pi HEAD's observable behavior.
 
 - Strict provider live/E2E completion still requires running the gated provider
   matrix with real API keys, provider-specific environment configuration,

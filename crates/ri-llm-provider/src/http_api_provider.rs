@@ -1456,13 +1456,28 @@ async fn stream_openai_codex_sse_json(
     sender: &crate::AssistantMessageEventSender,
     output: &mut AssistantMessage,
 ) -> Result<(), String> {
+    // Compress the request body once for every retry of the SSE path; the
+    // Codex backend decodes `Content-Encoding: zstd` (pi 0ac3cfe0).
+    let body_json = payload.to_string();
+    let compressed_body =
+        crate::openai_codex_responses::compress_openai_codex_request_body(&body_json);
     let mut attempt = 0usize;
     loop {
         if push_abort_if_requested(sender, options, output) {
             return Ok(());
         }
 
-        let request = build_json_request(model, options, url, headers, payload.clone())?;
+        let request = match &compressed_body {
+            Some(compressed) => {
+                let mut request =
+                    build_json_request(model, options, url, headers, payload.clone())?;
+                request = request
+                    .header("content-encoding", "zstd")
+                    .body(compressed.clone());
+                request
+            }
+            None => build_json_request(model, options, url, headers, payload.clone())?,
+        };
         let response = match request.send().await {
             Ok(response) => response,
             Err(error) => {

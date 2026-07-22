@@ -31,6 +31,21 @@ pub fn openai_codex_websocket_session_expired(created_at_ms: i64, now_ms: i64) -
     now_ms - created_at_ms >= OPENAI_CODEX_SESSION_WEBSOCKET_MAX_AGE_MS
 }
 
+/// The Codex backend accepts zstd-compressed request bodies on the SSE
+/// responses endpoint (the same endpoint the official Codex client compresses
+/// against); the websocket transport keeps uncompressed JSON frames.
+const OPENAI_CODEX_REQUEST_COMPRESSION_ZSTD_LEVEL: i32 = 3;
+
+/// zstd-compressed body bytes, or `None` when compression fails — callers
+/// fall back to sending the uncompressed JSON.
+pub fn compress_openai_codex_request_body(body_json: &str) -> Option<Vec<u8>> {
+    zstd::encode_all(
+        body_json.as_bytes(),
+        OPENAI_CODEX_REQUEST_COMPRESSION_ZSTD_LEVEL,
+    )
+    .ok()
+}
+
 /// Read the error code of a Codex `error` event, preferring the top-level
 /// `code` and falling back to the nested `error.code` (pi
 /// `extractCodexEventError`).

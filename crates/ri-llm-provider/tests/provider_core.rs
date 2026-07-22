@@ -23937,7 +23937,7 @@ async fn mock_sse_server(body: &'static str) -> (String, tokio::task::JoinHandle
             .write_all(response.as_bytes())
             .await
             .expect("write response");
-        String::from_utf8_lossy(&request).into_owned()
+        request_bytes_to_display_string(&request)
     });
     (format!("http://{addr}"), task)
 }
@@ -23980,7 +23980,7 @@ async fn mock_open_sse_server(body: Vec<u8>) -> (String, tokio::task::JoinHandle
                 break;
             }
         }
-        String::from_utf8_lossy(&request).into_owned()
+        request_bytes_to_display_string(&request)
     });
     (format!("http://{addr}"), task)
 }
@@ -24438,7 +24438,7 @@ async fn mock_json_status_server(
             .write_all(response.as_bytes())
             .await
             .expect("write response");
-        String::from_utf8_lossy(&request).into_owned()
+        request_bytes_to_display_string(&request)
     });
     (format!("http://{addr}"), task)
 }
@@ -24480,7 +24480,7 @@ async fn mock_json_sequence_server(
                 .write_all(response.as_bytes())
                 .await
                 .expect("write response");
-            requests.push(String::from_utf8_lossy(&request).into_owned());
+            requests.push(request_bytes_to_display_string(&request));
         }
         requests
     });
@@ -24524,7 +24524,7 @@ async fn mock_json_status_sequence_server(
                 .write_all(response.as_bytes())
                 .await
                 .expect("write response");
-            requests.push(String::from_utf8_lossy(&request).into_owned());
+            requests.push(request_bytes_to_display_string(&request));
         }
         requests
     });
@@ -24589,7 +24589,7 @@ async fn mock_http_sequence_server(
                 .write_all(response.body.as_bytes())
                 .await
                 .expect("write body");
-            requests.push(String::from_utf8_lossy(&request).into_owned());
+            requests.push(request_bytes_to_display_string(&request));
         }
         requests
     });
@@ -24626,7 +24626,7 @@ async fn mock_http_disconnect_then_sequence_server(
                 break;
             }
         }
-        requests.push(String::from_utf8_lossy(&request).into_owned());
+        requests.push(request_bytes_to_display_string(&request));
         let _ = socket.shutdown().await;
 
         for response in responses {
@@ -24664,7 +24664,7 @@ async fn mock_http_disconnect_then_sequence_server(
                 .write_all(response.body.as_bytes())
                 .await
                 .expect("write body");
-            requests.push(String::from_utf8_lossy(&request).into_owned());
+            requests.push(request_bytes_to_display_string(&request));
         }
         requests
     });
@@ -24697,7 +24697,7 @@ async fn mock_hanging_response_server() -> (
                 break;
             }
         }
-        let _ = request_tx.send(String::from_utf8_lossy(&request).into_owned());
+        let _ = request_tx.send(request_bytes_to_display_string(&request));
         sleep(Duration::from_secs(60)).await;
     });
     (format!("http://{addr}"), request_rx, task)
@@ -24761,7 +24761,7 @@ async fn mock_binary_server(
             .await
             .expect("write headers");
         socket.write_all(&body).await.expect("write response");
-        String::from_utf8_lossy(&request).into_owned()
+        request_bytes_to_display_string(&request)
     });
     (format!("http://{addr}"), task)
 }
@@ -24799,7 +24799,7 @@ async fn mock_delayed_binary_server(
             "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\nconnection: close\r\n\r\n",
         );
         if socket.write_all(headers.as_bytes()).await.is_err() {
-            return String::from_utf8_lossy(&request).into_owned();
+            return request_bytes_to_display_string(&request);
         }
         for (index, chunk) in chunks.iter().enumerate() {
             if socket.write_all(chunk).await.is_err() {
@@ -24812,7 +24812,7 @@ async fn mock_delayed_binary_server(
                 sleep(delay).await;
             }
         }
-        String::from_utf8_lossy(&request).into_owned()
+        request_bytes_to_display_string(&request)
     });
     (format!("http://{addr}"), task)
 }
@@ -24848,7 +24848,7 @@ async fn mock_delayed_sse_server(
         let headers =
             "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
         if socket.write_all(headers.as_bytes()).await.is_err() {
-            return String::from_utf8_lossy(&request).into_owned();
+            return request_bytes_to_display_string(&request);
         }
         for (index, chunk) in chunks.iter().enumerate() {
             if socket.write_all(chunk.as_bytes()).await.is_err() {
@@ -24861,9 +24861,28 @@ async fn mock_delayed_sse_server(
                 sleep(delay).await;
             }
         }
-        String::from_utf8_lossy(&request).into_owned()
+        request_bytes_to_display_string(&request)
     });
     (format!("http://{addr}"), task)
+}
+
+/// Render captured request bytes for assertions, transparently decoding
+/// zstd-compressed bodies (the Codex SSE path sends Content-Encoding: zstd).
+fn request_bytes_to_display_string(request: &[u8]) -> String {
+    let Some(split) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return String::from_utf8_lossy(request).into_owned();
+    };
+    let (head, body) = request.split_at(split + 4);
+    let head_text = String::from_utf8_lossy(head).into_owned();
+    if head_text
+        .to_ascii_lowercase()
+        .contains("content-encoding: zstd")
+    {
+        if let Ok(decoded) = zstd::decode_all(body) {
+            return format!("{head_text}{}", String::from_utf8_lossy(&decoded));
+        }
+    }
+    format!("{head_text}{}", String::from_utf8_lossy(body))
 }
 
 fn request_is_complete(request: &[u8]) -> bool {
@@ -27358,4 +27377,33 @@ fn generated_catalog_overlay_adds_new_providers_and_models() {
     // opus-4-8 entry keeps ri's asserted metadata.
     let opus = get_model("anthropic", "claude-opus-4-8").expect("opus 4.8");
     assert_eq!(opus.context_window, 1_000_000);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn builtin_openai_codex_provider_compresses_sse_request_bodies_with_zstd() {
+    let (url, request_task) = mock_sse_server(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_zstd\"}}\n\n\
+         data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_zstd\"}}\n\n\
+         data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_zstd\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}}\n\n\
+         data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_zstd\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+    )
+    .await;
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.transport = Some(Transport::Sse);
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete over compressed sse");
+    let request = request_task.await.expect("request task");
+
+    assert_eq!(text_of(&message), Some("ok"));
+    // The raw request carried a zstd body (the display helper decoded it, so
+    // JSON fields remain assertable alongside the encoding header).
+    let lower = request.to_ascii_lowercase();
+    assert!(lower.contains("content-encoding: zstd"), "{request}");
+    assert!(request.contains("\"model\":\"gpt-5.5\""));
+    assert!(request.contains("\"store\":false"));
 }
