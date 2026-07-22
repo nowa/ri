@@ -180,12 +180,82 @@ pub fn builtin_provider(provider_id: &str) -> Option<Arc<dyn Provider>> {
     Some(create_provider(options))
 }
 
-/// All built-in catalog providers, in catalog order.
+/// All built-in catalog providers, in catalog order, plus the Radius
+/// gateway provider (dynamic catalog, no static seed).
 pub fn builtin_providers() -> Vec<Arc<dyn Provider>> {
-    seed_provider_ids()
+    let mut providers: Vec<Arc<dyn Provider>> = seed_provider_ids()
         .into_iter()
         .filter_map(|provider_id| builtin_provider(&provider_id))
-        .collect()
+        .collect();
+    providers.push(radius_provider(RadiusProviderOptions::default()));
+    providers
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RadiusProviderOptions {
+    /// Provider id. Default: `radius`.
+    pub id: Option<String>,
+    /// Display name. Default: `Radius`.
+    pub name: Option<String>,
+    /// Gateway URL. Default: [`crate::radius::DEFAULT_RADIUS_GATEWAY`].
+    pub gateway: Option<String>,
+}
+
+/// Radius gateway provider with a persisted, dynamically refreshed catalog
+/// (pi `providers/radius.ts`).
+pub fn radius_provider(options: RadiusProviderOptions) -> Arc<dyn Provider> {
+    use crate::radius::{
+        DEFAULT_RADIUS_GATEWAY, RadiusOAuth, get_radius_models, get_radius_models_from_config,
+        load_radius_gateway_config, normalize_radius_gateway_url,
+    };
+    let id = options.id.unwrap_or_else(|| "radius".to_owned());
+    let name = options.name.unwrap_or_else(|| "Radius".to_owned());
+    let gateway = normalize_radius_gateway_url(
+        &options
+            .gateway
+            .unwrap_or_else(|| DEFAULT_RADIUS_GATEWAY.to_owned()),
+    );
+
+    let mut create = CreateProviderOptions::new(
+        id.clone(),
+        ProviderAuth {
+            api_key: Some(env_api_key_auth(
+                "Radius API key",
+                ["RADIUS_API_KEY".to_owned()],
+            )),
+            oauth: Some(Arc::new(RadiusOAuth::new(name.clone(), &gateway))),
+        },
+        builtin_api_dispatch(),
+    );
+    create.name = Some(name);
+    let fetch_id = id.clone();
+    create.fetch_models = Some(Arc::new(move |context| {
+        let gateway = gateway.clone();
+        let id = fetch_id.clone();
+        Box::pin(async move {
+            let (api_key, oauth_credential) = match &context.credential {
+                Some(crate::auth::Credential::OAuth(oauth)) => {
+                    (Some(oauth.access.clone()), Some(oauth.clone()))
+                }
+                Some(crate::auth::Credential::ApiKey(key)) => (key.key.clone(), None),
+                None => (None, None),
+            };
+            match load_radius_gateway_config(&gateway, api_key.as_deref()).await {
+                Ok(config) => Ok(get_radius_models_from_config(&id, &config)),
+                Err(error) => {
+                    // Catalogs embedded in pre-store credentials keep working
+                    // when the gateway is unreachable.
+                    let legacy = get_radius_models(&id, oauth_credential.as_ref());
+                    if legacy.is_empty() {
+                        Err(error)
+                    } else {
+                        Ok(legacy)
+                    }
+                }
+            }
+        })
+    }));
+    create_provider(create)
 }
 
 /// A `Models` collection preloaded with every built-in provider.

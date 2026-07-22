@@ -27477,3 +27477,221 @@ async fn pi_messages_api_streams_events_and_maps_errors() {
         Some("429 Too Many Requests: slow down (rate_limited)")
     );
 }
+
+mod radius_gateway {
+    use super::{ENV_LOCK, EnvGuard, mock_json_server, mock_json_status_server, set_env};
+    use async_trait::async_trait;
+    use ri_llm_provider::auth::OAuthAuth as _;
+    use ri_llm_provider::auth::{AuthEvent, AuthInteraction, AuthPrompt};
+    use ri_llm_provider::{
+        CreateModelsOptions, InMemoryModelsStore, ModelsRefreshOptions, RadiusOAuth,
+        RadiusProviderOptions, create_models, get_radius_credential_config,
+        get_radius_models_from_config, load_radius_gateway_config, normalize_radius_gateway_url,
+        parse_radius_token_response, radius_provider, sanitize_radius_gateway_config,
+    };
+    use serde_json::json;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    struct ScriptedInteraction {
+        answers: Mutex<VecDeque<String>>,
+        events: Mutex<Vec<AuthEvent>>,
+    }
+
+    #[async_trait]
+    impl AuthInteraction for ScriptedInteraction {
+        async fn prompt(&self, _prompt: AuthPrompt) -> Result<String, String> {
+            self.answers
+                .lock()
+                .expect("answers")
+                .pop_front()
+                .ok_or_else(|| "no scripted answer".to_owned())
+        }
+        fn notify(&self, event: AuthEvent) {
+            self.events.lock().expect("events").push(event);
+        }
+    }
+
+    fn gateway_config_json() -> serde_json::Value {
+        json!({
+            "baseUrl": "https://gateway.example/v1",
+            "models": [
+                {
+                    "id": "radius-large",
+                    "name": "Radius Large",
+                    "reasoning": true,
+                    "thinkingLevelMap": { "xhigh": "xhigh" },
+                    "input": ["text", "image"],
+                    "cost": { "input": 1.0, "output": 4.0, "cacheRead": 0.1, "cacheWrite": 0.0 },
+                    "contextWindow": 200000,
+                    "maxTokens": 64000
+                },
+                { "id": "broken-model" }
+            ]
+        })
+    }
+
+    #[test]
+    fn config_parsing_matches_provider() {
+        assert_eq!(
+            normalize_radius_gateway_url("radius.pi.dev//"),
+            "https://radius.pi.dev"
+        );
+        assert_eq!(
+            normalize_radius_gateway_url("http://localhost:8080/"),
+            "http://localhost:8080"
+        );
+
+        let config = sanitize_radius_gateway_config(&gateway_config_json()).expect("config");
+        let models = get_radius_models_from_config("radius", &config);
+        // Invalid entries are filtered; valid entries land on pi-messages.
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].api, "pi-messages");
+        assert_eq!(models[0].provider, "radius");
+        assert_eq!(models[0].base_url, "https://gateway.example/v1");
+        assert_eq!(models[0].context_window, 200_000);
+
+        assert!(sanitize_radius_gateway_config(&json!({ "models": [] })).is_none());
+
+        let credential = ri_llm_provider::auth::OAuthCredential {
+            refresh: "refresh".to_owned(),
+            access: "access".to_owned(),
+            expires: 0,
+            extra: json!({ "gatewayConfig": gateway_config_json() })
+                .as_object()
+                .cloned()
+                .expect("extra"),
+        };
+        let embedded = get_radius_credential_config(Some(&credential)).expect("embedded config");
+        assert_eq!(embedded.base_url, "https://gateway.example/v1");
+    }
+
+    #[tokio::test]
+    async fn provider_refresh_loads_and_persists_the_gateway_catalog() {
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        let _guard = EnvGuard::clearing(&["RADIUS_API_KEY"]);
+        // Refresh resolves provider auth first; an unconfigured provider is
+        // skipped, so configure the env key.
+        set_env("RADIUS_API_KEY", "radius-key");
+        let (gateway, _task) = mock_json_server(gateway_config_json().to_string()).await;
+        let store: Arc<dyn ri_llm_provider::ModelsStore> = Arc::new(InMemoryModelsStore::default());
+        let models = create_models(CreateModelsOptions {
+            models_store: Some(store.clone()),
+            ..Default::default()
+        });
+        models.set_provider(radius_provider(RadiusProviderOptions {
+            gateway: Some(gateway),
+            ..Default::default()
+        }));
+
+        assert!(models.get_models(Some("radius")).is_empty());
+        let result = models.refresh(ModelsRefreshOptions::default()).await;
+        assert!(
+            result.errors.is_empty(),
+            "refresh errors: {:?}",
+            result.errors
+        );
+        let listed = models.get_models(Some("radius"));
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "radius-large");
+
+        // The catalog persisted through the ModelsStore.
+        let stored = store
+            .read("radius")
+            .await
+            .expect("store read")
+            .expect("entry");
+        assert_eq!(stored.models.len(), 1);
+        assert_eq!(stored.models[0].provider, "radius");
+    }
+
+    #[tokio::test]
+    async fn oauth_device_code_login_and_refresh_follow_gateway_discovery() {
+        let (token_url, _token_task) = mock_json_status_sequence_server_local(vec![
+            (400, "Bad Request", r#"{"error":"authorization_pending"}"#),
+            (
+                200,
+                "OK",
+                r#"{"access_token":"radius-access","refresh_token":"radius-refresh","expires_in":3600,"scope":"models"}"#,
+            ),
+        ])
+        .await;
+        let (device_url, _device_task) = mock_json_server(
+            r#"{"device_code":"dev-1","user_code":"RAD-CODE","verification_uri":"https://gateway.example/activate","expires_in":60,"interval":1}"#,
+        )
+        .await;
+        let oauth_config = json!({
+            "issuer": "https://gateway.example",
+            "authorizationEndpoint": "https://gateway.example/authorize",
+            "tokenEndpoint": token_url,
+            "deviceAuthorizationEndpoint": device_url,
+            "deviceAuthorizationEventsEndpoint": "",
+            "verificationEndpoint": "https://gateway.example/activate",
+            "clientId": "radius-cli",
+            "scope": "models",
+            "deviceCodeGrantType": "urn:ietf:params:oauth:grant-type:device_code"
+        });
+        let (gateway, _gateway_task) = mock_json_server(oauth_config.to_string()).await;
+
+        let oauth = RadiusOAuth::new("Radius", &gateway);
+        let interaction = ScriptedInteraction {
+            answers: Mutex::new(VecDeque::from(["device-code".to_owned()])),
+            events: Mutex::new(Vec::new()),
+        };
+        let credential = oauth.login(&interaction).await.expect("device login");
+        assert_eq!(credential.access, "radius-access");
+        assert_eq!(credential.refresh, "radius-refresh");
+        assert_eq!(credential.extra.get("scope"), Some(&json!("models")));
+        assert!(matches!(
+            interaction.events.lock().expect("events").first(),
+            Some(AuthEvent::DeviceCode { user_code, .. }) if user_code == "RAD-CODE"
+        ));
+
+        // Refresh re-discovers OAuth config and exchanges the refresh token.
+        let (refresh_token_url, _refresh_task) = mock_json_server(
+            r#"{"access_token":"radius-access-2","refresh_token":"radius-refresh-2","expires_in":3600}"#,
+        )
+        .await;
+        let mut refresh_config = oauth_config.clone();
+        refresh_config["tokenEndpoint"] = json!(refresh_token_url);
+        let (gateway2, _gateway2_task) = mock_json_server(refresh_config.to_string()).await;
+        let oauth = RadiusOAuth::new("Radius", &gateway2);
+        let refreshed = oauth.refresh(&credential).await.expect("refresh");
+        assert_eq!(refreshed.access, "radius-access-2");
+
+        // Token expiry carries the 60s skew.
+        let parsed = parse_radius_token_response(
+            r#"{"access_token":"a","refresh_token":"r","expires_in":3600}"#,
+            1_000_000,
+        )
+        .expect("token");
+        assert_eq!(parsed.expires, 1_000_000 + 3_600_000 - 60_000);
+    }
+
+    async fn mock_json_status_sequence_server_local(
+        responses: Vec<(u16, &'static str, &'static str)>,
+    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        super::mock_json_status_sequence_server(responses).await
+    }
+
+    #[tokio::test]
+    async fn gateway_error_bodies_are_truncated_and_formatted() {
+        let long_body = "x".repeat(600);
+        let body: &'static str = Box::leak(long_body.into_boxed_str());
+        let (gateway, _task) = mock_json_status_server(503, "Service Unavailable", body).await;
+        let error = load_radius_gateway_config(&gateway, None)
+            .await
+            .expect_err("config failure");
+        assert!(error.starts_with(&format!(
+            "Could not load Radius config from {gateway}: 503:"
+        )));
+        assert!(error.ends_with('…'));
+        assert!(error.len() < 700);
+
+        let (gateway, _task) = mock_json_server(r#"{"unexpected":true}"#).await;
+        let error = load_radius_gateway_config(&gateway, None)
+            .await
+            .expect_err("invalid config");
+        assert_eq!(error, format!("Invalid Radius config from {gateway}"));
+    }
+}

@@ -2076,6 +2076,19 @@ not part of this pass.
   policy enabling. `BuiltInOAuthAdapter::login` now delegates here, so
   `Models::login` performs real interactive logins for the built-in OAuth
   providers.
+- Radius gateway provider (pi `providers/radius.ts`, `radius-config.ts`,
+  `auth/oauth/radius.ts`): new `radius` module with gateway-config loading
+  (`/v1/config` with bearer auth, 512-char error truncation, per-entry
+  model validation onto the pi-messages api) and credential-embedded
+  legacy catalogs; `RadiusOAuth` discovers endpoints from `/v1/oauth` and
+  offers browser sign-in (local callback on 127.0.0.1:1456 with PKCE +
+  `handoff=url`) or device-code sign-in on the shared poller
+  (authorization_pending/slow_down/expired_token/access_denied
+  classification), with refresh-token exchange and the 60s expiry skew.
+  `radius_provider()` assembles env-key + gateway OAuth auth with a
+  dynamically refreshed, `ModelsStore`-persisted catalog (gateway fetch
+  falling back to the credential-embedded catalog when unreachable) and is
+  registered in `builtin_providers()`/`builtin_models()`.
 - pi-messages API (pi `api/pi-messages.ts`): new `pi_messages` module and
   `PiMessagesHttpProvider` registered as a built-in api. Requests POST
   `{ model, context, options }` (temperature/maxTokens/reasoning/
@@ -2406,11 +2419,8 @@ Alignment; the following upstream increments remain open:
   provider factories, provider-owned auth/`CredentialStore`, `/compat`
   entrypoint, per-provider generated catalogs) — deferred by decision; ri
   still mirrors the pre-0.80 global registry surface.
-- Radius gateway provider (gateway OAuth via `loadRadiusOAuth`, persisted
-  dynamic catalog from `radius-config`): the underlying `pi-messages` api
-  is now implemented; the provider wiring remains open. Regenerating the
-  embedded `models_generated/` data requires re-running pi's generator
-  (network).
+- Regenerating the embedded `models_generated/` catalog data requires
+  re-running pi's generator (network).
 - SQLite storage follow-ups: materialized-state caches
   (`session_materialized`/`entry_materialized`) and `branch_entries`
   acceleration with cursor paging. Deferred deliberately: ri's SQLite
