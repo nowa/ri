@@ -8,7 +8,9 @@ use crate::{
     json_repair::{parse_json_with_repair, parse_streaming_json, sanitize_surrogates},
     message_transform::transform_messages,
     models::calculate_cost,
-    simple_options::{adjust_max_tokens_for_thinking, apply_simple_stream_defaults},
+    simple_options::{
+        adjust_max_tokens_for_thinking, apply_simple_stream_defaults, clamp_max_tokens_to_context,
+    },
 };
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -626,7 +628,7 @@ pub fn build_anthropic_simple_payload_for_client(
     options: SimpleStreamOptions,
     use_claude_code_tool_names: bool,
 ) -> Value {
-    let options = apply_simple_stream_defaults(model, options);
+    let options = apply_simple_stream_defaults(model, context, options);
     let mut payload_options = AnthropicPayloadOptions::default();
     payload_options.cache_retention = options.stream.cache_retention;
     payload_options.max_tokens = options.stream.max_tokens;
@@ -679,8 +681,13 @@ pub fn build_anthropic_simple_payload_for_client(
                 reasoning,
                 options.thinking_budgets.as_ref(),
             );
-            payload_options.max_tokens = Some(adjusted.max_tokens);
-            payload_options.thinking_budget_tokens = Some(adjusted.thinking_budget);
+            let max_tokens = clamp_max_tokens_to_context(model, context, adjusted.max_tokens);
+            payload_options.max_tokens = Some(max_tokens);
+            payload_options.thinking_budget_tokens = Some(
+                adjusted
+                    .thinking_budget
+                    .min(max_tokens.saturating_sub(1024)),
+            );
         }
     } else {
         payload_options.thinking_enabled = Some(false);

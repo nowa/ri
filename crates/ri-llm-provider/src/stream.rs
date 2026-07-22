@@ -44,7 +44,7 @@ pub fn stream_simple(
     if let Some(error) = unsupported_reasoning_error(model, options.reasoning) {
         return Ok(error_stream(model, error));
     }
-    let options = apply_simple_stream_defaults(model, options);
+    let options = apply_simple_stream_defaults(model, &context, options);
     let provider =
         get_api_provider(&model.api).ok_or_else(|| ProviderError::MissingApi(model.api.clone()))?;
     provider.stream_simple(model, context, options)

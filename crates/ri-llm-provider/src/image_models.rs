@@ -96,6 +96,7 @@ const fn cost(input: f64, output: f64, cache_read: f64, cache_write: f64) -> Mod
         output,
         cache_read,
         cache_write,
+        tiers: Vec::new(),
     }
 }
 

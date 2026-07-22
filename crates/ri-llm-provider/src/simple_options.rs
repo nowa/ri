@@ -1,7 +1,7 @@
-use crate::{Model, SimpleStreamOptions, ThinkingBudgets, ThinkingLevel};
+use crate::{Context, Model, SimpleStreamOptions, ThinkingBudgets, ThinkingLevel, estimate};
 
-const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 32_000;
-const CONTEXT_WINDOW_OUTPUT_TOLERANCE: u64 = 1_024;
+const CONTEXT_SAFETY_TOKENS: u64 = 4_096;
+const MIN_MAX_TOKENS: u64 = 1;
 const MIN_OUTPUT_TOKENS_WITH_THINKING: u64 = 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,29 +10,26 @@ pub struct ThinkingTokenAdjustment {
     pub thinking_budget: u64,
 }
 
-pub fn default_simple_max_tokens(model: &Model) -> Option<u64> {
-    if model.max_tokens == 0 {
-        return None;
+pub fn clamp_max_tokens_to_context(model: &Model, context: &Context, max_tokens: u64) -> u64 {
+    if model.context_window == 0 {
+        return max_tokens.max(MIN_MAX_TOKENS);
     }
-
-    if model.max_tokens
-        >= model
-            .context_window
-            .saturating_sub(CONTEXT_WINDOW_OUTPUT_TOLERANCE)
-    {
-        Some(model.max_tokens.min(DEFAULT_MAX_OUTPUT_TOKENS))
-    } else {
-        Some(model.max_tokens)
-    }
+    let available = model.context_window as i128
+        - estimate::estimate_context_tokens(context).tokens as i128
+        - CONTEXT_SAFETY_TOKENS as i128;
+    max_tokens.min(available.max(MIN_MAX_TOKENS as i128) as u64)
 }
 
 pub fn apply_simple_stream_defaults(
     model: &Model,
+    context: &Context,
     mut options: SimpleStreamOptions,
 ) -> SimpleStreamOptions {
-    if options.stream.max_tokens.is_none() {
-        options.stream.max_tokens = default_simple_max_tokens(model);
-    }
+    let base_max_tokens = options.stream.max_tokens.unwrap_or(model.max_tokens);
+    let clamped = clamp_max_tokens_to_context(model, context, base_max_tokens);
+    // A zero result only happens for models without a max-token cap; pi's
+    // falsy-number handling omits the cap from payloads, which `None` mirrors.
+    options.stream.max_tokens = (clamped > 0).then_some(clamped);
     options
 }
 

@@ -40,7 +40,7 @@ pub fn build_mistral_simple_payload(
     context: &Context,
     options: SimpleStreamOptions,
 ) -> Value {
-    let options = apply_simple_stream_defaults(model, options);
+    let options = apply_simple_stream_defaults(model, context, options);
     let reasoning = options
         .reasoning
         .map(|level| clamp_thinking_level(model, level))

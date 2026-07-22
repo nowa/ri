@@ -2,7 +2,7 @@ use crate::{
     AssistantContent, AssistantMessage, AssistantMessageEvent, AssistantMessageEventSender,
     CacheRetention, Context, InputKind, Model, StopReason, TextContent, TextSignatureV1,
     ThinkingLevel, Tool, ToolCall, ToolResultContent, Usage, UsageCost, UserContent,
-    UserContentValue, github_copilot_headers::build_copilot_dynamic_headers,
+    UserContentValue, calculate_cost, github_copilot_headers::build_copilot_dynamic_headers,
     parse_json_with_repair, short_hash, transform_messages,
 };
 use serde_json::{Map, Value, json};
@@ -1082,15 +1082,23 @@ pub fn parse_openai_responses_usage(
         .pointer("/input_tokens_details/cached_tokens")
         .and_then(Value::as_u64)
         .unwrap_or_default();
+    let cache_write_tokens = value
+        .pointer("/input_tokens_details/cache_write_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     let output = value
         .get("output_tokens")
         .and_then(Value::as_u64)
         .unwrap_or_default();
     let mut usage = Usage {
-        input: input_tokens.saturating_sub(cached_tokens),
+        // OpenAI includes cached and cache-write tokens in input_tokens, so
+        // subtract both.
+        input: input_tokens
+            .saturating_sub(cached_tokens)
+            .saturating_sub(cache_write_tokens),
         output,
         cache_read: cached_tokens,
-        cache_write: 0,
+        cache_write: cache_write_tokens,
         reasoning: Some(
             value
                 .pointer("/output_tokens_details/reasoning_tokens")
@@ -1103,10 +1111,7 @@ pub fn parse_openai_responses_usage(
             .unwrap_or(input_tokens + output),
         cost: UsageCost::default(),
     };
-    usage.cost.input = (model.cost.input / 1_000_000.0) * usage.input as f64;
-    usage.cost.output = (model.cost.output / 1_000_000.0) * usage.output as f64;
-    usage.cost.cache_read = (model.cost.cache_read / 1_000_000.0) * usage.cache_read as f64;
-    usage.cost.cache_write = (model.cost.cache_write / 1_000_000.0) * usage.cache_write as f64;
+    calculate_cost(model, &mut usage);
     let multiplier = openai_responses_service_tier_cost_multiplier(model, service_tier);
     usage.cost.input *= multiplier;
     usage.cost.output *= multiplier;

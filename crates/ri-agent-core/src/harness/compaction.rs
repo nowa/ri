@@ -202,6 +202,10 @@ pub fn estimate_tokens(text: &str) -> u64 {
     text.chars().count().div_ceil(4) as u64
 }
 
+/// Images are estimated at 4800 characters, mirroring pi's
+/// `ESTIMATED_IMAGE_CHARS` heuristic.
+const ESTIMATED_IMAGE_TOKENS: u64 = 4800 / 4;
+
 pub fn calculate_context_tokens(usage: &Usage) -> u64 {
     if usage.total_tokens > 0 {
         usage.total_tokens
@@ -992,7 +996,7 @@ fn estimate_message_tokens(message: &Message) -> u64 {
                 .iter()
                 .map(|block| match block {
                     ri_llm_provider::UserContent::Text(text) => estimate_tokens(&text.text),
-                    ri_llm_provider::UserContent::Image(image) => estimate_tokens(&image.data),
+                    ri_llm_provider::UserContent::Image(_) => ESTIMATED_IMAGE_TOKENS,
                 })
                 .sum(),
         },
@@ -1013,7 +1017,7 @@ fn estimate_message_tokens(message: &Message) -> u64 {
             .iter()
             .map(|content| match content {
                 ri_llm_provider::ToolResultContent::Text(text) => estimate_tokens(&text.text),
-                ri_llm_provider::ToolResultContent::Image(_) => estimate_tokens(&"x".repeat(4800)),
+                ri_llm_provider::ToolResultContent::Image(_) => ESTIMATED_IMAGE_TOKENS,
             })
             .sum(),
     }
@@ -1031,7 +1035,7 @@ fn estimate_session_message_tokens(message: &SessionMessage) -> u64 {
                 .iter()
                 .map(|block| match block {
                     UserContent::Text(text) => estimate_tokens(&text.text),
-                    UserContent::Image(_) => estimate_tokens(&"x".repeat(4800)),
+                    UserContent::Image(_) => ESTIMATED_IMAGE_TOKENS,
                 })
                 .sum(),
         },

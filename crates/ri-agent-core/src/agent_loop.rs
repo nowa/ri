@@ -1026,6 +1026,7 @@ fn tool_result_message_from_outcome(outcome: ToolExecutionOutcome) -> ToolResult
             .collect(),
         details: outcome.result.details,
         is_error: outcome.is_error,
+        added_tool_names: None,
         timestamp: ri_llm_provider::now_millis(),
     }
 }

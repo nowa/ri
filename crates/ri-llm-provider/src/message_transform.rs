@@ -222,6 +222,7 @@ fn insert_missing_tool_results(
             content: vec![ToolResultContent::text("No result provided")],
             details: None,
             is_error: true,
+            added_tool_names: None,
             timestamp: crate::types::now_millis(),
         }));
     }

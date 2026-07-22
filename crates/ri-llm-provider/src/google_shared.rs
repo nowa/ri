@@ -81,7 +81,7 @@ pub fn build_google_simple_payload(
     context: &Context,
     options: SimpleStreamOptions,
 ) -> Value {
-    let options = apply_simple_stream_defaults(model, options);
+    let options = apply_simple_stream_defaults(model, context, options);
     let explicit_thinking = options
         .stream
         .extra

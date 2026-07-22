@@ -4623,6 +4623,7 @@ async fn agent_continue_from_tool_result_tail_gets_assistant_response() {
             content: vec![ToolResultContent::text("5 + 3 = 8")],
             details: None,
             is_error: false,
+            added_tool_names: None,
             timestamp: now_millis(),
         }),
     ];

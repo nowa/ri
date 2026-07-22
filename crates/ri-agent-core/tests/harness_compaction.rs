@@ -210,6 +210,7 @@ fn compaction_estimates_tokens_and_uses_latest_valid_assistant_usage() {
         ],
         details: None,
         is_error: false,
+        added_tool_names: None,
         timestamp: 0,
     });
 
@@ -324,6 +325,7 @@ fn compaction_finds_cut_points_and_turn_start_edges() {
             content: vec![ToolResultContent::text("tool output")],
             details: None,
             is_error: false,
+            added_tool_names: None,
             timestamp: 0,
         }),
     );
@@ -448,6 +450,7 @@ fn compaction_prepares_custom_branch_messages_and_serializes_tool_results() {
         content: vec![ToolResultContent::text(long_content)],
         details: None,
         is_error: false,
+        added_tool_names: None,
         timestamp: 0,
     })]);
     assert!(serialized.contains("[Tool result]:"));
@@ -972,6 +975,7 @@ fn branch_summary_prepares_messages_budget_and_file_ops() {
             content: vec![ToolResultContent::text("tool output")],
             details: None,
             is_error: false,
+            added_tool_names: None,
             timestamp: 0,
         }),
     );

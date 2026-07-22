@@ -105,27 +105,110 @@ fn builtin_api_provider_registry_exposes_main_provider_surfaces() {
 
 #[test]
 fn simple_stream_defaults_match_pi_base_options_max_tokens() {
+    let empty_context = Context::default();
+
     let mut model = Model::faux("openai-responses", "openai", "small-output");
     model.context_window = 128_000;
     model.max_tokens = 8_192;
-    let options = apply_simple_stream_defaults(&model, SimpleStreamOptions::default());
+    let options =
+        apply_simple_stream_defaults(&model, &empty_context, SimpleStreamOptions::default());
     assert_eq!(options.stream.max_tokens, Some(8_192));
 
+    // A model whose output cap fills the context window is clamped to the
+    // estimated remaining context minus the safety margin.
     let mut capped = Model::faux("openai-responses", "openai", "full-window-output");
     capped.context_window = 128_000;
     capped.max_tokens = 128_000;
-    let options = apply_simple_stream_defaults(&capped, SimpleStreamOptions::default());
-    assert_eq!(options.stream.max_tokens, Some(32_000));
+    let options =
+        apply_simple_stream_defaults(&capped, &empty_context, SimpleStreamOptions::default());
+    assert_eq!(options.stream.max_tokens, Some(123_904));
 
     let mut explicit = SimpleStreamOptions::default();
     explicit.stream.max_tokens = Some(777);
-    let options = apply_simple_stream_defaults(&capped, explicit);
+    let options = apply_simple_stream_defaults(&capped, &empty_context, explicit);
     assert_eq!(options.stream.max_tokens, Some(777));
+
+    // Existing context shrinks the available output budget.
+    let mut used_context = Context::default();
+    used_context
+        .messages
+        .push(Message::User(UserMessage::text("x".repeat(400_000))));
+    let options =
+        apply_simple_stream_defaults(&capped, &used_context, SimpleStreamOptions::default());
+    assert_eq!(options.stream.max_tokens, Some(23_904));
+
+    // A context that overflows the window still leaves the minimum budget.
+    let mut overflowing_context = Context::default();
+    overflowing_context
+        .messages
+        .push(Message::User(UserMessage::text("x".repeat(600_000))));
+    let options = apply_simple_stream_defaults(
+        &capped,
+        &overflowing_context,
+        SimpleStreamOptions::default(),
+    );
+    assert_eq!(options.stream.max_tokens, Some(1));
 
     let mut unknown = Model::faux("openai-responses", "openai", "unknown-output");
     unknown.max_tokens = 0;
-    let options = apply_simple_stream_defaults(&unknown, SimpleStreamOptions::default());
+    let options =
+        apply_simple_stream_defaults(&unknown, &empty_context, SimpleStreamOptions::default());
     assert_eq!(options.stream.max_tokens, None);
+}
+
+#[test]
+fn context_estimate_ignores_stale_assistant_usage_after_newer_prefix_insertion() {
+    let mut model = Model::faux("openai-responses", "openai", "test-model");
+    model.context_window = 10_000;
+    model.max_tokens = 8_000;
+
+    let create_assistant = |timestamp: i64, total_tokens: u64| {
+        let mut assistant = empty_assistant_for_model(&model);
+        assistant.content = vec![AssistantContent::Text(TextContent::new("kept"))];
+        assistant.usage.input = total_tokens;
+        assistant.usage.total_tokens = total_tokens;
+        assistant.timestamp = timestamp;
+        Message::Assistant(assistant)
+    };
+    let user_at = |text: &str, timestamp: i64| {
+        let mut user = UserMessage::text(text);
+        user.timestamp = timestamp;
+        Message::User(user)
+    };
+
+    let context = Context {
+        system_prompt: Some("system".to_owned()),
+        messages: vec![
+            user_at("summary", 200),
+            create_assistant(100, 9_500),
+            user_at(&"x".repeat(4_000), 300),
+        ],
+        tools: Vec::new(),
+    };
+    let estimate = estimate_context_tokens(&context);
+    assert_eq!(estimate.tokens, 1_005);
+    assert_eq!(estimate.usage_tokens, 0);
+    assert_eq!(estimate.trailing_tokens, 1_005);
+    assert_eq!(estimate.last_usage_index, None);
+    let options = apply_simple_stream_defaults(&model, &context, SimpleStreamOptions::default());
+    assert_eq!(options.stream.max_tokens, Some(4_899));
+
+    let responded_context = Context {
+        system_prompt: None,
+        messages: vec![
+            user_at("summary", 200),
+            create_assistant(100, 9_500),
+            user_at("new prompt", 300),
+            create_assistant(400, 2_000),
+            user_at("tail", 500),
+        ],
+        tools: Vec::new(),
+    };
+    let estimate = estimate_context_tokens(&responded_context);
+    assert_eq!(estimate.tokens, 2_001);
+    assert_eq!(estimate.usage_tokens, 2_000);
+    assert_eq!(estimate.trailing_tokens, 1);
+    assert_eq!(estimate.last_usage_index, Some(3));
 }
 
 #[test]
@@ -484,6 +567,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
             },
             1_000_000,
             128_000,
@@ -497,6 +581,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
             1_000_000,
             64_000,
@@ -510,6 +595,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 0.8899999999999999,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             163_840,
             16_384,
@@ -523,6 +609,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 2.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             163_840,
             16_000,
@@ -536,6 +623,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 0.378,
                 cache_read: 0.0252,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             65_536,
@@ -549,6 +637,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 0.224,
                 cache_read: 0.022,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             4_096,
@@ -562,6 +651,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 0.39999999999999997,
                 cache_read: 0.024999999999999998,
                 cache_write: 0.08333333333333334,
+                tiers: Vec::new(),
             },
             1_048_576,
             8_192,
@@ -575,6 +665,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 2.5,
                 cache_read: 0.03,
                 cache_write: 0.08333333333333334,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_535,
@@ -588,6 +679,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             10_000_000,
             16_384,
@@ -601,6 +693,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 1.5,
                 cache_read: 0.049999999999999996,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             4_096,
@@ -614,6 +707,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 0.19999999999999998,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             16_384,
@@ -627,6 +721,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             400_000,
             128_000,
@@ -640,6 +735,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 1.56,
                 cache_read: 0.0,
                 cache_write: 0.325,
+                tiers: Vec::new(),
             },
             1_000_000,
             65_536,
@@ -653,6 +749,7 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
                 output: 1.7999999999999998,
                 cache_read: 0.11,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             65_536,
             16_384,
@@ -724,6 +821,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 4.0,
                 cache_read: 0.08,
                 cache_write: 1.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -737,6 +835,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 4.0,
                 cache_read: 0.08,
                 cache_write: 1.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -750,6 +849,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -763,6 +863,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -776,6 +877,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -789,6 +891,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 1.25,
                 cache_read: 0.03,
                 cache_write: 0.3,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -802,6 +905,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 75.0,
                 cache_read: 1.5,
                 cache_write: 18.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -815,6 +919,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 0.3,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -828,6 +933,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 5.0,
                 cache_read: 0.1,
                 cache_write: 1.25,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -841,6 +947,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 5.0,
                 cache_read: 0.1,
                 cache_write: 1.25,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -854,6 +961,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 75.0,
                 cache_read: 1.5,
                 cache_write: 18.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -867,6 +975,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 75.0,
                 cache_read: 1.5,
                 cache_write: 18.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -880,6 +989,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 75.0,
                 cache_read: 1.5,
                 cache_write: 18.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -893,6 +1003,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 75.0,
                 cache_read: 1.5,
                 cache_write: 18.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -906,6 +1017,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -919,6 +1031,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -932,6 +1045,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -945,6 +1059,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -958,6 +1073,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -971,6 +1087,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -984,6 +1101,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -997,6 +1115,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -1010,6 +1129,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
         ),
     ] {
@@ -1086,6 +1206,7 @@ fn cerebras_model_metadata_matches_generated_catalog() {
                 output: 0.69,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -1098,6 +1219,7 @@ fn cerebras_model_metadata_matches_generated_catalog() {
                 output: 0.1,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -1110,6 +1232,7 @@ fn cerebras_model_metadata_matches_generated_catalog() {
                 output: 1.2,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -1122,6 +1245,7 @@ fn cerebras_model_metadata_matches_generated_catalog() {
                 output: 2.75,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
     ] {
@@ -1166,6 +1290,7 @@ fn minimax_model_metadata_matches_generated_catalog() {
                     output: 1.2,
                     cache_read: 0.06,
                     cache_write: 0.375,
+                    tiers: Vec::new(),
                 },
             ),
             (
@@ -1175,6 +1300,7 @@ fn minimax_model_metadata_matches_generated_catalog() {
                     output: 2.4,
                     cache_read: 0.06,
                     cache_write: 0.375,
+                    tiers: Vec::new(),
                 },
             ),
         ] {
@@ -1256,6 +1382,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.9,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             256_000,
             4_096,
@@ -1269,6 +1396,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -1282,6 +1410,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -1295,6 +1424,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -1308,6 +1438,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -1321,6 +1452,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -1342,6 +1474,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 5.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             16_384,
@@ -1355,6 +1488,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 1.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -1368,6 +1502,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.04,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -1381,6 +1516,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.1,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -1394,6 +1530,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 6.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             16_384,
@@ -1407,6 +1544,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 1.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -1420,6 +1558,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 1.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -1433,6 +1572,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             131_072,
@@ -1446,6 +1586,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -1459,6 +1600,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 7.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -1472,6 +1614,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 7.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -1485,6 +1628,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 7.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -1498,6 +1642,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.15,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -1511,6 +1656,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             16_384,
@@ -1524,6 +1670,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.6,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             256_000,
             256_000,
@@ -1537,6 +1684,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.6,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             256_000,
             256_000,
@@ -1550,6 +1698,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.25,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             8_000,
             8_000,
@@ -1563,6 +1712,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 6.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             64_000,
             64_000,
@@ -1576,6 +1726,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.7,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             32_000,
             32_000,
@@ -1589,6 +1740,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 0.15,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -1602,6 +1754,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
                 output: 6.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -1670,6 +1823,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.99,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             8_192,
@@ -1684,6 +1838,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.2,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             8_192,
             8_192,
@@ -1716,6 +1871,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.08,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             131_072,
@@ -1730,6 +1886,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.79,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             32_768,
@@ -1744,6 +1901,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.79,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             8_192,
             8_192,
@@ -1758,6 +1916,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.08,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             8_192,
             8_192,
@@ -1772,6 +1931,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.6,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             8_192,
@@ -1786,6 +1946,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.34,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             8_192,
@@ -1800,6 +1961,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.79,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             32_768,
             32_768,
@@ -1814,6 +1976,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 3.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             16_384,
@@ -1828,6 +1991,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 3.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             16_384,
@@ -1842,6 +2006,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.6,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             65_536,
@@ -1856,6 +2021,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             65_536,
@@ -1870,6 +2036,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.037,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             65_536,
@@ -1884,6 +2051,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.39,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             16_384,
@@ -1898,6 +2066,7 @@ fn groq_model_metadata_matches_generated_catalog() {
                 output: 0.59,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             40_960,
@@ -1976,6 +2145,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 2.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -1989,6 +2159,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 2.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2002,6 +2173,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 2.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2015,6 +2187,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 2.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2028,6 +2201,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 2.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2041,6 +2215,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 2.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2054,6 +2229,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.75,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2067,6 +2243,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 25.0,
                 cache_read: 1.25,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2080,6 +2257,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 6.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2093,6 +2271,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 6.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2106,6 +2285,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 2.5,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2119,6 +2299,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 5.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2132,6 +2313,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 1.5,
                 cache_read: 0.02,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -2145,6 +2327,7 @@ fn xai_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 5.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
     ] {
@@ -2512,6 +2695,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.01875,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -2526,6 +2710,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 0.15,
                 cache_read: 0.01,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -2540,6 +2725,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 5.0,
                 cache_read: 0.3125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -2554,6 +2740,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 0.4,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             8_192,
@@ -2568,6 +2755,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             8_192,
@@ -2582,6 +2770,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 2.5,
                 cache_read: 0.03,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2596,6 +2785,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 0.4,
                 cache_read: 0.01,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2610,6 +2800,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 0.4,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2624,6 +2815,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 0.4,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2638,6 +2830,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 0.6,
                 cache_read: 0.0375,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2652,6 +2845,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 0.6,
                 cache_read: 0.0375,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2666,6 +2860,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 2.5,
                 cache_read: 0.075,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2680,6 +2875,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2694,6 +2890,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 0.31,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2708,6 +2905,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 0.31,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2722,6 +2920,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 3.0,
                 cache_read: 0.05,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2736,6 +2935,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 12.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             64_000,
@@ -2750,6 +2950,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 1.5,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2764,6 +2965,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 1.5,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2778,6 +2980,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 12.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2792,6 +2995,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 12.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2806,6 +3010,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 2.5,
                 cache_read: 0.075,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2820,6 +3025,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 0.4,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -2834,6 +3040,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             8_000,
@@ -2848,6 +3055,7 @@ fn google_model_metadata_matches_generated_catalog() {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             65_536,
@@ -2954,6 +3162,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.01875,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -2967,6 +3176,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 0.15,
                 cache_read: 0.01,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -2980,6 +3190,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 5.0,
                 cache_read: 0.3125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -2993,6 +3204,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 0.6,
                 cache_read: 0.0375,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             8_192,
@@ -3006,6 +3218,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.01875,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -3019,6 +3232,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 2.5,
                 cache_read: 0.03,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -3032,6 +3246,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 0.4,
                 cache_read: 0.01,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -3045,6 +3260,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 0.4,
                 cache_read: 0.01,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -3058,6 +3274,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -3071,6 +3288,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 3.0,
                 cache_read: 0.05,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -3084,6 +3302,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 12.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             64_000,
@@ -3097,6 +3316,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 12.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -3110,6 +3330,7 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
                 output: 12.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -3177,6 +3398,7 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             vec![InputKind::Text, InputKind::Image],
         ),
@@ -3187,6 +3409,7 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             vec![InputKind::Text, InputKind::Image],
         ),
@@ -3197,6 +3420,7 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             vec![InputKind::Text],
         ),
@@ -3207,6 +3431,13 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.25,
                 cache_write: 0.0,
+                tiers: vec![ModelCostTier {
+                    input_tokens_above: 272_000,
+                    input: 5.0,
+                    output: 22.5,
+                    cache_read: 0.5,
+                    cache_write: 0.0,
+                }],
             },
             vec![InputKind::Text, InputKind::Image],
         ),
@@ -3217,6 +3448,7 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
                 output: 4.5,
                 cache_read: 0.075,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             vec![InputKind::Text, InputKind::Image],
         ),
@@ -3227,6 +3459,13 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
                 output: 30.0,
                 cache_read: 0.5,
                 cache_write: 0.0,
+                tiers: vec![ModelCostTier {
+                    input_tokens_above: 272_000,
+                    input: 10.0,
+                    output: 45.0,
+                    cache_read: 1.0,
+                    cache_write: 0.0,
+                }],
             },
             vec![InputKind::Text, InputKind::Image],
         ),
@@ -3253,22 +3492,24 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
         assert_eq!(model.cost, cost, "{model_id} cost");
     }
 
+    // Keep total input usage below the 272k long-context pricing tier so the
+    // base rates are under test; tier data is asserted separately.
     let mut usage = Usage {
-        input: 1_000_000,
-        output: 1_000_000,
-        cache_read: 1_000_000,
-        cache_write: 1_000_000,
+        input: 50_000,
+        output: 50_000,
+        cache_read: 50_000,
+        cache_write: 50_000,
         reasoning: None,
-        total_tokens: 4_000_000,
+        total_tokens: 200_000,
         cost: UsageCost::default(),
     };
     let gpt_55 = get_model("openai-codex", "gpt-5.5").expect("gpt-5.5");
     let cost = calculate_cost(&gpt_55, &mut usage);
-    assert_cost_close("gpt-5.5 input cost", cost.input, 5.0);
-    assert_cost_close("gpt-5.5 output cost", cost.output, 30.0);
-    assert_cost_close("gpt-5.5 cache read cost", cost.cache_read, 0.5);
+    assert_cost_close("gpt-5.5 input cost", cost.input, 0.25);
+    assert_cost_close("gpt-5.5 output cost", cost.output, 1.5);
+    assert_cost_close("gpt-5.5 cache read cost", cost.cache_read, 0.025);
     assert_cost_close("gpt-5.5 cache write cost", cost.cache_write, 0.0);
-    assert_cost_close("gpt-5.5 total cost", cost.total, 35.5);
+    assert_cost_close("gpt-5.5 total cost", cost.total, 1.775);
 }
 
 #[test]
@@ -3299,6 +3540,7 @@ fn openai_and_azure_gpt4_model_metadata_matches_generated_catalog() {
                 output: 60.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3311,6 +3553,7 @@ fn openai_and_azure_gpt4_model_metadata_matches_generated_catalog() {
                 output: 30.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3323,6 +3566,7 @@ fn openai_and_azure_gpt4_model_metadata_matches_generated_catalog() {
                 output: 8.0,
                 cache_read: 0.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3335,6 +3579,7 @@ fn openai_and_azure_gpt4_model_metadata_matches_generated_catalog() {
                 output: 1.6,
                 cache_read: 0.1,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3347,6 +3592,7 @@ fn openai_and_azure_gpt4_model_metadata_matches_generated_catalog() {
                 output: 0.4,
                 cache_read: 0.03,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3359,6 +3605,7 @@ fn openai_and_azure_gpt4_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 1.25,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3371,6 +3618,7 @@ fn openai_and_azure_gpt4_model_metadata_matches_generated_catalog() {
                 output: 15.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3383,6 +3631,7 @@ fn openai_and_azure_gpt4_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 1.25,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3395,6 +3644,7 @@ fn openai_and_azure_gpt4_model_metadata_matches_generated_catalog() {
                 output: 10.0,
                 cache_read: 1.25,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3407,6 +3657,7 @@ fn openai_and_azure_gpt4_model_metadata_matches_generated_catalog() {
                 output: 0.6,
                 cache_read: 0.08,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
     ] {
@@ -3526,6 +3777,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3540,6 +3792,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3554,6 +3807,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3568,6 +3822,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 2.0,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3582,6 +3837,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 0.4,
                 cache_read: 0.005,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3596,6 +3852,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 120.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3610,6 +3867,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 10.0,
                 cache_read: 0.13,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3624,6 +3882,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3638,6 +3897,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3652,6 +3912,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3666,6 +3927,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 2.0,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3680,6 +3942,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3694,6 +3957,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3708,6 +3972,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3722,6 +3987,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 168.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3736,6 +4002,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3750,6 +4017,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3764,6 +4032,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3778,6 +4047,13 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 15.0,
                 cache_read: 0.25,
                 cache_write: 0.0,
+                tiers: vec![ModelCostTier {
+                    input_tokens_above: 272_000,
+                    input: 5.0,
+                    output: 22.5,
+                    cache_read: 0.5,
+                    cache_write: 0.0,
+                }],
             },
         ),
         (
@@ -3792,6 +4068,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 4.5,
                 cache_read: 0.075,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3806,6 +4083,7 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 1.25,
                 cache_read: 0.02,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3820,6 +4098,13 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 180.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: vec![ModelCostTier {
+                    input_tokens_above: 272_000,
+                    input: 60.0,
+                    output: 270.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                }],
             },
         ),
         (
@@ -3834,6 +4119,13 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 30.0,
                 cache_read: 0.5,
                 cache_write: 0.0,
+                tiers: vec![ModelCostTier {
+                    input_tokens_above: 272_000,
+                    input: 10.0,
+                    output: 45.0,
+                    cache_read: 1.0,
+                    cache_write: 0.0,
+                }],
             },
         ),
         (
@@ -3848,6 +4140,13 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
                 output: 180.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: vec![ModelCostTier {
+                    input_tokens_above: 272_000,
+                    input: 60.0,
+                    output: 270.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                }],
             },
         ),
     ] {
@@ -3872,19 +4171,21 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
     }
 
     let model = get_model("openai", "gpt-5.5").expect("gpt-5.5");
+    // 100k input tokens keep the request below the 272k long-context pricing
+    // tier so only the service-tier multiplier is under test.
     let usage = parse_openai_responses_usage(
         &json!({
-            "input_tokens": 1_000_000,
-            "output_tokens": 1_000_000,
-            "total_tokens": 2_000_000,
+            "input_tokens": 100_000,
+            "output_tokens": 100_000,
+            "total_tokens": 200_000,
             "input_tokens_details": { "cached_tokens": 0 }
         }),
         &model,
         Some("priority"),
     );
-    assert_cost_close("gpt-5.5 priority input cost", usage.cost.input, 12.5);
-    assert_cost_close("gpt-5.5 priority output cost", usage.cost.output, 75.0);
-    assert_cost_close("gpt-5.5 priority total cost", usage.cost.total, 87.5);
+    assert_cost_close("gpt-5.5 priority input cost", usage.cost.input, 1.25);
+    assert_cost_close("gpt-5.5 priority output cost", usage.cost.output, 7.5);
+    assert_cost_close("gpt-5.5 priority total cost", usage.cost.total, 8.75);
 }
 
 #[test]
@@ -3912,6 +4213,7 @@ fn openai_and_azure_o_series_model_metadata_matches_generated_catalog() {
                 output: 60.0,
                 cache_read: 7.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3921,6 +4223,7 @@ fn openai_and_azure_o_series_model_metadata_matches_generated_catalog() {
                 output: 600.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3930,6 +4233,7 @@ fn openai_and_azure_o_series_model_metadata_matches_generated_catalog() {
                 output: 8.0,
                 cache_read: 0.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3939,6 +4243,7 @@ fn openai_and_azure_o_series_model_metadata_matches_generated_catalog() {
                 output: 40.0,
                 cache_read: 2.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3948,6 +4253,7 @@ fn openai_and_azure_o_series_model_metadata_matches_generated_catalog() {
                 output: 4.4,
                 cache_read: 0.55,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3957,6 +4263,7 @@ fn openai_and_azure_o_series_model_metadata_matches_generated_catalog() {
                 output: 80.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3966,6 +4273,7 @@ fn openai_and_azure_o_series_model_metadata_matches_generated_catalog() {
                 output: 4.4,
                 cache_read: 0.28,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -3975,6 +4283,7 @@ fn openai_and_azure_o_series_model_metadata_matches_generated_catalog() {
                 output: 8.0,
                 cache_read: 0.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
     ] {
@@ -4104,6 +4413,7 @@ fn fireworks_and_together_model_metadata_match_provider_catalog() {
             output: 4.0,
             cache_read: 0.16,
             cache_write: 0.0,
+            tiers: Vec::new(),
         }
     );
     assert_eq!(
@@ -4151,6 +4461,7 @@ fn fireworks_and_together_model_metadata_match_provider_catalog() {
             output: 4.5,
             cache_read: 0.2,
             cache_write: 0.0,
+            tiers: Vec::new(),
         }
     );
     assert_eq!(
@@ -4181,6 +4492,7 @@ fn fireworks_and_together_model_metadata_match_provider_catalog() {
             output: 0.6,
             cache_read: 0.0,
             cache_write: 0.0,
+            tiers: Vec::new(),
         }
     );
     assert_eq!(
@@ -4215,6 +4527,7 @@ fn fireworks_and_together_model_metadata_match_provider_catalog() {
             output: 4.4,
             cache_read: 0.2,
             cache_write: 0.0,
+            tiers: Vec::new(),
         }
     );
     assert_eq!(
@@ -4255,6 +4568,7 @@ fn fireworks_and_together_model_metadata_match_provider_catalog() {
             output: 1.2,
             cache_read: 0.06,
             cache_write: 0.0,
+            tiers: Vec::new(),
         }
     );
     assert_eq!(
@@ -4337,6 +4651,7 @@ fn cloudflare_workers_ai_model_metadata_matches_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -4350,6 +4665,7 @@ fn cloudflare_workers_ai_model_metadata_matches_generated_catalog() {
                 output: 0.85,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -4363,6 +4679,7 @@ fn cloudflare_workers_ai_model_metadata_matches_generated_catalog() {
                 output: 3.0,
                 cache_read: 0.1,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -4376,6 +4693,7 @@ fn cloudflare_workers_ai_model_metadata_matches_generated_catalog() {
                 output: 4.0,
                 cache_read: 0.16,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -4389,6 +4707,7 @@ fn cloudflare_workers_ai_model_metadata_matches_generated_catalog() {
                 output: 1.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -4402,6 +4721,7 @@ fn cloudflare_workers_ai_model_metadata_matches_generated_catalog() {
                 output: 0.75,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -4415,6 +4735,7 @@ fn cloudflare_workers_ai_model_metadata_matches_generated_catalog() {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -4428,6 +4749,7 @@ fn cloudflare_workers_ai_model_metadata_matches_generated_catalog() {
                 output: 0.4,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
     ] {
@@ -4561,6 +4883,7 @@ fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
                 output: 10.0,
                 cache_read: 0.13,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             false,
         ),
@@ -4572,6 +4895,7 @@ fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             false,
         ),
@@ -4583,6 +4907,7 @@ fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             true,
         ),
@@ -4594,6 +4919,7 @@ fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             true,
         ),
@@ -4605,6 +4931,7 @@ fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             true,
         ),
@@ -4616,6 +4943,7 @@ fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
                 output: 15.0,
                 cache_read: 0.25,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             true,
         ),
@@ -4627,6 +4955,7 @@ fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
                 output: 30.0,
                 cache_read: 0.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             true,
         ),
@@ -4770,6 +5099,7 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
                 output: 2.5,
                 cache_read: 0.03,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             65_536,
@@ -4781,6 +5111,7 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
             },
             200_000,
             64_000,
@@ -4792,6 +5123,7 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             400_000,
             128_000,
@@ -4825,6 +5157,7 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
             output: 3.0,
             cache_read: 0.1,
             cache_write: 0.0,
+            tiers: Vec::new(),
         }
     );
     assert_eq!(huggingface_kimi.context_window, 262_144);
@@ -4854,6 +5187,7 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
                 output: 3.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             "{provider}"
         );
@@ -4929,6 +5263,7 @@ fn opencode_model_metadata_and_env_key_match_provider_catalog() {
             output: 15.0,
             cache_read: 0.3,
             cache_write: 3.75,
+            tiers: Vec::new(),
         }
     );
 
@@ -5014,6 +5349,7 @@ fn openrouter_image_model_registry_matches_generated_catalog() {
             output: 2.5,
             cache_read: 0.03,
             cache_write: 0.08333333333333334,
+            tiers: Vec::new(),
         }
     );
     assert_eq!(get_image_providers(), vec!["openrouter".to_owned()]);
@@ -8798,6 +9134,7 @@ fn mistral_payload_preserves_image_tool_results_for_vision_models() {
                 ],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: 2,
             }),
         ],
@@ -9782,6 +10119,7 @@ fn bedrock_payload_preserves_image_tool_results_in_converse_messages() {
                 ],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: 2,
             }),
         ],
@@ -10208,7 +10546,11 @@ fn azure_openai_model_metadata_matches_generated_gpt5_catalog() {
             "{model_id} context"
         );
         assert_eq!(azure.max_tokens, openai.max_tokens, "{model_id} output");
-        assert_eq!(azure.cost, openai.cost, "{model_id} cost");
+        // Azure shares OpenAI base rates but does not receive the OpenAI
+        // long-context pricing tiers.
+        let mut expected_cost = openai.cost.clone();
+        expected_cost.tiers = Vec::new();
+        assert_eq!(azure.cost, expected_cost, "{model_id} cost");
 
         let mut expected_thinking_map = BTreeMap::from([(ThinkingLevel::Off, None)]);
         if openai
@@ -10779,6 +11121,7 @@ fn google_image_tool_context(model: &Model) -> Context {
                 content: vec![ToolResultContent::text("alpha text")],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: 2,
             }),
             Message::ToolResult(ToolResultMessage {
@@ -10790,6 +11133,7 @@ fn google_image_tool_context(model: &Model) -> Context {
                 })],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: 3,
             }),
             Message::ToolResult(ToolResultMessage {
@@ -10798,6 +11142,7 @@ fn google_image_tool_context(model: &Model) -> Context {
                 content: vec![ToolResultContent::text("beta text")],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: 4,
             }),
         ],
@@ -11410,6 +11755,7 @@ fn message_transform_normalizes_cross_provider_tool_call_ids() {
             content: vec![ToolResultContent::text("hello")],
             details: None,
             is_error: false,
+            added_tool_names: None,
             timestamp: 2,
         }),
     ];
@@ -11494,6 +11840,7 @@ fn message_transform_copilot_openai_to_anthropic_downgrades_thinking_and_signatu
             content: vec![ToolResultContent::text("output")],
             details: None,
             is_error: false,
+            added_tool_names: None,
             timestamp: 2,
         }),
     ];
@@ -11694,6 +12041,7 @@ fn message_transform_synthesizes_only_missing_trailing_tool_results_after_normal
             content: vec![ToolResultContent::text("done")],
             details: None,
             is_error: false,
+            added_tool_names: None,
             timestamp: 2,
         }),
     ];
@@ -11999,6 +12347,7 @@ fn anthropic_sse_parser_preserves_response_id_and_initial_input_usage() {
         output: 4.0,
         cache_read: 0.5,
         cache_write: 3.0,
+        tiers: Vec::new(),
     };
     let body = anthropic_sse_body(vec![
         (
@@ -12759,6 +13108,7 @@ fn anthropic_payload_preserves_assistant_tool_use_and_image_tool_results() {
                 ],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: 2,
             }),
             Message::ToolResult(ToolResultMessage {
@@ -12770,6 +13120,7 @@ fn anthropic_payload_preserves_assistant_tool_use_and_image_tool_results() {
                 })],
                 details: None,
                 is_error: true,
+                added_tool_names: None,
                 timestamp: 3,
             }),
         ],
@@ -13422,6 +13773,7 @@ fn openai_responses_message_conversion_hashes_foreign_tool_item_ids() {
                 content: vec![ToolResultContent::text("ok")],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: 2,
             }),
         ],
@@ -13493,6 +13845,7 @@ fn openai_responses_message_conversion_keeps_tool_result_images_in_function_outp
                 ],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: 2,
             }),
         ],
@@ -14337,6 +14690,7 @@ fn openai_responses_payload_omits_function_call_item_id_for_same_provider_model_
                     content: vec![ToolResultContent::text("42")],
                     details: None,
                     is_error: false,
+                    added_tool_names: None,
                     timestamp: 3,
                 }),
                 Message::User(UserMessage {
@@ -14416,6 +14770,7 @@ fn openai_responses_payload_handles_cross_provider_anthropic_tool_handoff() {
                     content: vec![ToolResultContent::text("42")],
                     details: None,
                     is_error: false,
+                    added_tool_names: None,
                     timestamp: 3,
                 }),
                 Message::User(UserMessage {
@@ -14457,6 +14812,108 @@ fn openai_responses_payload_handles_cross_provider_anthropic_tool_handoff() {
 }
 
 #[test]
+fn calculate_cost_applies_request_wide_pricing_tiers_above_input_threshold() {
+    let mut model = get_model("openai", "gpt-5-mini").expect("openai model");
+    model.cost = ModelCost {
+        input: 5.0,
+        output: 30.0,
+        cache_read: 0.5,
+        cache_write: 6.25,
+        tiers: vec![ModelCostTier {
+            input_tokens_above: 272_000,
+            input: 10.0,
+            output: 45.0,
+            cache_read: 1.0,
+            cache_write: 12.5,
+        }],
+    };
+    let create_usage = |cache_write: u64| Usage {
+        input: 200_000,
+        output: 100_000,
+        cache_read: 72_000,
+        cache_write,
+        reasoning: None,
+        total_tokens: 372_000 + cache_write,
+        cost: UsageCost::default(),
+    };
+
+    let mut short_usage = create_usage(0);
+    let short = calculate_cost(&model, &mut short_usage);
+    assert_eq!(short.input, 1.0);
+    assert_eq!(short.output, 3.0);
+    assert_eq!(short.cache_read, 0.036);
+    assert_eq!(short.cache_write, 0.0);
+
+    let mut long_usage = create_usage(1);
+    let long = calculate_cost(&model, &mut long_usage);
+    assert_eq!(long.input, 2.0);
+    assert_eq!(long.output, 4.5);
+    assert_eq!(long.cache_read, 0.072);
+    assert_eq!(long.cache_write, 0.000_012_5);
+}
+
+#[test]
+fn openai_and_codex_gpt55_generation_models_carry_long_context_pricing_tiers() {
+    let expected_tier = |input: f64, output: f64, cache_read: f64| ModelCostTier {
+        input_tokens_above: 272_000,
+        input,
+        output,
+        cache_read,
+        cache_write: 0.0,
+    };
+    for (provider, model_id, input, output, cache_read) in [
+        ("openai", "gpt-5.4", 5.0, 22.5, 0.5),
+        ("openai", "gpt-5.4-pro", 60.0, 270.0, 0.0),
+        ("openai", "gpt-5.5", 10.0, 45.0, 1.0),
+        ("openai", "gpt-5.5-pro", 60.0, 270.0, 0.0),
+        ("openai-codex", "gpt-5.4", 5.0, 22.5, 0.5),
+        ("openai-codex", "gpt-5.5", 10.0, 45.0, 1.0),
+    ] {
+        let model = get_model(provider, model_id).expect(model_id);
+        assert_eq!(
+            model.cost.tiers,
+            vec![expected_tier(input, output, cache_read)],
+            "{provider} {model_id} tiers"
+        );
+    }
+
+    for model_id in ["gpt-5.4-mini", "gpt-5.4-nano"] {
+        let model = get_model("openai", model_id).expect(model_id);
+        assert!(
+            model.cost.tiers.is_empty(),
+            "{model_id} must not have tiers"
+        );
+    }
+    for model_id in ["gpt-5.4", "gpt-5.5"] {
+        let model = get_model("azure-openai-responses", model_id).expect(model_id);
+        assert!(
+            model.cost.tiers.is_empty(),
+            "azure {model_id} must not have tiers"
+        );
+    }
+}
+
+#[test]
+fn openai_responses_usage_reads_cache_write_tokens_from_input_details() {
+    let model = get_model("openai", "gpt-5-mini").expect("openai model");
+    let usage = parse_openai_responses_usage(
+        &json!({
+            "input_tokens": 100,
+            "output_tokens": 7,
+            "total_tokens": 107,
+            "input_tokens_details": { "cached_tokens": 20, "cache_write_tokens": 30 }
+        }),
+        &model,
+        None,
+    );
+    assert_eq!(usage.input, 50);
+    assert_eq!(usage.cache_read, 20);
+    assert_eq!(usage.cache_write, 30);
+    assert_eq!(usage.total_tokens, 107);
+    assert_usage_total_matches_components("openai responses cache write", &usage);
+}
+
+#[test]
 fn openai_responses_usage_applies_service_tier_cost_multiplier() {
     for (model_id, service_tier, multiplier) in [
         ("gpt-5.4", "priority", 2.0),
@@ -14464,26 +14921,36 @@ fn openai_responses_usage_applies_service_tier_cost_multiplier() {
         ("gpt-5.5", "flex", 0.5),
     ] {
         let model = get_model("openai", model_id).expect("model");
+        // Keep the request below the 272k long-context pricing threshold so
+        // only the service-tier multiplier is under test.
+        let token_count = 100_000_u64;
+        let token_scale = token_count as f64 / 1_000_000.0;
         let usage = parse_openai_responses_usage(
             &json!({
-                "input_tokens": 1_000_000,
-                "output_tokens": 1_000_000,
-                "total_tokens": 2_000_000,
+                "input_tokens": token_count,
+                "output_tokens": token_count,
+                "total_tokens": token_count * 2,
                 "input_tokens_details": { "cached_tokens": 0 }
             }),
             &model,
             Some(service_tier),
         );
 
-        assert_eq!(usage.input, 1_000_000);
-        assert_eq!(usage.output, 1_000_000);
-        assert_eq!(usage.total_tokens, 2_000_000);
+        assert_eq!(usage.input, token_count);
+        assert_eq!(usage.output, token_count);
+        assert_eq!(usage.total_tokens, token_count * 2);
         assert_usage_total_matches_components("openai responses service tier", &usage);
-        assert_eq!(usage.cost.input, model.cost.input * multiplier);
-        assert_eq!(usage.cost.output, model.cost.output * multiplier);
+        assert_eq!(
+            usage.cost.input,
+            model.cost.input * multiplier * token_scale
+        );
+        assert_eq!(
+            usage.cost.output,
+            model.cost.output * multiplier * token_scale
+        );
         assert_eq!(
             usage.cost.total,
-            (model.cost.input + model.cost.output) * multiplier
+            (model.cost.input + model.cost.output) * multiplier * token_scale
         );
     }
 }
@@ -15488,6 +15955,7 @@ fn openai_codex_responses_usage_uses_client_tier_when_response_echoes_default() 
             output: 2.0,
             cache_read: 0.0,
             cache_write: 0.0,
+            tiers: Vec::new(),
         };
         let usage = parse_openai_codex_responses_usage(
             &json!({
@@ -15612,6 +16080,7 @@ fn openai_completions_payload_omits_empty_tools_unless_tool_history_exists() {
                     content: vec![ToolResultContent::text("done")],
                     details: None,
                     is_error: false,
+                    added_tool_names: None,
                     timestamp: 2,
                 }),
             ],
@@ -15877,6 +16346,7 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
                 output: 0.28,
                 cache_read: 0.0028,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
         (
@@ -15886,6 +16356,7 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
                 output: 0.87,
                 cache_read: 0.003625,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         ),
     ] {
@@ -17516,6 +17987,7 @@ fn openai_completions_messages_batch_tool_result_images_after_tool_results() {
             ],
             details: None,
             is_error: false,
+            added_tool_names: None,
             timestamp,
         })
     };
@@ -17797,6 +18269,7 @@ async fn faux_provider_registers_and_estimates_usage() {
                 content: vec![ToolResultContent::text("tool out")],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: 2,
             }),
         ],
@@ -19410,7 +19883,7 @@ async fn builtin_openai_completions_provider_applies_response_hooks() {
 }
 
 #[tokio::test]
-async fn builtin_openai_responses_simple_provider_applies_default_max_output_tokens() {
+async fn builtin_openai_responses_simple_provider_applies_context_clamped_default_max_tokens() {
     let sse = concat!(
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_default_max\"}}\n\n",
         "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_default_max\"}}\n\n",
@@ -19432,7 +19905,8 @@ async fn builtin_openai_responses_simple_provider_applies_default_max_output_tok
     let request = request_task.await.expect("request task");
 
     assert_eq!(text_of(&message), Some("Default max"));
-    assert!(request.contains("\"max_output_tokens\":32000"));
+    // model.max_tokens clamped to the remaining context: 128000 - 2 - 4096.
+    assert!(request.contains("\"max_output_tokens\":123902"));
 }
 
 #[tokio::test]
@@ -19653,7 +20127,7 @@ async fn builtin_openai_responses_provider_prices_requested_service_tier_without
         "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_service_tier\"}}\n\n",
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n",
         "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_service_tier\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hi\"}]}}\n\n",
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_service_tier\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1000000,\"output_tokens\":1000000,\"total_tokens\":2000000}}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_service_tier\",\"status\":\"completed\",\"usage\":{\"input_tokens\":100000,\"output_tokens\":100000,\"total_tokens\":200000}}}\n\n",
     );
     let (base_url, request_task) = mock_sse_server(sse).await;
     let mut model = get_model("openai", "gpt-5.5").expect("model");
@@ -19671,18 +20145,19 @@ async fn builtin_openai_responses_provider_prices_requested_service_tier_without
     let request = request_task.await.expect("request task");
 
     assert_eq!(text_of(&message), Some("Hi"));
-    assert_eq!(message.usage.input, 1_000_000);
-    assert_eq!(message.usage.output, 1_000_000);
+    assert_eq!(message.usage.input, 100_000);
+    assert_eq!(message.usage.output, 100_000);
     assert!(request.contains("\"service_tier\":\"priority\""));
+    // 100k tokens keep the request below the 272k long-context pricing tier.
     assert_cost_close(
         "openai responses request service tier input cost",
         message.usage.cost.input,
-        model.cost.input * 2.5,
+        model.cost.input * 2.5 * 0.1,
     );
     assert_cost_close(
         "openai responses request service tier output cost",
         message.usage.cost.output,
-        model.cost.output * 2.5,
+        model.cost.output * 2.5 * 0.1,
     );
 }
 
@@ -20330,6 +20805,7 @@ async fn builtin_anthropic_provider_posts_json_and_parses_sse() {
         output: 20.0,
         cache_read: 1.0,
         cache_write: 5.0,
+        tiers: Vec::new(),
     };
     let mut options = SimpleStreamOptions::default();
     options.stream.api_key = Some("anthropic-key".to_owned());
@@ -21298,7 +21774,7 @@ async fn builtin_openai_codex_provider_prices_requested_service_tier_when_respon
         "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"id\":\"msg_codex_service_tier\"}}\n\n",
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Code\"}\n\n",
         "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_codex_service_tier\",\"content\":[{\"type\":\"output_text\",\"text\":\"Code\"}]}}\n\n",
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_codex_service_tier\",\"status\":\"completed\",\"service_tier\":\"default\",\"usage\":{\"input_tokens\":1000000,\"output_tokens\":1000000,\"total_tokens\":2000000}}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_codex_service_tier\",\"status\":\"completed\",\"service_tier\":\"default\",\"usage\":{\"input_tokens\":100000,\"output_tokens\":100000,\"total_tokens\":200000}}}\n\n",
     );
     let (base_url, request_task) = mock_sse_server(sse).await;
     let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
@@ -21318,19 +21794,20 @@ async fn builtin_openai_codex_provider_prices_requested_service_tier_when_respon
     let request = request_task.await.expect("request task");
 
     assert_eq!(text_of(&message), Some("Code"));
-    assert_eq!(message.usage.input, 1_000_000);
-    assert_eq!(message.usage.output, 1_000_000);
+    assert_eq!(message.usage.input, 100_000);
+    assert_eq!(message.usage.output, 100_000);
     assert!(request.starts_with("POST /codex/responses HTTP/1.1"));
     assert!(request.contains("\"service_tier\":\"priority\""));
+    // 100k tokens keep the request below the 272k long-context pricing tier.
     assert_cost_close(
         "openai codex request service tier input cost",
         message.usage.cost.input,
-        model.cost.input * 2.5,
+        model.cost.input * 2.5 * 0.1,
     );
     assert_cost_close(
         "openai codex request service tier output cost",
         message.usage.cost.output,
-        model.cost.output * 2.5,
+        model.cost.output * 2.5 * 0.1,
     );
 }
 

@@ -58,10 +58,33 @@ pub fn reset_models() {
 }
 
 pub fn calculate_cost(model: &Model, usage: &mut Usage) -> UsageCost {
-    usage.cost.input = (model.cost.input / 1_000_000.0) * usage.input as f64;
-    usage.cost.output = (model.cost.output / 1_000_000.0) * usage.output as f64;
-    usage.cost.cache_read = (model.cost.cache_read / 1_000_000.0) * usage.cache_read as f64;
-    usage.cost.cache_write = (model.cost.cache_write / 1_000_000.0) * usage.cache_write as f64;
+    // Request-wide pricing tiers: the highest matching input threshold applies
+    // to the full request.
+    let input_tokens = usage
+        .input
+        .saturating_add(usage.cache_read)
+        .saturating_add(usage.cache_write);
+    let mut rates = (
+        model.cost.input,
+        model.cost.output,
+        model.cost.cache_read,
+        model.cost.cache_write,
+    );
+    let mut matched_threshold: Option<u64> = None;
+    for tier in &model.cost.tiers {
+        if input_tokens > tier.input_tokens_above
+            && matched_threshold.is_none_or(|threshold| tier.input_tokens_above > threshold)
+        {
+            rates = (tier.input, tier.output, tier.cache_read, tier.cache_write);
+            matched_threshold = Some(tier.input_tokens_above);
+        }
+    }
+    let (input_rate, output_rate, cache_read_rate, cache_write_rate) = rates;
+
+    usage.cost.input = (input_rate / 1_000_000.0) * usage.input as f64;
+    usage.cost.output = (output_rate / 1_000_000.0) * usage.output as f64;
+    usage.cost.cache_read = (cache_read_rate / 1_000_000.0) * usage.cache_read as f64;
+    usage.cost.cache_write = (cache_write_rate / 1_000_000.0) * usage.cache_write as f64;
     usage.cost.total =
         usage.cost.input + usage.cost.output + usage.cost.cache_read + usage.cost.cache_write;
     usage.cost.clone()
@@ -585,6 +608,7 @@ fn apply_known_model_overrides(model: &mut Model) {
                 output: 4.0,
                 cache_read: 0.16,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
         } else if matches!(
             model.id.as_str(),
@@ -617,30 +641,35 @@ fn apply_known_model_overrides(model: &mut Model) {
                     output: 10.0,
                     cache_read: 0.13,
                     cache_write: 0.0,
+                    tiers: Vec::new(),
                 },
                 "gpt-5.1-codex" => ModelCost {
                     input: 1.25,
                     output: 10.0,
                     cache_read: 0.125,
                     cache_write: 0.0,
+                    tiers: Vec::new(),
                 },
                 "gpt-5.4" => ModelCost {
                     input: 2.5,
                     output: 15.0,
                     cache_read: 0.25,
                     cache_write: 0.0,
+                    tiers: Vec::new(),
                 },
                 "gpt-5.5" => ModelCost {
                     input: 5.0,
                     output: 30.0,
                     cache_read: 0.5,
                     cache_write: 0.0,
+                    tiers: Vec::new(),
                 },
                 _ => ModelCost {
                     input: 1.75,
                     output: 14.0,
                     cache_read: 0.175,
                     cache_write: 0.0,
+                    tiers: Vec::new(),
                 },
             };
         } else if model.id == "claude-sonnet-4-5" {
@@ -653,6 +682,7 @@ fn apply_known_model_overrides(model: &mut Model) {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             };
         }
     }
@@ -778,6 +808,7 @@ fn apply_known_model_overrides(model: &mut Model) {
                 output: 0.6,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
         }
         ("mistral", "mistral-medium-2604")
@@ -792,6 +823,7 @@ fn apply_known_model_overrides(model: &mut Model) {
                 output: 7.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
         }
         ("fireworks", "accounts/fireworks/models/kimi-k2p6") => {
@@ -806,6 +838,7 @@ fn apply_known_model_overrides(model: &mut Model) {
                 output: 4.0,
                 cache_read: 0.16,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
             model.compat = Some(json!({
                 "sendSessionAffinityHeaders": true,
@@ -852,6 +885,7 @@ fn apply_known_model_overrides(model: &mut Model) {
                 output: 4.5,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
             model.compat = Some(json!({
                 "supportsStore": false,
@@ -879,6 +913,7 @@ fn apply_known_model_overrides(model: &mut Model) {
                 output: 0.6,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
             model.compat = Some(json!({
                 "supportsStore": false,
@@ -911,6 +946,7 @@ fn apply_known_model_overrides(model: &mut Model) {
                 output: 4.4,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
             model.compat = Some(json!({
                 "supportsStore": false,
@@ -940,6 +976,7 @@ fn apply_known_model_overrides(model: &mut Model) {
                 output: 1.2,
                 cache_read: 0.06,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
             model.compat = Some(json!({
                 "supportsStore": false,
@@ -973,29 +1010,41 @@ fn apply_known_model_overrides(model: &mut Model) {
             model.context_window = 272_000;
             model.max_tokens = 128_000;
             model.cost = match model.id.as_str() {
-                "gpt-5.4" => ModelCost {
-                    input: 2.5,
-                    output: 15.0,
-                    cache_read: 0.25,
-                    cache_write: 0.0,
-                },
+                "gpt-5.4" => {
+                    let mut cost = ModelCost {
+                        input: 2.5,
+                        output: 15.0,
+                        cache_read: 0.25,
+                        cache_write: 0.0,
+                        tiers: Vec::new(),
+                    };
+                    with_openai_long_context_pricing(&mut cost);
+                    cost
+                }
                 "gpt-5.4-mini" => ModelCost {
                     input: 0.75,
                     output: 4.5,
                     cache_read: 0.075,
                     cache_write: 0.0,
+                    tiers: Vec::new(),
                 },
-                "gpt-5.5" => ModelCost {
-                    input: 5.0,
-                    output: 30.0,
-                    cache_read: 0.5,
-                    cache_write: 0.0,
-                },
+                "gpt-5.5" => {
+                    let mut cost = ModelCost {
+                        input: 5.0,
+                        output: 30.0,
+                        cache_read: 0.5,
+                        cache_write: 0.0,
+                        tiers: Vec::new(),
+                    };
+                    with_openai_long_context_pricing(&mut cost);
+                    cost
+                }
                 _ => ModelCost {
                     input: 1.75,
                     output: 14.0,
                     cache_read: 0.175,
                     cache_write: 0.0,
+                    tiers: Vec::new(),
                 },
             };
             if model.id == "gpt-5.3-codex-spark" {
@@ -1023,12 +1072,14 @@ fn apply_deepseek_generated_metadata(model: &mut Model) -> bool {
             output: 0.28,
             cache_read: 0.0028,
             cache_write: 0.0,
+            tiers: Vec::new(),
         }),
         "deepseek-v4-pro" => Some(ModelCost {
             input: 0.435,
             output: 0.87,
             cache_read: 0.003625,
             cache_write: 0.0,
+            tiers: Vec::new(),
         }),
         _ => None,
     }) else {
@@ -1072,6 +1123,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 0.3,
                 cache_read: 0.01875,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -1085,6 +1137,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 0.15,
                 cache_read: 0.01,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -1098,6 +1151,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 5.0,
                 cache_read: 0.3125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -1111,6 +1165,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 0.4,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             8_192,
@@ -1124,6 +1179,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             8_192,
@@ -1137,6 +1193,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 2.5,
                 cache_read: 0.03,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1150,6 +1207,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 0.4,
                 cache_read: 0.01,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1163,6 +1221,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 0.4,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1176,6 +1235,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 0.6,
                 cache_read: 0.0375,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1189,6 +1249,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 2.5,
                 cache_read: 0.075,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1202,6 +1263,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1215,6 +1277,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 10.0,
                 cache_read: 0.31,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1228,6 +1291,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 3.0,
                 cache_read: 0.05,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1241,6 +1305,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 12.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             64_000,
@@ -1254,6 +1319,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 1.5,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1267,6 +1333,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 12.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1280,6 +1347,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 2.5,
                 cache_read: 0.075,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1293,6 +1361,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 0.4,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1306,6 +1375,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             8_000,
@@ -1319,6 +1389,7 @@ fn apply_google_generated_metadata(model: &mut Model) -> bool {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             65_536,
@@ -1364,6 +1435,7 @@ fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
                 output: 0.3,
                 cache_read: 0.01875,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -1376,6 +1448,7 @@ fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
                 output: 0.15,
                 cache_read: 0.01,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -1388,6 +1461,7 @@ fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
                 output: 5.0,
                 cache_read: 0.3125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             8_192,
@@ -1400,6 +1474,7 @@ fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
                 output: 0.6,
                 cache_read: 0.0375,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             8_192,
@@ -1412,6 +1487,7 @@ fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
                 output: 0.3,
                 cache_read: 0.01875,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1424,6 +1500,7 @@ fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
                 output: 2.5,
                 cache_read: 0.03,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1436,6 +1513,7 @@ fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
                 output: 0.4,
                 cache_read: 0.01,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1448,6 +1526,7 @@ fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1460,6 +1539,7 @@ fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
                 output: 3.0,
                 cache_read: 0.05,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1472,6 +1552,7 @@ fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
                 output: 12.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             64_000,
@@ -1484,6 +1565,7 @@ fn apply_google_vertex_generated_metadata(model: &mut Model) -> bool {
                 output: 12.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_536,
@@ -1553,6 +1635,7 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 output: 10.0,
                 cache_read: 2.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "grok-2-vision" | "grok-2-vision-1212" | "grok-2-vision-latest" => Some((
@@ -1565,6 +1648,7 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 output: 10.0,
                 cache_read: 2.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "grok-3" => Some((
@@ -1577,6 +1661,7 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 output: 15.0,
                 cache_read: 0.75,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "grok-3-fast" => Some((
@@ -1589,6 +1674,7 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 output: 25.0,
                 cache_read: 1.25,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "grok-4.20-0309-non-reasoning" => Some((
@@ -1601,6 +1687,7 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 output: 6.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "grok-4.20-0309-reasoning" => Some((
@@ -1613,6 +1700,7 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 output: 6.0,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "grok-4.3" => Some((
@@ -1625,6 +1713,7 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 output: 2.5,
                 cache_read: 0.2,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "grok-beta" => Some((
@@ -1637,6 +1726,7 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 output: 15.0,
                 cache_read: 5.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "grok-code-fast-1" => Some((
@@ -1649,6 +1739,7 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 output: 1.5,
                 cache_read: 0.02,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "grok-vision-beta" => Some((
@@ -1661,6 +1752,7 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 output: 15.0,
                 cache_read: 5.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         _ => None,
@@ -1695,6 +1787,7 @@ fn apply_cloudflare_workers_ai_generated_metadata(model: &mut Model) -> bool {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "@cf/meta/llama-4-scout-17b-16e-instruct" => Some((
@@ -1707,6 +1800,7 @@ fn apply_cloudflare_workers_ai_generated_metadata(model: &mut Model) -> bool {
                 output: 0.85,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "@cf/moonshotai/kimi-k2.5" => Some((
@@ -1719,6 +1813,7 @@ fn apply_cloudflare_workers_ai_generated_metadata(model: &mut Model) -> bool {
                 output: 3.0,
                 cache_read: 0.1,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "@cf/moonshotai/kimi-k2.6" => Some((
@@ -1731,6 +1826,7 @@ fn apply_cloudflare_workers_ai_generated_metadata(model: &mut Model) -> bool {
                 output: 4.0,
                 cache_read: 0.16,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "@cf/nvidia/nemotron-3-120b-a12b" => Some((
@@ -1743,6 +1839,7 @@ fn apply_cloudflare_workers_ai_generated_metadata(model: &mut Model) -> bool {
                 output: 1.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "@cf/openai/gpt-oss-120b" => Some((
@@ -1755,6 +1852,7 @@ fn apply_cloudflare_workers_ai_generated_metadata(model: &mut Model) -> bool {
                 output: 0.75,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "@cf/openai/gpt-oss-20b" => Some((
@@ -1767,6 +1865,7 @@ fn apply_cloudflare_workers_ai_generated_metadata(model: &mut Model) -> bool {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "@cf/zai-org/glm-4.7-flash" => Some((
@@ -1779,6 +1878,7 @@ fn apply_cloudflare_workers_ai_generated_metadata(model: &mut Model) -> bool {
                 output: 0.4,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         _ => None,
@@ -1815,6 +1915,7 @@ fn apply_cerebras_generated_metadata(model: &mut Model) -> bool {
                 output: 0.69,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "llama3.1-8b" => Some((
@@ -1826,6 +1927,7 @@ fn apply_cerebras_generated_metadata(model: &mut Model) -> bool {
                 output: 0.1,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "qwen-3-235b-a22b-instruct-2507" => Some((
@@ -1837,6 +1939,7 @@ fn apply_cerebras_generated_metadata(model: &mut Model) -> bool {
                 output: 1.2,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         "zai-glm-4.7" => Some((
@@ -1848,6 +1951,7 @@ fn apply_cerebras_generated_metadata(model: &mut Model) -> bool {
                 output: 2.75,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         )),
         _ => None,
@@ -1873,12 +1977,14 @@ fn apply_minimax_generated_metadata(model: &mut Model) -> bool {
             output: 1.2,
             cache_read: 0.06,
             cache_write: 0.375,
+            tiers: Vec::new(),
         }),
         "MiniMax-M2.7-highspeed" => Some(ModelCost {
             input: 0.6,
             output: 2.4,
             cache_read: 0.06,
             cache_write: 0.375,
+            tiers: Vec::new(),
         }),
         _ => None,
     }) else {
@@ -1906,6 +2012,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
             },
             1_000_000,
             128_000,
@@ -1918,6 +2025,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
             1_000_000,
             64_000,
@@ -1930,6 +2038,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 0.8899999999999999,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             163_840,
             16_384,
@@ -1942,6 +2051,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 2.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             163_840,
             16_000,
@@ -1954,6 +2064,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 0.378,
                 cache_read: 0.0252,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             65_536,
@@ -1966,6 +2077,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 0.224,
                 cache_read: 0.022,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_048_576,
             4_096,
@@ -1978,6 +2090,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 0.39999999999999997,
                 cache_read: 0.024999999999999998,
                 cache_write: 0.08333333333333334,
+                tiers: Vec::new(),
             },
             1_048_576,
             8_192,
@@ -1990,6 +2103,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 2.5,
                 cache_read: 0.03,
                 cache_write: 0.08333333333333334,
+                tiers: Vec::new(),
             },
             1_048_576,
             65_535,
@@ -2002,6 +2116,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             10_000_000,
             16_384,
@@ -2014,6 +2129,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 1.5,
                 cache_read: 0.049999999999999996,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             4_096,
@@ -2026,6 +2142,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 0.19999999999999998,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             16_384,
@@ -2038,6 +2155,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             400_000,
             128_000,
@@ -2050,6 +2168,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 1.56,
                 cache_read: 0.0,
                 cache_write: 0.325,
+                tiers: Vec::new(),
             },
             1_000_000,
             65_536,
@@ -2062,6 +2181,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
                 output: 1.7999999999999998,
                 cache_read: 0.11,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             65_536,
             16_384,
@@ -2128,6 +2248,7 @@ fn apply_vercel_ai_gateway_generated_metadata(model: &mut Model) -> bool {
                 output: 2.5,
                 cache_read: 0.03,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             1_000_000,
             65_536,
@@ -2138,6 +2259,7 @@ fn apply_vercel_ai_gateway_generated_metadata(model: &mut Model) -> bool {
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
             },
             200_000,
             64_000,
@@ -2148,6 +2270,7 @@ fn apply_vercel_ai_gateway_generated_metadata(model: &mut Model) -> bool {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             400_000,
             128_000,
@@ -2212,6 +2335,7 @@ fn apply_huggingface_generated_metadata(model: &mut Model) -> bool {
         output: 3.0,
         cache_read: 0.1,
         cache_write: 0.0,
+        tiers: Vec::new(),
     };
     model.context_window = 262_144;
     model.max_tokens = 262_144;
@@ -2234,6 +2358,7 @@ fn apply_xiaomi_generated_metadata(model: &mut Model) -> bool {
         output: 3.0,
         cache_read: 0.2,
         cache_write: 0.0,
+        tiers: Vec::new(),
     };
     model.context_window = 1_048_576;
     model.max_tokens = 131_072;
@@ -2251,6 +2376,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 0.9,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             256_000,
             4_096,
@@ -2263,6 +2389,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -2275,6 +2402,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -2287,6 +2415,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -2300,6 +2429,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 5.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             16_384,
@@ -2312,6 +2442,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 1.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -2324,6 +2455,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 0.04,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -2336,6 +2468,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 0.1,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -2348,6 +2481,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 6.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             16_384,
@@ -2360,6 +2494,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 1.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -2372,6 +2507,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             131_072,
@@ -2384,6 +2520,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -2396,6 +2533,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 7.5,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             262_144,
@@ -2408,6 +2546,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 0.15,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -2420,6 +2559,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             16_384,
@@ -2432,6 +2572,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 0.6,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             256_000,
             256_000,
@@ -2444,6 +2585,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 0.25,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             8_000,
             8_000,
@@ -2456,6 +2598,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 6.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             64_000,
             64_000,
@@ -2468,6 +2611,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 0.7,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             32_000,
             32_000,
@@ -2480,6 +2624,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 0.15,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -2492,6 +2637,7 @@ fn apply_mistral_generated_metadata(model: &mut Model) -> bool {
                 output: 6.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             128_000,
             128_000,
@@ -2528,6 +2674,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.99,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             8_192,
@@ -2541,6 +2688,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.2,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             8_192,
             8_192,
@@ -2557,6 +2705,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.08,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             131_072,
@@ -2570,6 +2719,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.79,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             32_768,
@@ -2583,6 +2733,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.79,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             8_192,
             8_192,
@@ -2596,6 +2747,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.08,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             8_192,
             8_192,
@@ -2609,6 +2761,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.6,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             8_192,
@@ -2622,6 +2775,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.34,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             8_192,
@@ -2635,6 +2789,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.79,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             32_768,
             32_768,
@@ -2648,6 +2803,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 3.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             16_384,
@@ -2661,6 +2817,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 3.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             262_144,
             16_384,
@@ -2674,6 +2831,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.6,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             65_536,
@@ -2687,6 +2845,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.3,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             65_536,
@@ -2700,6 +2859,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.3,
                 cache_read: 0.037,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             65_536,
@@ -2713,6 +2873,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.39,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             16_384,
@@ -2726,6 +2887,7 @@ fn apply_groq_generated_metadata(model: &mut Model) -> bool {
                 output: 0.59,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
             131_072,
             40_960,
@@ -2808,6 +2970,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 1.25,
                 cache_read: 0.03,
                 cache_write: 0.3,
+                tiers: Vec::new(),
             },
         }),
         "claude-3-opus-20240229" => Some(AnthropicGeneratedMetadata {
@@ -2820,6 +2983,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 75.0,
                 cache_read: 1.5,
                 cache_write: 18.75,
+                tiers: Vec::new(),
             },
         }),
         "claude-3-sonnet-20240229" => Some(AnthropicGeneratedMetadata {
@@ -2832,6 +2996,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 0.3,
+                tiers: Vec::new(),
             },
         }),
         "claude-3-5-haiku-20241022" | "claude-3-5-haiku-latest" => {
@@ -2845,6 +3010,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                     output: 4.0,
                     cache_read: 0.08,
                     cache_write: 1.0,
+                    tiers: Vec::new(),
                 },
             })
         }
@@ -2859,6 +3025,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                     output: 15.0,
                     cache_read: 0.3,
                     cache_write: 3.75,
+                    tiers: Vec::new(),
                 },
             })
         }
@@ -2872,6 +3039,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
         }),
         "claude-haiku-4-5" | "claude-haiku-4-5-20251001" => Some(AnthropicGeneratedMetadata {
@@ -2884,6 +3052,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 5.0,
                 cache_read: 0.1,
                 cache_write: 1.25,
+                tiers: Vec::new(),
             },
         }),
         "claude-opus-4-0"
@@ -2899,6 +3068,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 75.0,
                 cache_read: 1.5,
                 cache_write: 18.75,
+                tiers: Vec::new(),
             },
         }),
         "claude-opus-4-5" | "claude-opus-4-5-20251101" => Some(AnthropicGeneratedMetadata {
@@ -2911,6 +3081,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
             },
         }),
         "claude-opus-4-6" => Some(AnthropicGeneratedMetadata {
@@ -2923,6 +3094,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
             },
         }),
         "claude-opus-4-7" => Some(AnthropicGeneratedMetadata {
@@ -2935,6 +3107,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
             },
         }),
         "claude-sonnet-4-0"
@@ -2950,6 +3123,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
         }),
         "claude-sonnet-4-6" => Some(AnthropicGeneratedMetadata {
@@ -2962,6 +3136,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             },
         }),
         _ => None,
@@ -2986,6 +3161,7 @@ fn gpt4_generated_metadata(model_id: &str) -> Option<Gpt4GeneratedMetadata> {
                 output: 60.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-4-turbo" => Some(Gpt4GeneratedMetadata {
@@ -2997,6 +3173,7 @@ fn gpt4_generated_metadata(model_id: &str) -> Option<Gpt4GeneratedMetadata> {
                 output: 30.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-4.1" => Some(Gpt4GeneratedMetadata {
@@ -3008,6 +3185,7 @@ fn gpt4_generated_metadata(model_id: &str) -> Option<Gpt4GeneratedMetadata> {
                 output: 8.0,
                 cache_read: 0.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-4.1-mini" => Some(Gpt4GeneratedMetadata {
@@ -3019,6 +3197,7 @@ fn gpt4_generated_metadata(model_id: &str) -> Option<Gpt4GeneratedMetadata> {
                 output: 1.6,
                 cache_read: 0.1,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-4.1-nano" => Some(Gpt4GeneratedMetadata {
@@ -3030,6 +3209,7 @@ fn gpt4_generated_metadata(model_id: &str) -> Option<Gpt4GeneratedMetadata> {
                 output: 0.4,
                 cache_read: 0.03,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-4o" | "gpt-4o-2024-08-06" | "gpt-4o-2024-11-20" => Some(Gpt4GeneratedMetadata {
@@ -3041,6 +3221,7 @@ fn gpt4_generated_metadata(model_id: &str) -> Option<Gpt4GeneratedMetadata> {
                 output: 10.0,
                 cache_read: 1.25,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-4o-2024-05-13" => Some(Gpt4GeneratedMetadata {
@@ -3052,6 +3233,7 @@ fn gpt4_generated_metadata(model_id: &str) -> Option<Gpt4GeneratedMetadata> {
                 output: 15.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-4o-mini" => Some(Gpt4GeneratedMetadata {
@@ -3063,6 +3245,7 @@ fn gpt4_generated_metadata(model_id: &str) -> Option<Gpt4GeneratedMetadata> {
                 output: 0.6,
                 cache_read: 0.08,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         _ => None,
@@ -3092,6 +3275,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                     output: 10.0,
                     cache_read: 0.125,
                     cache_write: 0.0,
+                    tiers: Vec::new(),
                 },
             })
         }
@@ -3106,6 +3290,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5-mini" | "gpt-5.1-codex-mini" => Some(Gpt5GeneratedMetadata {
@@ -3119,6 +3304,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 2.0,
                 cache_read: 0.025,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5-nano" => Some(Gpt5GeneratedMetadata {
@@ -3132,6 +3318,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 0.4,
                 cache_read: 0.005,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5-pro" => Some(Gpt5GeneratedMetadata {
@@ -3145,6 +3332,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 120.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.1" => Some(Gpt5GeneratedMetadata {
@@ -3158,6 +3346,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 10.0,
                 cache_read: 0.13,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.1-chat-latest" => Some(Gpt5GeneratedMetadata {
@@ -3171,6 +3360,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.2" => Some(Gpt5GeneratedMetadata {
@@ -3184,6 +3374,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.2-chat-latest" => Some(Gpt5GeneratedMetadata {
@@ -3197,6 +3388,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.2-codex" | "gpt-5.3-codex" => Some(Gpt5GeneratedMetadata {
@@ -3210,6 +3402,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.2-pro" => Some(Gpt5GeneratedMetadata {
@@ -3223,6 +3416,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 168.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.3-chat-latest" => Some(Gpt5GeneratedMetadata {
@@ -3236,6 +3430,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.3-codex-spark" => Some(Gpt5GeneratedMetadata {
@@ -3249,6 +3444,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.4" => Some(Gpt5GeneratedMetadata {
@@ -3262,6 +3458,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 15.0,
                 cache_read: 0.25,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.4-mini" => Some(Gpt5GeneratedMetadata {
@@ -3275,6 +3472,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 4.5,
                 cache_read: 0.075,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.4-nano" => Some(Gpt5GeneratedMetadata {
@@ -3288,6 +3486,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 1.25,
                 cache_read: 0.02,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.4-pro" | "gpt-5.5-pro" => Some(Gpt5GeneratedMetadata {
@@ -3301,6 +3500,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 180.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "gpt-5.5" => Some(Gpt5GeneratedMetadata {
@@ -3314,6 +3514,7 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 output: 30.0,
                 cache_read: 0.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         _ => None,
@@ -3334,6 +3535,7 @@ fn o_series_generated_metadata(model_id: &str) -> Option<OSeriesGeneratedMetadat
                 output: 60.0,
                 cache_read: 7.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "o1-pro" => Some(OSeriesGeneratedMetadata {
@@ -3343,6 +3545,7 @@ fn o_series_generated_metadata(model_id: &str) -> Option<OSeriesGeneratedMetadat
                 output: 600.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "o3" => Some(OSeriesGeneratedMetadata {
@@ -3352,6 +3555,7 @@ fn o_series_generated_metadata(model_id: &str) -> Option<OSeriesGeneratedMetadat
                 output: 8.0,
                 cache_read: 0.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "o3-deep-research" => Some(OSeriesGeneratedMetadata {
@@ -3361,6 +3565,7 @@ fn o_series_generated_metadata(model_id: &str) -> Option<OSeriesGeneratedMetadat
                 output: 40.0,
                 cache_read: 2.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "o3-mini" => Some(OSeriesGeneratedMetadata {
@@ -3370,6 +3575,7 @@ fn o_series_generated_metadata(model_id: &str) -> Option<OSeriesGeneratedMetadat
                 output: 4.4,
                 cache_read: 0.55,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "o3-pro" => Some(OSeriesGeneratedMetadata {
@@ -3379,6 +3585,7 @@ fn o_series_generated_metadata(model_id: &str) -> Option<OSeriesGeneratedMetadat
                 output: 80.0,
                 cache_read: 0.0,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "o4-mini" => Some(OSeriesGeneratedMetadata {
@@ -3388,6 +3595,7 @@ fn o_series_generated_metadata(model_id: &str) -> Option<OSeriesGeneratedMetadat
                 output: 4.4,
                 cache_read: 0.28,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         "o4-mini-deep-research" => Some(OSeriesGeneratedMetadata {
@@ -3397,6 +3605,7 @@ fn o_series_generated_metadata(model_id: &str) -> Option<OSeriesGeneratedMetadat
                 output: 8.0,
                 cache_read: 0.5,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             },
         }),
         _ => None,
@@ -3454,11 +3663,29 @@ fn apply_gpt4_generated_metadata(model: &mut Model, metadata: Gpt4GeneratedMetad
     model.cost = metadata.cost;
 }
 
+const OPENAI_LONG_CONTEXT_INPUT_THRESHOLD: u64 = 272_000;
+
+fn with_openai_long_context_pricing(cost: &mut ModelCost) {
+    cost.tiers = vec![crate::types::ModelCostTier {
+        input_tokens_above: OPENAI_LONG_CONTEXT_INPUT_THRESHOLD,
+        input: cost.input * 2.0,
+        output: cost.output * 1.5,
+        cache_read: cost.cache_read * 2.0,
+        cache_write: cost.cache_write * 2.0,
+    }];
+}
+
 fn apply_openai_gpt5_generated_metadata(model: &mut Model) -> bool {
     let Some(metadata) = gpt5_generated_metadata(model.id.as_str()) else {
         return false;
     };
     apply_gpt5_generated_metadata(model, &metadata, metadata.openai_off_effort);
+    if matches!(
+        model.id.as_str(),
+        "gpt-5.4" | "gpt-5.4-pro" | "gpt-5.5" | "gpt-5.5-pro"
+    ) {
+        with_openai_long_context_pricing(&mut model.cost);
+    }
     true
 }
 
@@ -3757,6 +3984,7 @@ fn apply_opencode_model_overrides(model: &mut Model) {
                 output: 15.0,
                 cache_read: 0.3,
                 cache_write: 3.75,
+                tiers: Vec::new(),
             };
         }
         "gemini-3-flash" => {
@@ -3772,6 +4000,7 @@ fn apply_opencode_model_overrides(model: &mut Model) {
                 output: 3.0,
                 cache_read: 0.05,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
         }
         "gpt-5.2-codex" => {
@@ -3790,6 +4019,7 @@ fn apply_opencode_model_overrides(model: &mut Model) {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
         }
         "kimi-k2.5" => {
@@ -3802,6 +4032,7 @@ fn apply_opencode_model_overrides(model: &mut Model) {
                 output: 3.0,
                 cache_read: 0.08,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
         }
         "minimax-m2.5" => {
@@ -3813,6 +4044,7 @@ fn apply_opencode_model_overrides(model: &mut Model) {
                 output: 1.2,
                 cache_read: 0.06,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
         }
         _ => {}
@@ -3842,6 +4074,7 @@ fn apply_opencode_go_model_overrides(model: &mut Model) {
                 output: 0.28,
                 cache_read: 0.0028,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
             model.compat = Some(json!({
                 "requiresReasoningContentOnAssistantMessages": true,
@@ -3858,6 +4091,7 @@ fn apply_opencode_go_model_overrides(model: &mut Model) {
                 output: 3.0,
                 cache_read: 0.1,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
         }
         "kimi-k2.6" => {
@@ -3870,6 +4104,7 @@ fn apply_opencode_go_model_overrides(model: &mut Model) {
                 output: 4.0,
                 cache_read: 0.16,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
         }
         "minimax-m2.5" => {
@@ -3882,6 +4117,7 @@ fn apply_opencode_go_model_overrides(model: &mut Model) {
                 output: 1.2,
                 cache_read: 0.03,
                 cache_write: 0.0,
+                tiers: Vec::new(),
             };
         }
         _ => {}

@@ -1637,6 +1637,7 @@ fn live_interleaved_thinking_second_context(
                 ))],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: now_millis(),
             }),
         ],
@@ -1818,6 +1819,7 @@ fn live_unicode_tool_result_context(model: &Model, case: LiveUnicodeToolResultCa
                 content: vec![ToolResultContent::text(result_text)],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: now_millis(),
             }),
             Message::User(UserMessage::text(follow_up)),
@@ -1880,6 +1882,7 @@ fn live_image_tool_result_second_context(
                 content,
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: now_millis(),
             }),
         ],
@@ -1930,6 +1933,7 @@ fn live_responses_tool_result_images_second_context(
                 ],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: now_millis(),
             }),
         ],
@@ -3310,6 +3314,7 @@ fn live_tool_result_for_call(tool_call: &ToolCall) -> Message {
         content: vec![ToolResultContent::text("42")],
         details: None,
         is_error: false,
+        added_tool_names: None,
         timestamp: now_millis(),
     })
 }
@@ -3347,6 +3352,7 @@ fn live_prefilled_long_pipe_tool_call_context() -> Context {
                 content: vec![ToolResultContent::text("hello")],
                 details: None,
                 is_error: false,
+                added_tool_names: None,
                 timestamp: now_millis(),
             }),
             Message::User(UserMessage::text("Say hi.")),
@@ -3415,6 +3421,7 @@ async fn live_github_copilot_pipe_tool_call_fixture(
         content: vec![ToolResultContent::text(echoed)],
         details: None,
         is_error: false,
+        added_tool_names: None,
         timestamp: now_millis(),
     });
     Ok(Some((user, assistant, tool_result)))
@@ -3827,6 +3834,7 @@ async fn run_live_tool_followup_with_options(
             content: vec![ToolResultContent::text(result_text.clone())],
             details: None,
             is_error: false,
+            added_tool_names: None,
             timestamp: now_millis(),
         }));
     context

@@ -348,6 +348,10 @@ pub struct ToolResultMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
     pub is_error: bool,
+    /// Names of tools whose definitions were anchored to this tool result by
+    /// message-anchored (deferred) tool loading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_tool_names: Option<Vec<String>>,
     pub timestamp: i64,
 }
 
@@ -655,11 +659,27 @@ pub struct AssistantImages {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModelCostTier {
+    /// Use this tier for requests whose total input usage exceeds this token
+    /// count.
+    pub input_tokens_above: u64,
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelCost {
     pub input: f64,
     pub output: f64,
     pub cache_read: f64,
     pub cache_write: f64,
+    /// Request-wide pricing tiers. The highest matching input threshold
+    /// applies to the full request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tiers: Vec<ModelCostTier>,
 }
 
 impl Default for ModelCost {
@@ -669,6 +689,7 @@ impl Default for ModelCost {
             output: 0.0,
             cache_read: 0.0,
             cache_write: 0.0,
+            tiers: Vec::new(),
         }
     }
 }

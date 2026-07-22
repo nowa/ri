@@ -1989,6 +1989,41 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Aligned pi `09f10595` "fix(ai): clamp streamSimple max tokens", `8973ae28`
+  "fix(ai): ignore stale usage after compaction", and `96f0edd0` "Count user
+  image tokens in context estimates": new `ri-llm-provider::estimate` module
+  ports pi `utils/estimate.ts` (text/image/message/tools token heuristics,
+  images at 4800 chars, `addedToolNames` tool-token accounting, and the
+  timestamp-based rule that assistant usage no longer applies once a newer
+  prefix message — e.g. a compaction summary — was inserted before it).
+  `apply_simple_stream_defaults` now takes the request context and mirrors pi
+  `buildBaseOptions`: `max_tokens` defaults to the model cap and is clamped to
+  `context_window - estimated context - 4096` with a floor of 1; the previous
+  cutoff-era 32k default cap (`default_simple_max_tokens`) is gone. The
+  Anthropic budget-thinking path re-clamps adjusted max tokens against context
+  and caps the thinking budget at `max_tokens - 1024`, matching pi. The
+  agent-side estimator now counts user images at 4800 chars too.
+  `ToolResultMessage` gains the pi `addedToolNames` field (groundwork for
+  message-anchored tool loading). Verified with
+  `cargo test -p ri-llm-provider --test provider_core` (367 tests) plus the
+  `ri-agent-core` suites; the only failure is the pre-existing macOS
+  `/private/var` symlink mismatch in
+  `local_execution_env_executes_shell_commands_in_cwd_with_env`, unrelated to
+  this change (the original migration ran on Linux).
+- Aligned pi `a9ecf301` "feat(ai): add input-based pricing tiers" and
+  `3664806f` "fix(ai): add GPT-5.4 and GPT-5.5 long-context pricing":
+  `ModelCost` gains `tiers` (`ModelCostTier` with `input_tokens_above`);
+  `calculate_cost` applies the highest matching tier threshold to the whole
+  request based on `input + cache_read + cache_write`. OpenAI Responses usage
+  parsing now reads `input_tokens_details.cache_write_tokens` into
+  `cache_write`, subtracts it from billed input (clamped at zero), and routes
+  through tier-aware `calculate_cost` before service-tier multipliers. Catalog
+  parity: openai `gpt-5.4`/`gpt-5.5` and openai-codex `gpt-5.4`/`gpt-5.5`
+  carry the pi long-context tier (2x input, 1.5x output, 2x cache above 272k);
+  openai `gpt-5.4-pro`/`gpt-5.5-pro` carry the 60/270 tier; Azure
+  intentionally carries no tiers, matching pi generate-models. Service-tier
+  and catalog cost tests now keep requests below the 272k threshold, mirroring
+  pi's "isolate service-tier pricing test" fix.
 - Aligned pi `d7868b09` "feat(ai): add reasoning token counts to Usage":
   `Usage` gains an optional `reasoning` field (subset of `output`, omitted from
   the wire when unset). Populated for Anthropic
