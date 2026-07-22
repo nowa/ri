@@ -25700,3 +25700,26 @@ fn bedrock_blank_tool_result_text_uses_empty_placeholder() {
         .clone();
     assert_eq!(tool_result_content, vec![json!({ "text": "<empty>" })]);
 }
+
+#[test]
+fn request_scoped_env_overrides_win_for_api_key_resolution() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    // SAFETY: guarded by ENV_LOCK like the other env-dependent tests.
+    unsafe { std::env::remove_var("RI_SCOPED_TEST_OPENAI_KEY") };
+    let mut env = BTreeMap::new();
+    env.insert("OPENAI_API_KEY".to_owned(), "scoped-key".to_owned());
+    assert_eq!(
+        get_env_api_key_scoped("openai", &env).as_deref(),
+        Some("scoped-key")
+    );
+    assert_eq!(
+        get_provider_env_value("OPENAI_API_KEY", &env).as_deref(),
+        Some("scoped-key")
+    );
+    // Empty overrides fall back to the process environment.
+    let empty = BTreeMap::new();
+    assert_eq!(
+        get_provider_env_value("RI_SCOPED_TEST_MISSING_VAR", &empty),
+        None
+    );
+}

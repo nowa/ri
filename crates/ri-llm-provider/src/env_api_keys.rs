@@ -38,17 +38,36 @@ pub fn api_key_env_var_names(provider: &str) -> Option<&'static [&'static str]> 
 }
 
 pub fn find_env_keys(provider: &str) -> Option<Vec<String>> {
+    find_env_keys_scoped(provider, &std::collections::BTreeMap::new())
+}
+
+pub fn find_env_keys_scoped(
+    provider: &str,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Option<Vec<String>> {
     let keys: Vec<String> = api_key_env_vars(provider)?
         .iter()
-        .filter(|name| env_string_nonempty(name).is_some())
+        .filter(|name| get_provider_env_value(name, env).is_some())
         .map(|name| (*name).to_owned())
         .collect();
     (!keys.is_empty()).then_some(keys)
 }
 
 pub fn get_env_api_key(provider: &str) -> Option<String> {
-    if let Some(first_key) = find_env_keys(provider).and_then(|keys| keys.into_iter().next()) {
-        return env_string_nonempty(&first_key);
+    get_env_api_key_scoped(provider, &std::collections::BTreeMap::new())
+}
+
+/// Like [`get_env_api_key`], but request-scoped `env` overrides win over
+/// process environment values, mirroring pi provider-scoped environment
+/// overrides (#5807).
+pub fn get_env_api_key_scoped(
+    provider: &str,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    if let Some(first_key) =
+        find_env_keys_scoped(provider, env).and_then(|keys| keys.into_iter().next())
+    {
+        return get_provider_env_value(&first_key, env);
     }
 
     if provider == "amazon-bedrock" && has_bedrock_credentials() {
@@ -60,6 +79,17 @@ pub fn get_env_api_key(provider: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Resolve an environment value with request-scoped overrides first.
+pub fn get_provider_env_value(
+    name: &str,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    env.get(name)
+        .cloned()
+        .filter(|value| !value.is_empty())
+        .or_else(|| env_string_nonempty(name))
 }
 
 fn env_string_nonempty(key: &str) -> Option<String> {

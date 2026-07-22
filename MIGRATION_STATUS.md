@@ -1989,6 +1989,17 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Aligned the core of pi `7f29e7a3` "feat: add provider-scoped environment
+  overrides (#5807)": `StreamOptions` gains a request-scoped `env` map,
+  `get_provider_env_value`/`get_env_api_key_scoped`/`find_env_keys_scoped`
+  consult it before the process environment, and built-in HTTP provider
+  dispatch resolves fallback API keys through the scoped map. The deeper
+  scoped-env consumers from that commit (Bedrock credential/region files,
+  Azure resource config, Cloudflare account ids, Vertex ADC) still read
+  process env only and are listed under Known Missing Work. pi's Bun sandbox
+  `/proc/self/environ` fallback does not apply to the Rust runtime. Verified
+  with `cargo test -p ri-llm-provider --test provider_core --
+  request_scoped_env_overrides`.
 - Aligned the pi OpenRouter and Bedrock fix batch: session affinity gains a
   `sessionAffinityFormat` compat (detected from the openrouter provider/base
   URL) so OpenRouter routes use a single `x-session-id` header while other
@@ -2195,7 +2206,33 @@ not part of this pass.
 
 ## Known Missing Work
 
-This migration is locally complete but not externally certified.
+This migration is locally complete but not externally certified. The
+2026-07-22 incremental alignment pass (pi v0.75.4 -> v0.81.1, B/C scope)
+covered the behavior and provider fixes listed under Upstream Increment
+Alignment; the following upstream increments remain open:
+
+- The pi Models runtime refactor (v0.80.0 phases 1-9: `createModels`,
+  provider factories, provider-owned auth/`CredentialStore`, `/compat`
+  entrypoint, per-provider generated catalogs) — deferred by decision; ri
+  still mirrors the pre-0.80 global registry surface.
+- Model catalog refresh (new providers such as Qwen Token Plan, NVIDIA NIM,
+  Ant Ling, Radius/pi-messages, Moonshot CN; new models such as Claude
+  Fable 5, Kimi K3, GPT-5.6, GLM-5.2; catalog compat flags like
+  `supportsToolSearch`, `forceAdaptiveThinking`, `sendSessionAffinityHeaders`
+  on generated entries).
+- SQLite session storage (`packages/storage`, #6594) — scope decision
+  pending.
+- Deeper OpenAI Responses reasoning-replay increments: out-of-order reasoning
+  item preservation, `encrypted_content` backfill from `response.completed`
+  (#6608), synthetic message ids (#5148), early reasoning-details
+  preservation.
+- Codex transport increments: zstd SSE compression, WebSocket
+  connection-limit reconnect and stale-session rotation, SSE header-timeout
+  tuning, device-code login (#4911).
+- Device-code OAuth polish: server-provided `slow_down` intervals and Copilot
+  token-poll delays.
+- Remaining scoped-env consumers for #5807 (Bedrock/Azure/Cloudflare/Vertex
+  configuration reads).
 
 - Strict provider live/E2E completion still requires running the gated provider
   matrix with real API keys, provider-specific environment configuration,

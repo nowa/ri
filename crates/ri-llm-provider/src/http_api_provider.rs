@@ -22,7 +22,7 @@ use crate::{
         create_assistant_message_diagnostic,
     },
     event_stream::{AssistantMessageEventStream, assistant_message_event_stream},
-    get_env_api_key,
+    get_env_api_key_scoped,
     google_shared::{GoogleStreamProcessor, build_google_simple_payload},
     google_vertex::{
         GoogleVertexClientConfig, GoogleVertexOptions, resolve_google_vertex_adc_access_token,
@@ -443,7 +443,7 @@ impl ApiProvider for AzureOpenAIResponsesHttpProvider {
                 .stream
                 .api_key
                 .clone()
-                .or_else(|| get_env_api_key(&model.provider))
+                .or_else(|| get_env_api_key_scoped(&model.provider, &options.stream.env))
         {
             headers.insert("api-key".to_owned(), api_key);
         }
@@ -488,7 +488,7 @@ impl ApiProvider for AnthropicMessagesHttpProvider {
             .stream
             .api_key
             .clone()
-            .or_else(|| get_env_api_key(&model.provider))
+            .or_else(|| get_env_api_key_scoped(&model.provider, &options.stream.env))
             .unwrap_or_default();
         let config = build_anthropic_client_config(
             model,
@@ -575,7 +575,7 @@ impl ApiProvider for GoogleGenerativeAiHttpProvider {
                 .stream
                 .api_key
                 .clone()
-                .or_else(|| get_env_api_key(&model.provider))
+                .or_else(|| get_env_api_key_scoped(&model.provider, &options.stream.env))
                 .ok_or_else(|| {
                     ProviderError::Provider(format!("No API key for provider: {}", model.provider))
                 })?;
@@ -625,7 +625,7 @@ impl ApiProvider for GoogleVertexHttpProvider {
                     .stream
                     .api_key
                     .clone()
-                    .or_else(|| get_env_api_key(&model.provider)),
+                    .or_else(|| get_env_api_key_scoped(&model.provider, &options.stream.env)),
                 project: options
                     .stream
                     .extra
@@ -696,7 +696,7 @@ impl ApiProvider for OpenAICodexResponsesHttpProvider {
             .stream
             .api_key
             .clone()
-            .or_else(|| get_env_api_key(&model.provider))
+            .or_else(|| get_env_api_key_scoped(&model.provider, &options.stream.env))
             .ok_or_else(|| {
                 ProviderError::Provider(format!("No API key for provider: {}", model.provider))
             })?;
@@ -1916,7 +1916,7 @@ fn build_json_request(
         .stream
         .api_key
         .clone()
-        .or_else(|| get_env_api_key(&model.provider));
+        .or_else(|| get_env_api_key_scoped(&model.provider, &options.stream.env));
     for (name, value) in headers {
         request = request.header(name, value);
     }

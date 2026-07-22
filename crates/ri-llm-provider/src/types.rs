@@ -427,6 +427,10 @@ pub struct StreamOptions {
     pub max_retry_delay_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub metadata: Map<String, Value>,
+    /// Request-scoped environment overrides consulted before process env for
+    /// provider credential and configuration lookups.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
     #[serde(skip)]
     pub abort_flag: Option<Arc<AtomicBool>>,
     #[serde(flatten)]
