@@ -1532,8 +1532,13 @@ fn supports_anthropic_adaptive_thinking(model_id: &str) -> bool {
         || model_id.contains("opus-4.6")
         || model_id.contains("opus-4-7")
         || model_id.contains("opus-4.7")
+        || model_id.contains("opus-4-8")
+        || model_id.contains("opus-4.8")
         || model_id.contains("sonnet-4-6")
         || model_id.contains("sonnet-4.6")
+        || model_id.contains("sonnet-5")
+        || model_id.contains("sonnet.5")
+        || model_id.contains("fable-5")
 }
 
 fn map_anthropic_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> &'static str {

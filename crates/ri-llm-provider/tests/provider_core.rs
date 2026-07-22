@@ -498,10 +498,13 @@ fn empty_assistant_for_model(model: &Model) -> AssistantMessage {
 
 #[test]
 fn supports_xhigh_model_metadata_port() {
+    // Opus 4.6 dropped `xhigh` in the pi catalog refresh; adaptive models
+    // expose `max` instead.
     let opus_46 = get_model("anthropic", "claude-opus-4-6").expect("model");
-    assert!(get_supported_thinking_levels(&opus_46).contains(&ThinkingLevel::XHigh));
+    assert!(!get_supported_thinking_levels(&opus_46).contains(&ThinkingLevel::XHigh));
+    assert!(get_supported_thinking_levels(&opus_46).contains(&ThinkingLevel::Max));
     assert_eq!(
-        opus_46.thinking_level_map.get(&ThinkingLevel::XHigh),
+        opus_46.thinking_level_map.get(&ThinkingLevel::Max),
         Some(&Some("max".to_owned()))
     );
 
@@ -1037,7 +1040,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
         (
             "claude-opus-4-6",
             true,
-            Some("max"),
+            None,
             1_000_000,
             128_000,
             ModelCost {
@@ -1050,6 +1053,20 @@ fn anthropic_model_metadata_matches_generated_catalog() {
         ),
         (
             "claude-opus-4-7",
+            true,
+            Some("xhigh"),
+            1_000_000,
+            128_000,
+            ModelCost {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+                tiers: Vec::new(),
+            },
+        ),
+        (
+            "claude-opus-4-8",
             true,
             Some("xhigh"),
             1_000_000,
@@ -1132,6 +1149,34 @@ fn anthropic_model_metadata_matches_generated_catalog() {
                 tiers: Vec::new(),
             },
         ),
+        (
+            "claude-sonnet-5",
+            true,
+            Some("xhigh"),
+            1_000_000,
+            128_000,
+            ModelCost {
+                input: 2.0,
+                output: 10.0,
+                cache_read: 0.2,
+                cache_write: 2.5,
+                tiers: Vec::new(),
+            },
+        ),
+        (
+            "claude-fable-5",
+            true,
+            Some("xhigh"),
+            1_000_000,
+            128_000,
+            ModelCost {
+                input: 10.0,
+                output: 50.0,
+                cache_read: 1.0,
+                cache_write: 12.5,
+                tiers: Vec::new(),
+            },
+        ),
     ] {
         assert!(
             model_ids.contains(&model_id.to_owned()),
@@ -1147,18 +1192,42 @@ fn anthropic_model_metadata_matches_generated_catalog() {
         assert_eq!(model.max_tokens, max_tokens, "{model_id} output");
         assert_eq!(model.cost, cost, "{model_id} cost");
 
+        // Adaptive-thinking models additionally expose `max` (and Fable 5
+        // disables `off`); Opus 4.7+ drops temperature support (pi catalog).
+        let adaptive = matches!(
+            model_id,
+            "claude-opus-4-6"
+                | "claude-opus-4-7"
+                | "claude-opus-4-8"
+                | "claude-sonnet-4-6"
+                | "claude-sonnet-5"
+                | "claude-fable-5"
+        );
+        let mut expected_map = BTreeMap::new();
         if let Some(effort) = xhigh_effort {
-            assert_eq!(
-                model.thinking_level_map,
-                BTreeMap::from([(ThinkingLevel::XHigh, Some(effort.to_owned()))]),
-                "{model_id} thinking map"
-            );
-        } else {
-            assert!(
-                model.thinking_level_map.is_empty(),
-                "{model_id} thinking map"
-            );
+            expected_map.insert(ThinkingLevel::XHigh, Some(effort.to_owned()));
         }
+        if adaptive {
+            expected_map.insert(ThinkingLevel::Max, Some("max".to_owned()));
+        }
+        if model_id == "claude-fable-5" {
+            expected_map.insert(ThinkingLevel::Off, None);
+        }
+        assert_eq!(
+            model.thinking_level_map, expected_map,
+            "{model_id} thinking map"
+        );
+
+        let mut expected_compat = serde_json::Map::new();
+        if adaptive {
+            expected_compat.insert("forceAdaptiveThinking".to_owned(), json!(true));
+        }
+        if matches!(model_id, "claude-opus-4-7" | "claude-opus-4-8") {
+            expected_compat.insert("supportsTemperature".to_owned(), json!(false));
+        }
+        let expected_compat =
+            (!expected_compat.is_empty()).then_some(Value::Object(expected_compat));
+        assert_eq!(model.compat, expected_compat, "{model_id} compat");
     }
 
     let mut usage = Usage {
@@ -3388,6 +3457,9 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
             "gpt-5.4",
             "gpt-5.4-mini",
             "gpt-5.5",
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
         ]
     );
 
@@ -3470,6 +3542,57 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
             },
             vec![InputKind::Text, InputKind::Image],
         ),
+        (
+            "gpt-5.6-luna",
+            ModelCost {
+                input: 1.0,
+                output: 6.0,
+                cache_read: 0.1,
+                cache_write: 1.25,
+                tiers: vec![ModelCostTier {
+                    input_tokens_above: 272_000,
+                    input: 2.0,
+                    output: 9.0,
+                    cache_read: 0.2,
+                    cache_write: 2.5,
+                }],
+            },
+            vec![InputKind::Text, InputKind::Image],
+        ),
+        (
+            "gpt-5.6-sol",
+            ModelCost {
+                input: 5.0,
+                output: 30.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+                tiers: vec![ModelCostTier {
+                    input_tokens_above: 272_000,
+                    input: 10.0,
+                    output: 45.0,
+                    cache_read: 1.0,
+                    cache_write: 12.5,
+                }],
+            },
+            vec![InputKind::Text, InputKind::Image],
+        ),
+        (
+            "gpt-5.6-terra",
+            ModelCost {
+                input: 2.5,
+                output: 15.0,
+                cache_read: 0.25,
+                cache_write: 3.125,
+                tiers: vec![ModelCostTier {
+                    input_tokens_above: 272_000,
+                    input: 5.0,
+                    output: 22.5,
+                    cache_read: 0.5,
+                    cache_write: 6.25,
+                }],
+            },
+            vec![InputKind::Text, InputKind::Image],
+        ),
     ] {
         let model = get_model("openai-codex", model_id).expect(model_id);
         assert_eq!(model.api, "openai-codex-responses", "{model_id} api");
@@ -3479,16 +3602,44 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
             "{model_id} base URL"
         );
         assert!(model.reasoning, "{model_id} reasoning");
+        let is_gpt_56 = model_id.starts_with("gpt-5.6");
+        let mut expected_thinking = BTreeMap::from([
+            (ThinkingLevel::Minimal, Some("low".to_owned())),
+            (ThinkingLevel::XHigh, Some("xhigh".to_owned())),
+        ]);
+        if is_gpt_56 {
+            expected_thinking.insert(ThinkingLevel::Max, Some("max".to_owned()));
+        }
         assert_eq!(
-            model.thinking_level_map,
-            BTreeMap::from([
-                (ThinkingLevel::Minimal, Some("low".to_owned())),
-                (ThinkingLevel::XHigh, Some("xhigh".to_owned())),
-            ]),
+            model.thinking_level_map, expected_thinking,
             "{model_id} thinking levels"
         );
+        // Tool search is available on gpt-5.4/gpt-5.4-mini/gpt-5.5/gpt-5.6-*.
+        let expects_tool_search = matches!(
+            model_id,
+            "gpt-5.4"
+                | "gpt-5.4-mini"
+                | "gpt-5.5"
+                | "gpt-5.6-luna"
+                | "gpt-5.6-sol"
+                | "gpt-5.6-terra"
+        );
+        assert_eq!(
+            model
+                .compat
+                .as_ref()
+                .and_then(|compat| compat.get("supportsToolSearch"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            expects_tool_search,
+            "{model_id} supportsToolSearch"
+        );
         assert_eq!(model.input, input, "{model_id} input");
-        assert_eq!(model.context_window, 272_000, "{model_id} context");
+        assert_eq!(
+            model.context_window,
+            if is_gpt_56 { 372_000 } else { 272_000 },
+            "{model_id} context"
+        );
         assert_eq!(model.max_tokens, 128_000, "{model_id} output");
         assert_eq!(model.cost, cost, "{model_id} cost");
     }
@@ -13337,13 +13488,13 @@ fn anthropic_simple_payload_uses_adaptive_thinking_for_opus_47() {
 }
 
 #[test]
-fn anthropic_simple_payload_maps_xhigh_to_max_for_opus_46() {
+fn anthropic_simple_payload_maps_max_effort_for_opus_46() {
     let model = get_model("anthropic", "claude-opus-4-6").expect("model");
     let payload = build_anthropic_simple_payload(
         &model,
         &user_context("Hello"),
         SimpleStreamOptions {
-            reasoning: Some(ThinkingLevel::XHigh),
+            reasoning: Some(ThinkingLevel::Max),
             ..Default::default()
         },
     );
@@ -25437,7 +25588,9 @@ fn openai_responses_loads_deferred_tools_through_client_tool_search() {
     assert_eq!(search_output["tools"][0]["defer_loading"], json!(true));
 
     // Without tool-search support the full tool list stays in the prompt.
-    let plain_model = get_model("openai", "gpt-5.4").expect("model");
+    // gpt-5.4 now carries supportsToolSearch natively, so strip it.
+    let mut plain_model = get_model("openai", "gpt-5.4").expect("model");
+    plain_model.compat = None;
     let payload = build_openai_responses_payload(
         &plain_model,
         &context,

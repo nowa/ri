@@ -212,6 +212,7 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("anthropic", "claude-3-haiku-20240307"),
     ("anthropic", "claude-3-opus-20240229"),
     ("anthropic", "claude-3-sonnet-20240229"),
+    ("anthropic", "claude-fable-5"),
     ("anthropic", "claude-haiku-4-5"),
     ("anthropic", "claude-haiku-4-5-20251001"),
     ("anthropic", "claude-opus-4-0"),
@@ -222,11 +223,13 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("anthropic", "claude-opus-4-5-20251101"),
     ("anthropic", "claude-opus-4-6"),
     ("anthropic", "claude-opus-4-7"),
+    ("anthropic", "claude-opus-4-8"),
     ("anthropic", "claude-sonnet-4-0"),
     ("anthropic", "claude-sonnet-4-20250514"),
     ("anthropic", "claude-sonnet-4-5"),
     ("anthropic", "claude-sonnet-4-5-20250929"),
     ("anthropic", "claude-sonnet-4-6"),
+    ("anthropic", "claude-sonnet-5"),
     (
         "amazon-bedrock",
         "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -279,6 +282,9 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("openai", "gpt-5.4-pro"),
     ("openai", "gpt-5.5"),
     ("openai", "gpt-5.5-pro"),
+    ("openai", "gpt-5.6-luna"),
+    ("openai", "gpt-5.6-sol"),
+    ("openai", "gpt-5.6-terra"),
     ("openai", "o1"),
     ("openai", "o1-pro"),
     ("openai", "o3"),
@@ -293,6 +299,9 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("openai-codex", "gpt-5.4"),
     ("openai-codex", "gpt-5.4-mini"),
     ("openai-codex", "gpt-5.5"),
+    ("openai-codex", "gpt-5.6-luna"),
+    ("openai-codex", "gpt-5.6-sol"),
+    ("openai-codex", "gpt-5.6-terra"),
     ("azure-openai-responses", "gpt-4"),
     ("azure-openai-responses", "gpt-4-turbo"),
     ("azure-openai-responses", "gpt-4.1"),
@@ -1017,7 +1026,10 @@ fn apply_known_model_overrides(model: &mut Model) {
             | "gpt-5.3-codex-spark"
             | "gpt-5.4"
             | "gpt-5.4-mini"
-            | "gpt-5.5",
+            | "gpt-5.5"
+            | "gpt-5.6-luna"
+            | "gpt-5.6-sol"
+            | "gpt-5.6-terra",
         ) => {
             model.base_url = "https://chatgpt.com/backend-api".to_owned();
             model.reasoning = true;
@@ -1027,7 +1039,12 @@ fn apply_known_model_overrides(model: &mut Model) {
             model
                 .thinking_level_map
                 .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
-            model.context_window = 272_000;
+            apply_openai_max_thinking_level(model);
+            model.context_window = if model.id.contains("gpt-5.6") {
+                372_000
+            } else {
+                272_000
+            };
             model.max_tokens = 128_000;
             model.cost = match model.id.as_str() {
                 "gpt-5.4" => {
@@ -1059,6 +1076,39 @@ fn apply_known_model_overrides(model: &mut Model) {
                     with_openai_long_context_pricing(&mut cost);
                     cost
                 }
+                "gpt-5.6-sol" => {
+                    let mut cost = ModelCost {
+                        input: 5.0,
+                        output: 30.0,
+                        cache_read: 0.5,
+                        cache_write: 6.25,
+                        tiers: Vec::new(),
+                    };
+                    with_openai_long_context_pricing(&mut cost);
+                    cost
+                }
+                "gpt-5.6-terra" => {
+                    let mut cost = ModelCost {
+                        input: 2.5,
+                        output: 15.0,
+                        cache_read: 0.25,
+                        cache_write: 3.125,
+                        tiers: Vec::new(),
+                    };
+                    with_openai_long_context_pricing(&mut cost);
+                    cost
+                }
+                "gpt-5.6-luna" => {
+                    let mut cost = ModelCost {
+                        input: 1.0,
+                        output: 6.0,
+                        cache_read: 0.1,
+                        cache_write: 1.25,
+                        tiers: Vec::new(),
+                    };
+                    with_openai_long_context_pricing(&mut cost);
+                    cost
+                }
                 _ => ModelCost {
                     input: 1.75,
                     output: 14.0,
@@ -1072,6 +1122,7 @@ fn apply_known_model_overrides(model: &mut Model) {
             } else {
                 ensure_image_input(model);
             }
+            apply_openai_tool_search_compat(model);
         }
         _ => {}
     }
@@ -3106,7 +3157,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
         }),
         "claude-opus-4-6" => Some(AnthropicGeneratedMetadata {
             reasoning: true,
-            xhigh_effort: Some("max"),
+            xhigh_effort: None,
             context_window: 1_000_000,
             max_tokens: 128_000,
             cost: ModelCost {
@@ -3117,7 +3168,7 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 tiers: Vec::new(),
             },
         }),
-        "claude-opus-4-7" => Some(AnthropicGeneratedMetadata {
+        "claude-opus-4-7" | "claude-opus-4-8" => Some(AnthropicGeneratedMetadata {
             reasoning: true,
             xhigh_effort: Some("xhigh"),
             context_window: 1_000_000,
@@ -3127,6 +3178,32 @@ fn anthropic_generated_metadata(model_id: &str) -> Option<AnthropicGeneratedMeta
                 output: 25.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                tiers: Vec::new(),
+            },
+        }),
+        "claude-sonnet-5" => Some(AnthropicGeneratedMetadata {
+            reasoning: true,
+            xhigh_effort: Some("xhigh"),
+            context_window: 1_000_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 2.0,
+                output: 10.0,
+                cache_read: 0.2,
+                cache_write: 2.5,
+                tiers: Vec::new(),
+            },
+        }),
+        "claude-fable-5" => Some(AnthropicGeneratedMetadata {
+            reasoning: true,
+            xhigh_effort: Some("xhigh"),
+            context_window: 1_000_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 10.0,
+                output: 50.0,
+                cache_read: 1.0,
+                cache_write: 12.5,
                 tiers: Vec::new(),
             },
         }),
@@ -3537,6 +3614,48 @@ fn gpt5_generated_metadata(model_id: &str) -> Option<Gpt5GeneratedMetadata> {
                 tiers: Vec::new(),
             },
         }),
+        "gpt-5.6-sol" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: Some("none"),
+            supports_xhigh: true,
+            context_window: 272_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 5.0,
+                output: 30.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+                tiers: Vec::new(),
+            },
+        }),
+        "gpt-5.6-terra" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: Some("none"),
+            supports_xhigh: true,
+            context_window: 272_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 2.5,
+                output: 15.0,
+                cache_read: 0.25,
+                cache_write: 3.125,
+                tiers: Vec::new(),
+            },
+        }),
+        "gpt-5.6-luna" => Some(Gpt5GeneratedMetadata {
+            reasoning: true,
+            openai_off_effort: Some("none"),
+            supports_xhigh: true,
+            context_window: 272_000,
+            max_tokens: 128_000,
+            cost: ModelCost {
+                input: 1.0,
+                output: 6.0,
+                cache_read: 0.1,
+                cache_write: 1.25,
+                tiers: Vec::new(),
+            },
+        }),
         _ => None,
     }
 }
@@ -3650,7 +3769,39 @@ fn apply_anthropic_generated_metadata(model: &mut Model) -> bool {
     model.context_window = metadata.context_window;
     model.max_tokens = metadata.max_tokens;
     model.cost = metadata.cost;
+    apply_anthropic_adaptive_catalog_metadata(model);
     true
+}
+
+/// pi's generator merges adaptive-thinking metadata onto Claude models by id:
+/// `max` on every adaptive model, `xhigh` only on Opus 4.7/4.8, Sonnet 5, and
+/// Fable 5 (which also disables `off`), plus the `forceAdaptiveThinking` and
+/// `supportsTemperature` compat flags.
+fn apply_anthropic_adaptive_catalog_metadata(model: &mut Model) {
+    let id = model.id.as_str();
+    let opus_4_6 = id.contains("opus-4-6") || id.contains("opus-4.6");
+    let sonnet_4_6 = id.contains("sonnet-4-6") || id.contains("sonnet-4.6");
+    let opus_4_7 = id.contains("opus-4-7") || id.contains("opus-4.7");
+    let opus_4_8 = id.contains("opus-4-8") || id.contains("opus-4.8");
+    let sonnet_5 = id.contains("sonnet-5") || id.contains("sonnet.5");
+    let fable_5 = id.contains("fable-5");
+    if opus_4_6 || sonnet_4_6 || opus_4_7 || opus_4_8 || sonnet_5 || fable_5 {
+        model
+            .thinking_level_map
+            .insert(ThinkingLevel::Max, Some("max".to_owned()));
+        merge_model_compat(model, "forceAdaptiveThinking", Value::Bool(true));
+    }
+    if opus_4_7 || opus_4_8 || sonnet_5 || fable_5 {
+        model
+            .thinking_level_map
+            .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+    }
+    if fable_5 {
+        model.thinking_level_map.insert(ThinkingLevel::Off, None);
+    }
+    if opus_4_7 || opus_4_8 {
+        merge_model_compat(model, "supportsTemperature", Value::Bool(false));
+    }
 }
 
 fn apply_openai_gpt4_generated_metadata(model: &mut Model) -> bool {
@@ -3702,11 +3853,50 @@ fn apply_openai_gpt5_generated_metadata(model: &mut Model) -> bool {
     apply_gpt5_generated_metadata(model, &metadata, metadata.openai_off_effort);
     if matches!(
         model.id.as_str(),
-        "gpt-5.4" | "gpt-5.4-pro" | "gpt-5.5" | "gpt-5.5-pro"
+        "gpt-5.4"
+            | "gpt-5.4-pro"
+            | "gpt-5.5"
+            | "gpt-5.5-pro"
+            | "gpt-5.6-sol"
+            | "gpt-5.6-terra"
+            | "gpt-5.6-luna"
     ) {
         with_openai_long_context_pricing(&mut model.cost);
     }
+    apply_openai_max_thinking_level(model);
+    apply_openai_tool_search_compat(model);
     true
+}
+
+/// GPT-5.6 models expose the `max` reasoning effort on the OpenAI-style APIs.
+fn apply_openai_max_thinking_level(model: &mut Model) {
+    if model.id.contains("gpt-5.6") {
+        model
+            .thinking_level_map
+            .insert(ThinkingLevel::Max, Some("max".to_owned()));
+    }
+}
+
+/// Tool search is available on the newer OpenAI and Codex models only.
+fn apply_openai_tool_search_compat(model: &mut Model) {
+    let eligible = matches!(
+        (model.provider.as_str(), model.api.as_str()),
+        ("openai", "openai-responses") | ("openai-codex", "openai-codex-responses")
+    );
+    if eligible
+        && matches!(
+            model.id.as_str(),
+            "gpt-5.4"
+                | "gpt-5.4-mini"
+                | "gpt-5.4-pro"
+                | "gpt-5.5"
+                | "gpt-5.6-sol"
+                | "gpt-5.6-terra"
+                | "gpt-5.6-luna"
+        )
+    {
+        merge_model_compat(model, "supportsToolSearch", Value::Bool(true));
+    }
 }
 
 fn apply_azure_openai_gpt5_generated_metadata(model: &mut Model) -> bool {
@@ -3715,6 +3905,7 @@ fn apply_azure_openai_gpt5_generated_metadata(model: &mut Model) -> bool {
     };
     model.base_url.clear();
     apply_gpt5_generated_metadata(model, &metadata, None);
+    apply_openai_max_thinking_level(model);
     true
 }
 
@@ -3978,6 +4169,13 @@ fn apply_github_copilot_generated_metadata(model: &mut Model) -> bool {
     model.max_tokens = max_tokens;
     model.compat = compat;
     true
+}
+
+fn merge_model_compat(model: &mut Model, key: &str, value: Value) {
+    let compat = model.compat.get_or_insert_with(|| json!({}));
+    if let Some(object) = compat.as_object_mut() {
+        object.insert(key.to_owned(), value);
+    }
 }
 
 fn ensure_image_input(model: &mut Model) {

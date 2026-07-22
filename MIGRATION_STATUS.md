@@ -2040,6 +2040,18 @@ not part of this pass.
   is deliberately deferred: it needs the C-binding `zstd` crate and pi itself
   falls back to uncompressed bodies when the encoder is unavailable, which is
   the path ri keeps.
+- Catalog refresh (targeted overlay from pi's last in-tree generated catalog,
+  snapshot a9f6a315^ / 2026-07-17): added `claude-opus-4-8`,
+  `claude-sonnet-5`, and `claude-fable-5` (anthropic) and the GPT-5.6 family
+  (`gpt-5.6-sol`/`terra`/`luna` on openai and openai-codex) with pi-HEAD
+  costs, 272k/372k context windows, and long-context pricing tiers. Ported
+  the generator's adaptive-thinking merge (`max` on every adaptive Claude
+  model, `xhigh` only on Opus 4.7/4.8, Sonnet 5, Fable 5 which also disables
+  `off`; `forceAdaptiveThinking` compat, `supportsTemperature: false` on
+  Opus 4.7/4.8 — Opus 4.6 dropped its legacy `xhigh -> max` mapping),
+  the GPT-5.6 `max` thinking level, and native `supportsToolSearch` compat
+  on gpt-5.4/5.4-mini/5.4-pro/5.5/5.6-* for openai and openai-codex.
+  Catalog baselines re-baselined to pi HEAD accordingly.
 - Models runtime harness integration (pi phase 6, transitional):
   `AgentHarnessOptions.models` accepts a `Models` collection. When present it
   is the harness's stream path (the agent loop's stream provider dispatches
@@ -2307,11 +2319,14 @@ Alignment; the following upstream increments remain open:
   provider factories, provider-owned auth/`CredentialStore`, `/compat`
   entrypoint, per-provider generated catalogs) — deferred by decision; ri
   still mirrors the pre-0.80 global registry surface.
-- Model catalog refresh (new providers such as Qwen Token Plan, NVIDIA NIM,
-  Ant Ling, Radius/pi-messages, Moonshot CN; new models such as Claude
-  Fable 5, Kimi K3, GPT-5.6, GLM-5.2; catalog compat flags like
-  `supportsToolSearch`, `forceAdaptiveThinking`, `sendSessionAffinityHeaders`
-  on generated entries).
+- Remaining catalog refresh beyond the targeted overlay (which added
+  Opus 4.8/Sonnet 5/Fable 5, GPT-5.6, adaptive-thinking merges, and
+  `supportsToolSearch`): new providers (Qwen Token Plan, NVIDIA NIM, Ant
+  Ling, Radius/pi-messages, Moonshot CN), gateway aliases for the new
+  models (bedrock/cloudflare/vercel/opencode/copilot Claude aliases,
+  azure/copilot gpt-5.6), Kimi K3, and GLM-5.2. pi's full model data now
+  lives outside its git tree (fetched at build since pi a9f6a315), so a
+  complete refresh needs the generator pipeline or a network fetch.
 - SQLite session storage (`packages/storage`, #6594) — scope decision
   pending.
 - Codex zstd SSE request compression (deferred: requires the C-binding
