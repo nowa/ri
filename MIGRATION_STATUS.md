@@ -1989,6 +1989,15 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Completed the remaining pi #5807 scoped-env consumers: Cloudflare base-URL
+  placeholder substitution, Azure OpenAI config (base URL/resource/API
+  version/deployment-name map), Bedrock client config (region, AWS_PROFILE
+  detection, AWS_BEDROCK_SKIP_AUTH and AWS_BEARER_TOKEN_BEDROCK dispatch
+  reads), and Google Vertex API-key resolution now consult the request-scoped
+  `StreamOptions.env` before the process environment via
+  `get_provider_env_value`; `BedrockClientOptions` and
+  `AzureOpenAIConfigOptions` carry the scoped map. Verified with
+  `scoped_env_reaches_provider_configuration_consumers`.
 - Models runtime harness integration (pi phase 6, transitional):
   `AgentHarnessOptions.models` accepts a `Models` collection. When present it
   is the harness's stream path (the agent loop's stream provider dispatches

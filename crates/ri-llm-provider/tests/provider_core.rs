@@ -25723,3 +25723,66 @@ fn request_scoped_env_overrides_win_for_api_key_resolution() {
         None
     );
 }
+
+#[test]
+fn scoped_env_reaches_provider_configuration_consumers() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let env = BTreeMap::from([
+        ("CLOUDFLARE_ACCOUNT_ID".to_owned(), "scoped-acc".to_owned()),
+        ("CLOUDFLARE_GATEWAY_ID".to_owned(), "scoped-gw".to_owned()),
+        ("AWS_REGION".to_owned(), "eu-central-1".to_owned()),
+        (
+            "AZURE_OPENAI_BASE_URL".to_owned(),
+            "https://scoped.azure.example/openai/v1".to_owned(),
+        ),
+        (
+            "GOOGLE_CLOUD_API_KEY".to_owned(),
+            "scoped-google".to_owned(),
+        ),
+    ]);
+
+    // Cloudflare placeholder substitution.
+    let mut model = Model::faux("openai-responses", "cloudflare-ai-gateway", "cf-model");
+    model.base_url =
+        "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/openai"
+            .to_owned();
+    let resolved = resolve_cloudflare_base_url_scoped(&model, &env).expect("resolved");
+    assert_eq!(
+        resolved,
+        "https://gateway.ai.cloudflare.com/v1/scoped-acc/scoped-gw/openai"
+    );
+
+    // Bedrock region resolution.
+    let mut bedrock = Model::faux(
+        "bedrock-converse-stream",
+        "amazon-bedrock",
+        "anthropic.claude-test-v1:0",
+    );
+    bedrock.base_url = "https://bedrock-runtime.us-east-1.amazonaws.com".to_owned();
+    let config = resolve_bedrock_client_config(
+        &bedrock,
+        BedrockClientOptions {
+            env: env.clone(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(config.region.as_deref(), Some("eu-central-1"));
+
+    // Azure base URL resolution.
+    let azure = get_model("azure-openai-responses", "gpt-4o").expect("azure model");
+    let config = resolve_azure_openai_config(
+        &azure,
+        AzureOpenAIConfigOptions {
+            env: env.clone(),
+            ..Default::default()
+        },
+    )
+    .expect("azure config");
+    assert!(config.base_url.starts_with("https://scoped.azure.example"));
+
+    // Vertex api-key resolution.
+    assert_eq!(
+        resolve_google_vertex_api_key_scoped(None, &env).as_deref(),
+        Some("scoped-google")
+    );
+}

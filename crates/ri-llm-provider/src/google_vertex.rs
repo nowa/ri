@@ -65,13 +65,19 @@ pub fn resolve_google_vertex_client_config(
 }
 
 pub fn resolve_google_vertex_api_key(option_api_key: Option<&str>) -> Option<String> {
+    resolve_google_vertex_api_key_scoped(option_api_key, &std::collections::BTreeMap::new())
+}
+
+pub fn resolve_google_vertex_api_key_scoped(
+    option_api_key: Option<&str>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
     let api_key = option_api_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .or_else(|| {
-            std::env::var("GOOGLE_CLOUD_API_KEY")
-                .ok()
+            crate::get_provider_env_value("GOOGLE_CLOUD_API_KEY", env)
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty())
         })?;

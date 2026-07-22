@@ -393,6 +393,7 @@ impl ApiProvider for AzureOpenAIResponsesHttpProvider {
         let config = resolve_azure_openai_config(
             model,
             AzureOpenAIConfigOptions {
+                env: options.stream.env.clone(),
                 azure_base_url: options
                     .stream
                     .extra
@@ -796,6 +797,7 @@ impl ApiProvider for BedrockConverseStreamHttpProvider {
         let config = resolve_bedrock_client_config(
             model,
             BedrockClientOptions {
+                env: options.stream.env.clone(),
                 region: options
                     .stream
                     .extra
@@ -852,13 +854,14 @@ impl ApiProvider for BedrockConverseStreamHttpProvider {
         headers
             .entry("content-type".to_owned())
             .or_insert_with(|| "application/json".to_owned());
-        let bearer = (std::env::var("AWS_BEDROCK_SKIP_AUTH").ok().as_deref() != Some("1"))
+        let skip_auth = crate::get_provider_env_value("AWS_BEDROCK_SKIP_AUTH", &options.stream.env)
+            .as_deref()
+            == Some("1");
+        let bearer = (!skip_auth)
             .then(|| {
-                options
-                    .stream
-                    .api_key
-                    .clone()
-                    .or_else(|| std::env::var("AWS_BEARER_TOKEN_BEDROCK").ok())
+                options.stream.api_key.clone().or_else(|| {
+                    crate::get_provider_env_value("AWS_BEARER_TOKEN_BEDROCK", &options.stream.env)
+                })
             })
             .flatten();
         if !headers_contain(&headers, "authorization")

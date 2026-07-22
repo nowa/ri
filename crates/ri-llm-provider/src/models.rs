@@ -4321,6 +4321,15 @@ pub fn is_cloudflare_provider(provider: &str) -> bool {
 }
 
 pub fn resolve_cloudflare_base_url(model: &Model) -> Result<String, String> {
+    resolve_cloudflare_base_url_scoped(model, &std::collections::BTreeMap::new())
+}
+
+/// Substitute `{VAR}` placeholders in a Cloudflare base URL from the
+/// request-scoped provider env or the process environment.
+pub fn resolve_cloudflare_base_url_scoped(
+    model: &Model,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<String, String> {
     if !model.base_url.contains('{') {
         return Ok(model.base_url.clone());
     }
@@ -4340,7 +4349,7 @@ pub fn resolve_cloudflare_base_url(model: &Model) -> Result<String, String> {
             remaining = &after_start[end + 1..];
             continue;
         }
-        let value = std::env::var(name).map_err(|_| {
+        let value = crate::get_provider_env_value(name, env).ok_or_else(|| {
             format!(
                 "{name} is required for provider {} but is not set.",
                 model.provider

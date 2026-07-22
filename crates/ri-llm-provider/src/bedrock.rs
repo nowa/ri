@@ -16,6 +16,8 @@ use std::{collections::BTreeMap, env, fs, path::PathBuf, time::Duration};
 pub struct BedrockClientOptions {
     pub region: Option<String>,
     pub profile: Option<String>,
+    /// Request-scoped provider env consulted before process env.
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +44,12 @@ pub fn resolve_bedrock_client_config(
     // conflicts with AWS_REGION set for other services.
     let arn_region = bedrock_arn_region(&model.id);
     let configured_region = arn_region.or_else(|| configured_bedrock_region(&options));
-    let has_configured_profile = std::env::var_os("AWS_PROFILE").is_some();
+    let has_configured_profile = options
+        .profile
+        .as_deref()
+        .filter(|profile| !profile.is_empty())
+        .is_some()
+        || crate::get_provider_env_value("AWS_PROFILE", &options.env).is_some();
     let endpoint_region = standard_bedrock_endpoint_region(&model.base_url);
     let use_explicit_endpoint = should_use_explicit_bedrock_endpoint(
         &model.base_url,
@@ -121,9 +128,9 @@ fn configured_bedrock_region(options: &BedrockClientOptions) -> Option<String> {
     options
         .region
         .clone()
-        .or_else(|| std::env::var("AWS_REGION").ok())
-        .or_else(|| std::env::var("AWS_DEFAULT_REGION").ok())
         .filter(|region| !region.is_empty())
+        .or_else(|| crate::get_provider_env_value("AWS_REGION", &options.env))
+        .or_else(|| crate::get_provider_env_value("AWS_DEFAULT_REGION", &options.env))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

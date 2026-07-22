@@ -18,6 +18,8 @@ pub struct AzureOpenAIConfigOptions {
     pub azure_base_url: Option<String>,
     pub azure_resource_name: Option<String>,
     pub azure_api_version: Option<String>,
+    /// Request-scoped provider env consulted before process env.
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,12 +69,23 @@ pub fn resolve_azure_openai_deployment_name(
     model: &Model,
     azure_deployment_name: Option<&str>,
 ) -> String {
+    resolve_azure_openai_deployment_name_scoped(
+        model,
+        azure_deployment_name,
+        &std::collections::BTreeMap::new(),
+    )
+}
+
+pub fn resolve_azure_openai_deployment_name_scoped(
+    model: &Model,
+    azure_deployment_name: Option<&str>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> String {
     if let Some(deployment_name) = azure_deployment_name.filter(|value| !value.is_empty()) {
         return deployment_name.to_owned();
     }
-    let mapped = std::env::var("AZURE_OPENAI_DEPLOYMENT_NAME_MAP")
-        .ok()
-        .and_then(|value| {
+    let mapped =
+        crate::get_provider_env_value("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", env).and_then(|value| {
             parse_azure_openai_deployment_name_map(Some(&value))
                 .get(&model.id)
                 .cloned()
@@ -191,11 +204,7 @@ pub fn resolve_azure_openai_config(
     let api_version = options
         .azure_api_version
         .filter(|value| !value.is_empty())
-        .or_else(|| {
-            std::env::var("AZURE_OPENAI_API_VERSION")
-                .ok()
-                .filter(|value| !value.is_empty())
-        })
+        .or_else(|| crate::get_provider_env_value("AZURE_OPENAI_API_VERSION", &options.env))
         .unwrap_or_else(|| DEFAULT_AZURE_OPENAI_API_VERSION.to_owned());
 
     let base_url = options
@@ -203,8 +212,7 @@ pub fn resolve_azure_openai_config(
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .or_else(|| {
-            std::env::var("AZURE_OPENAI_BASE_URL")
-                .ok()
+            crate::get_provider_env_value("AZURE_OPENAI_BASE_URL", &options.env)
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty())
         })
