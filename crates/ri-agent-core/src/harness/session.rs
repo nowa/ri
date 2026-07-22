@@ -11,7 +11,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionErrorCode {
@@ -62,6 +61,9 @@ pub struct JsonlSessionMetadata {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_session_path: Option<String>,
+    /// Opaque caller-provided metadata stored in the session header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, Value>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -573,6 +575,16 @@ impl JsonlSessionStorage {
         session_id: impl Into<String>,
         parent_session_path: Option<String>,
     ) -> Result<Self, SessionError> {
+        Self::create_with_metadata(file_path, cwd, session_id, parent_session_path, None)
+    }
+
+    pub fn create_with_metadata(
+        file_path: impl AsRef<Path>,
+        cwd: impl Into<String>,
+        session_id: impl Into<String>,
+        parent_session_path: Option<String>,
+        metadata: Option<serde_json::Map<String, Value>>,
+    ) -> Result<Self, SessionError> {
         let file_path = file_path.as_ref().to_path_buf();
         let header = SessionHeader {
             entry_type: "session".to_owned(),
@@ -581,6 +593,7 @@ impl JsonlSessionStorage {
             timestamp: now_iso(),
             cwd: cwd.into(),
             parent_session: parent_session_path,
+            metadata,
         };
         if let Some(parent) = file_path.parent() {
             fs::create_dir_all(parent).map_err(storage_error)?;
@@ -613,6 +626,7 @@ impl JsonlSessionStorage {
             cwd: header.cwd,
             path: file_path.to_string_lossy().into_owned(),
             parent_session_path: header.parent_session,
+            metadata: header.metadata,
         };
         Self {
             file_path,
@@ -785,16 +799,48 @@ impl From<JsonlSessionStorage> for SessionStorageKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Session {
     storage: Arc<Mutex<SessionStorageKind>>,
+    context_build_options: Arc<SessionContextBuildOptions>,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session").finish_non_exhaustive()
+    }
 }
 
 impl Session {
     pub fn new(storage: impl Into<SessionStorageKind>) -> Self {
+        Self::with_context_build_options(storage, SessionContextBuildOptions::default())
+    }
+
+    pub fn with_context_build_options(
+        storage: impl Into<SessionStorageKind>,
+        context_build_options: SessionContextBuildOptions,
+    ) -> Self {
         Self {
             storage: Arc::new(Mutex::new(storage.into())),
+            context_build_options: Arc::new(context_build_options),
         }
+    }
+
+    fn merge_context_build_options(
+        &self,
+        options: &SessionContextBuildOptions,
+    ) -> SessionContextBuildOptions {
+        let mut merged = (*self.context_build_options).clone();
+        merged
+            .entry_transforms
+            .extend(options.entry_transforms.iter().cloned());
+        merged.entry_projectors.extend(
+            options
+                .entry_projectors
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        merged
     }
 
     pub fn leaf_id(&self) -> Result<Option<String>, SessionError> {
@@ -843,7 +889,27 @@ impl Session {
     }
 
     pub fn build_context(&self) -> Result<SessionContext, SessionError> {
-        build_session_context(&self.branch(None)?)
+        self.build_context_with_options(&SessionContextBuildOptions::default())
+    }
+
+    pub fn build_context_with_options(
+        &self,
+        options: &SessionContextBuildOptions,
+    ) -> Result<SessionContext, SessionError> {
+        build_session_context_with_options(
+            &self.branch(None)?,
+            &self.merge_context_build_options(options),
+        )
+    }
+
+    pub fn build_context_entries(
+        &self,
+        options: &SessionContextBuildOptions,
+    ) -> Result<Vec<SessionTreeEntry>, SessionError> {
+        Ok(build_context_entries(
+            &self.branch(None)?,
+            &self.merge_context_build_options(options),
+        ))
     }
 
     pub fn label(&self, id: &str) -> Option<String> {
@@ -1032,11 +1098,12 @@ impl Session {
     pub fn append_session_name(&mut self, name: impl Into<String>) -> Result<String, SessionError> {
         let id = self.storage.lock().create_entry_id();
         let parent_id = self.storage.lock().leaf_id()?;
+        let sanitized_name = normalize_session_name(&name.into());
         self.append_entry(SessionTreeEntry::SessionInfo {
             id,
             parent_id,
             timestamp: now_iso(),
-            name: Some(name.into().trim().to_owned()),
+            name: Some(sanitized_name),
         })
     }
 
@@ -1169,13 +1236,29 @@ impl JsonlSessionRepo {
         id: Option<String>,
         parent_session_path: Option<String>,
     ) -> Result<Session, SessionError> {
+        self.create_with_metadata(cwd, id, parent_session_path, None)
+    }
+
+    pub fn create_with_metadata(
+        &self,
+        cwd: impl Into<String>,
+        id: Option<String>,
+        parent_session_path: Option<String>,
+        metadata: Option<serde_json::Map<String, Value>>,
+    ) -> Result<Session, SessionError> {
         let cwd = cwd.into();
         let id = id.unwrap_or_else(uuidv7);
         let created_at = now_iso();
         let dir = self.session_dir(&cwd);
         fs::create_dir_all(&dir).map_err(storage_error)?;
         let file_path = dir.join(format!("{}_{}.jsonl", sanitize_timestamp(&created_at), id));
-        let storage = JsonlSessionStorage::create(file_path, cwd, id, parent_session_path)?;
+        let storage = JsonlSessionStorage::create_with_metadata(
+            file_path,
+            cwd,
+            id,
+            parent_session_path,
+            metadata,
+        )?;
         Ok(Session::new(storage))
     }
 
@@ -1235,7 +1318,7 @@ impl JsonlSessionRepo {
     ) -> Result<Session, SessionError> {
         let source = self.open(source_metadata)?;
         let entries = entries_to_fork(&source.storage.lock(), &options.fork)?;
-        let mut session = self.create(
+        let mut session = self.create_with_metadata(
             options.cwd,
             options.fork.id,
             Some(
@@ -1243,6 +1326,9 @@ impl JsonlSessionRepo {
                     .parent_session_path
                     .unwrap_or_else(|| source_metadata.path.clone()),
             ),
+            options
+                .metadata
+                .or_else(|| source_metadata.metadata.clone()),
         )?;
         for entry in entries {
             session.append_entry(entry)?;
@@ -1295,6 +1381,9 @@ pub enum ForkPosition {
 pub struct JsonlSessionForkOptions {
     pub cwd: String,
     pub parent_session_path: Option<String>,
+    /// Header metadata for the forked session; defaults to the source
+    /// session's header metadata.
+    pub metadata: Option<serde_json::Map<String, Value>>,
     pub fork: SessionForkOptions,
 }
 
@@ -1333,13 +1422,32 @@ fn entries_to_fork(
     storage.path_to_root(effective_leaf_id.as_deref())
 }
 
-pub fn build_session_context(
+pub type ContextEntryTransform =
+    Arc<dyn Fn(&[SessionTreeEntry]) -> Vec<SessionTreeEntry> + Send + Sync>;
+
+pub type CustomEntryContextMessageProjector = Arc<
+    dyn Fn(&SessionTreeEntry, usize, &[SessionTreeEntry]) -> Option<Vec<SessionMessage>>
+        + Send
+        + Sync,
+>;
+
+/// Options controlling how session path entries project into model context,
+/// mirroring pi `SessionContextBuildOptions`.
+#[derive(Clone, Default)]
+pub struct SessionContextBuildOptions {
+    /// Additional entry transforms applied after the default compaction
+    /// transform.
+    pub entry_transforms: Vec<ContextEntryTransform>,
+    /// Optional custom-entry projectors. Custom entries are omitted from model
+    /// context by default.
+    pub entry_projectors: BTreeMap<String, CustomEntryContextMessageProjector>,
+}
+
+fn derive_session_context_state(
     path_entries: &[SessionTreeEntry],
-) -> Result<SessionContext, SessionError> {
+) -> (String, Option<SessionModelSelection>) {
     let mut thinking_level = "off".to_owned();
     let mut model = None;
-    let mut compaction: Option<&SessionTreeEntry> = None;
-
     for entry in path_entries {
         match entry {
             SessionTreeEntry::ThinkingLevelChange {
@@ -1363,49 +1471,113 @@ pub fn build_session_context(
                     model_id: message.model.clone(),
                 });
             }
-            entry @ SessionTreeEntry::Compaction { .. } => compaction = Some(entry),
             _ => {}
         }
     }
+    (thinking_level, model)
+}
 
-    let mut messages = Vec::new();
-    if let Some(SessionTreeEntry::Compaction {
+/// Select the entries that survive the latest compaction boundary. The
+/// compaction entry itself leads the result so it projects into the
+/// compaction-summary message.
+pub fn default_context_entry_transform(path_entries: &[SessionTreeEntry]) -> Vec<SessionTreeEntry> {
+    let mut compaction: Option<&SessionTreeEntry> = None;
+    for entry in path_entries {
+        if matches!(entry, SessionTreeEntry::Compaction { .. }) {
+            compaction = Some(entry);
+        }
+    }
+    let Some(compaction_entry) = compaction else {
+        return path_entries.to_vec();
+    };
+    let SessionTreeEntry::Compaction {
         id,
-        summary,
         first_kept_entry_id,
-        tokens_before,
-        timestamp,
         ..
-    }) = compaction
-    {
-        messages.push(SessionMessage::CompactionSummary {
+    } = compaction_entry
+    else {
+        return path_entries.to_vec();
+    };
+
+    let mut entries = vec![compaction_entry.clone()];
+    let Some(compaction_idx) = path_entries.iter().position(|entry| entry.id() == id) else {
+        return path_entries.to_vec();
+    };
+    let mut found_first_kept = false;
+    for entry in &path_entries[..compaction_idx] {
+        if entry.id() == first_kept_entry_id {
+            found_first_kept = true;
+        }
+        if found_first_kept {
+            entries.push(entry.clone());
+        }
+    }
+    for entry in &path_entries[compaction_idx + 1..] {
+        entries.push(entry.clone());
+    }
+    entries
+}
+
+pub fn build_context_entries(
+    path_entries: &[SessionTreeEntry],
+    options: &SessionContextBuildOptions,
+) -> Vec<SessionTreeEntry> {
+    let mut entries = default_context_entry_transform(path_entries);
+    for transform in &options.entry_transforms {
+        entries = transform(&entries);
+    }
+    entries
+}
+
+pub fn session_entry_to_context_messages(
+    entry: &SessionTreeEntry,
+    index: usize,
+    entries: &[SessionTreeEntry],
+    options: &SessionContextBuildOptions,
+) -> Vec<SessionMessage> {
+    let mut messages = Vec::new();
+    match entry {
+        SessionTreeEntry::Compaction {
+            summary,
+            tokens_before,
+            timestamp,
+            ..
+        } => messages.push(SessionMessage::CompactionSummary {
             summary: summary.clone(),
             tokens_before: *tokens_before,
             timestamp: parse_timestamp_millis(timestamp),
-        });
-        let compaction_idx = path_entries
-            .iter()
-            .position(|entry| entry.id() == id)
-            .ok_or_else(|| {
-                SessionError::new(SessionErrorCode::InvalidSession, "Compaction entry missing")
-            })?;
-        let mut found_first_kept = false;
-        for entry in &path_entries[..compaction_idx] {
-            if entry.id() == first_kept_entry_id {
-                found_first_kept = true;
-            }
-            if found_first_kept {
-                append_context_message(&mut messages, entry);
+        }),
+        SessionTreeEntry::Custom { custom_type, .. } => {
+            if let Some(projector) = options.entry_projectors.get(custom_type)
+                && let Some(projected) = projector(entry, index, entries)
+            {
+                messages.extend(projected);
             }
         }
-        for entry in &path_entries[compaction_idx + 1..] {
-            append_context_message(&mut messages, entry);
-        }
-    } else {
-        for entry in path_entries {
-            append_context_message(&mut messages, entry);
-        }
+        _ => append_context_message(&mut messages, entry),
     }
+    messages
+}
+
+pub fn build_session_context(
+    path_entries: &[SessionTreeEntry],
+) -> Result<SessionContext, SessionError> {
+    build_session_context_with_options(path_entries, &SessionContextBuildOptions::default())
+}
+
+pub fn build_session_context_with_options(
+    path_entries: &[SessionTreeEntry],
+    options: &SessionContextBuildOptions,
+) -> Result<SessionContext, SessionError> {
+    let (thinking_level, model) = derive_session_context_state(path_entries);
+    let context_entries = build_context_entries(path_entries, options);
+    let messages = context_entries
+        .iter()
+        .enumerate()
+        .flat_map(|(index, entry)| {
+            session_entry_to_context_messages(entry, index, &context_entries, options)
+        })
+        .collect();
 
     Ok(SessionContext {
         messages,
@@ -1441,11 +1613,12 @@ pub fn load_jsonl_session_metadata(
         cwd: header.cwd,
         path: file_path.to_string_lossy().into_owned(),
         parent_session_path: header.parent_session,
+        metadata: header.metadata,
     })
 }
 
 pub fn uuidv7() -> String {
-    Uuid::now_v7().to_string()
+    ri_llm_provider::uuidv7()
 }
 
 pub fn user_message_text(text: impl Into<String>) -> Message {
@@ -1565,9 +1738,31 @@ fn build_labels_by_id(entries: &[SessionTreeEntry]) -> BTreeMap<String, String> 
     labels
 }
 
+/// Collapse CR/LF runs to single spaces and trim, mirroring pi
+/// `appendSessionName` sanitization.
+fn normalize_session_name(name: &str) -> String {
+    let mut result = String::with_capacity(name.len());
+    let mut in_newline_run = false;
+    for ch in name.chars() {
+        if ch == '\r' || ch == '\n' {
+            if !in_newline_run {
+                result.push(' ');
+                in_newline_run = true;
+            }
+        } else {
+            result.push(ch);
+            in_newline_run = false;
+        }
+    }
+    result.trim().to_owned()
+}
+
 fn generate_entry_id(by_id: &BTreeMap<String, SessionTreeEntry>) -> String {
     for _ in 0..100 {
-        let id = uuidv7().chars().take(8).collect::<String>();
+        // The uuidv7 prefix is timestamp-derived and nearly constant between
+        // calls, so short ids must come from the random tail.
+        let full = uuidv7();
+        let id = full[full.len().saturating_sub(8)..].to_owned();
         if !by_id.contains_key(&id) {
             return id;
         }
@@ -1645,6 +1840,8 @@ struct SessionHeader {
     cwd: String,
     #[serde(rename = "parentSession", skip_serializing_if = "Option::is_none")]
     parent_session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metadata: Option<serde_json::Map<String, Value>>,
 }
 
 fn load_jsonl_storage(
@@ -1722,6 +1919,15 @@ fn parse_header_line(line: &str, file_path: &Path) -> Result<SessionHeader, Sess
         return Err(invalid_session(
             file_path,
             "session header parentSession must be a string",
+        ));
+    }
+    if parsed
+        .get("metadata")
+        .is_some_and(|metadata| !metadata.is_object())
+    {
+        return Err(invalid_session(
+            file_path,
+            "session header metadata must be an object",
         ));
     }
     let header: SessionHeader = serde_json::from_value(parsed).map_err(|error| {

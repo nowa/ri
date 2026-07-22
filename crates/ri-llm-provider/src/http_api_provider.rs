@@ -739,7 +739,7 @@ impl ApiProvider for OpenAICodexResponsesHttpProvider {
             .stream
             .session_id
             .clone()
-            .unwrap_or_else(|| format!("ri-codex-{}", now_millis()));
+            .unwrap_or_else(crate::uuidv7);
         let websocket_headers = build_openai_codex_websocket_headers(
             &model.headers,
             &options.stream.headers,

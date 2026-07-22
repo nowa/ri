@@ -993,6 +993,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
+ "uuid",
  "webpki-roots",
 ]
 

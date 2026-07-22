@@ -847,3 +847,9 @@ impl AssistantMessageEvent {
 pub fn now_millis() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
+
+/// Generate a time-ordered UUIDv7, shared by session ids and provider request
+/// ids like pi `utils/uuid.ts`.
+pub fn uuidv7() -> String {
+    uuid::Uuid::now_v7().to_string()
+}

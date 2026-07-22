@@ -1170,6 +1170,7 @@ fn jsonl_repo_stores_lists_opens_deletes_and_forks_by_metadata() {
         .fork(
             &updated_metadata,
             JsonlSessionForkOptions {
+                metadata: None,
                 cwd: "/tmp/target".to_owned(),
                 parent_session_path: None,
                 fork: SessionForkOptions {
@@ -1198,6 +1199,7 @@ fn jsonl_repo_stores_lists_opens_deletes_and_forks_by_metadata() {
         .fork(
             &updated_metadata,
             JsonlSessionForkOptions {
+                metadata: None,
                 cwd: "/tmp/target".to_owned(),
                 parent_session_path: None,
                 fork: SessionForkOptions {
@@ -1224,4 +1226,209 @@ fn jsonl_repo_stores_lists_opens_deletes_and_forks_by_metadata() {
             .message
             .contains("Session not found")
     );
+}
+
+#[test]
+fn session_entry_ids_use_uuidv7_random_tail() {
+    let mut session = Session::new(InMemorySessionStorage::new());
+    let ids = (0..3)
+        .map(|index| {
+            session
+                .append_message(user_message_text(&format!("message {index}")))
+                .expect("append")
+        })
+        .collect::<Vec<_>>();
+    for id in &ids {
+        // The uuidv7 prefix is timestamp-derived and nearly constant between
+        // calls, so short ids must come from the random tail; prefix-derived
+        // ids collide within a millisecond and fall back to full UUIDs.
+        assert_eq!(id.len(), 8, "expected an 8-char short id, got {id}");
+    }
+    let unique = ids.iter().collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(unique.len(), ids.len());
+}
+
+#[test]
+fn session_normalizes_session_names() {
+    let mut session = Session::new(InMemorySessionStorage::new());
+    session
+        .append_session_name(" hello\nworld\r\nagain ")
+        .expect("name");
+    assert_eq!(session.session_name().as_deref(), Some("hello world again"));
+}
+
+#[test]
+fn session_context_projection_handles_custom_entries_and_transforms() {
+    // Custom entries stay in context entries but are omitted from messages by
+    // default.
+    let mut session = Session::new(InMemorySessionStorage::new());
+    session
+        .append_message(user_message_text("one"))
+        .expect("user");
+    session
+        .append_custom_entry("chat_message", Some(json!({ "text": "hello" })))
+        .expect("custom");
+    let context_entries = session
+        .build_context_entries(&SessionContextBuildOptions::default())
+        .expect("entries");
+    assert_eq!(
+        context_entries
+            .iter()
+            .map(SessionTreeEntry::entry_type)
+            .collect::<Vec<_>>(),
+        vec!["message", "custom"]
+    );
+    assert_eq!(session.build_context().expect("context").messages.len(), 1);
+
+    // Configured projectors turn custom entries into context messages.
+    let mut projectors: std::collections::BTreeMap<String, CustomEntryContextMessageProjector> =
+        Default::default();
+    projectors.insert(
+        "chat_message".to_owned(),
+        std::sync::Arc::new(|entry, _, _| {
+            let SessionTreeEntry::Custom { data, .. } = entry else {
+                return None;
+            };
+            let text = data
+                .as_ref()
+                .and_then(|data| data.get("text"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            Some(vec![SessionMessage::Llm {
+                message: user_message_text(&format!("chat: {text}")),
+            }])
+        }),
+    );
+    let projecting_session = Session::with_context_build_options(
+        InMemorySessionStorage::new(),
+        SessionContextBuildOptions {
+            entry_transforms: Vec::new(),
+            entry_projectors: projectors,
+        },
+    );
+    let mut projecting_session = projecting_session;
+    projecting_session
+        .append_message(user_message_text("one"))
+        .expect("user");
+    projecting_session
+        .append_custom_entry("chat_message", Some(json!({ "text": "hello" })))
+        .expect("custom");
+    let context = projecting_session.build_context().expect("context");
+    assert_eq!(
+        context
+            .messages
+            .iter()
+            .map(SessionMessage::role)
+            .collect::<Vec<_>>(),
+        vec!["user", "user"]
+    );
+    assert!(matches!(
+        &context.messages[1],
+        SessionMessage::Llm { message } if user_message_text_content(message) == "chat: hello"
+    ));
+
+    // Entry transforms run after the default compaction selection.
+    let observed_first = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let observed_ref = observed_first.clone();
+    let transforming_session = Session::with_context_build_options(
+        InMemorySessionStorage::new(),
+        SessionContextBuildOptions {
+            entry_transforms: vec![std::sync::Arc::new(move |entries| {
+                *observed_ref.lock().expect("observed") =
+                    entries.first().map(|entry| entry.entry_type().to_owned());
+                entries
+                    .iter()
+                    .filter(|entry| !matches!(entry, SessionTreeEntry::Compaction { .. }))
+                    .cloned()
+                    .collect()
+            })],
+            entry_projectors: Default::default(),
+        },
+    );
+    let mut transforming_session = transforming_session;
+    transforming_session
+        .append_message(user_message_text("one"))
+        .expect("one");
+    let kept = transforming_session
+        .append_message(user_message_text("two"))
+        .expect("two");
+    transforming_session
+        .append_compaction("summary", kept, 1_234)
+        .expect("compaction");
+    transforming_session
+        .append_message(user_message_text("three"))
+        .expect("three");
+    let context = transforming_session.build_context().expect("context");
+    assert_eq!(
+        observed_first.lock().expect("observed").as_deref(),
+        Some("compaction")
+    );
+    assert_eq!(
+        context
+            .messages
+            .iter()
+            .map(SessionMessage::role)
+            .collect::<Vec<_>>(),
+        vec!["user", "user"]
+    );
+}
+
+#[test]
+fn jsonl_session_header_supports_custom_metadata() {
+    let dir = temp_dir();
+    let repo = JsonlSessionRepo::new(&dir);
+    let mut metadata_object = serde_json::Map::new();
+    metadata_object.insert("agentProfile".to_owned(), json!("reviewer"));
+    let session = repo
+        .create_with_metadata("/repo", None, None, Some(metadata_object.clone()))
+        .expect("create");
+    let session_path = match session.jsonl_metadata() {
+        Some(metadata) => metadata.path,
+        None => panic!("expected jsonl metadata"),
+    };
+
+    let header_line = fs::read_to_string(&session_path)
+        .expect("read")
+        .lines()
+        .next()
+        .expect("header")
+        .to_owned();
+    let header: serde_json::Value = serde_json::from_str(&header_line).expect("header json");
+    assert_eq!(header["metadata"]["agentProfile"], json!("reviewer"));
+
+    let reloaded = Session::new(JsonlSessionStorage::open(&session_path).expect("open"));
+    assert_eq!(
+        reloaded
+            .jsonl_metadata()
+            .and_then(|metadata| metadata.metadata),
+        Some(metadata_object.clone())
+    );
+
+    // Forks inherit the source header metadata unless overridden.
+    let source_metadata = reloaded.jsonl_metadata().expect("metadata");
+    let fork = repo
+        .fork(
+            &source_metadata,
+            JsonlSessionForkOptions {
+                metadata: None,
+                cwd: "/repo".to_owned(),
+                parent_session_path: None,
+                fork: SessionForkOptions::default(),
+            },
+        )
+        .expect("fork");
+    assert_eq!(
+        fork.jsonl_metadata().and_then(|metadata| metadata.metadata),
+        Some(metadata_object)
+    );
+
+    // Non-object metadata is rejected at parse time.
+    let invalid_path = dir.join("invalid-metadata.jsonl");
+    fs::write(
+        &invalid_path,
+        "{\"type\":\"session\",\"version\":3,\"id\":\"s\",\"timestamp\":\"t\",\"cwd\":\"/repo\",\"metadata\":[1]}\n",
+    )
+    .expect("write");
+    let error = JsonlSessionStorage::open(&invalid_path).expect_err("invalid metadata");
+    assert!(error.to_string().contains("metadata must be an object"));
 }

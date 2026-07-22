@@ -1989,6 +1989,24 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Aligned the pi session increment batch: `1dac0990` short session entry ids
+  now come from the uuidv7 random tail (the timestamp-derived prefix collides
+  within a millisecond and degraded to full-UUID fallbacks); `e8ede14f`
+  session names collapse CR/LF runs to single spaces and trim; `dd1c690f`
+  session context building is restructured into
+  `derive_session_context_state` + `default_context_entry_transform` +
+  `build_context_entries` + `session_entry_to_context_messages` with
+  `SessionContextBuildOptions` (`entry_transforms` applied after the default
+  compaction selection, `entry_projectors` that can project custom entries
+  into context messages; custom entries stay omitted by default), carried on
+  `Session::with_context_build_options` and merged per call; `7198e78f` JSONL
+  session headers support an opaque `metadata` object (validated as an
+  object, surfaced on `JsonlSessionMetadata`, written via
+  `create_with_metadata`, inherited by forks unless overridden); `d2f8dafb`
+  `uuidv7` now lives in `ri-llm-provider` shared by session ids and the
+  OpenAI Codex WebSocket fallback request id (previously an ad-hoc
+  `ri-codex-<millis>` id). Verified with the `ri-agent-core` session and
+  harness suites plus `cargo test -p ri-llm-provider --test provider_core`.
 - Aligned pi `fbdd4638` "feat(ai): add max thinking level": `ThinkingLevel`
   gains a `Max` variant (wire value "max") above `xhigh`. Like `xhigh`, `max`
   is opt-in per model: `get_supported_thinking_levels` only exposes it with an
