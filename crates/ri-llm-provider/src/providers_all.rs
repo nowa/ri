@@ -105,15 +105,9 @@ impl OAuthAuth for BuiltInOAuthAdapter {
 
     async fn login(
         &self,
-        _interaction: &dyn crate::auth::AuthInteraction,
+        interaction: &dyn crate::auth::AuthInteraction,
     ) -> Result<OAuthCredential, String> {
-        // Interactive login flows still run through the standalone OAuth
-        // primitives (`ri-ai` CLI); wiring them to `AuthInteraction` is
-        // tracked as remaining Models-runtime work.
-        Err(format!(
-            "{} interactive login is not yet wired to AuthInteraction; log in via the ri-ai CLI",
-            self.display
-        ))
+        crate::auth::login_builtin_oauth_provider(&self.provider_id, interaction).await
     }
 
     async fn refresh(&self, credential: &OAuthCredential) -> Result<OAuthCredential, String> {

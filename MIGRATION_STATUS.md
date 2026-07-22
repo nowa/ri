@@ -2066,6 +2066,16 @@ not part of this pass.
   round: pi's materialized-state caches (`session_materialized`,
   `entry_materialized`), `branch_entries` acceleration + branch-cursor
   paging, and repo-level fork; the schema already includes those tables.
+- Interactive OAuth login wired to `AuthInteraction`
+  (`auth::login_builtin_oauth_provider`): Anthropic and OpenAI Codex browser
+  flows notify the auth URL then race the local callback server against a
+  manual paste prompt (empty input falls back to the callback; state
+  mismatches are rejected), Codex offers the pi browser/device-code method
+  selector, and GitHub Copilot prompts for the enterprise domain then runs
+  the device flow with `device_code`/`Progress` notifications and model
+  policy enabling. `BuiltInOAuthAdapter::login` now delegates here, so
+  `Models::login` performs real interactive logins for the built-in OAuth
+  providers.
 - Models runtime harness integration (pi phase 6, transitional):
   `AgentHarnessOptions.models` accepts a `Models` collection. When present it
   is the harness's stream path (the agent loop's stream provider dispatches
@@ -2103,10 +2113,11 @@ not part of this pass.
   env-var/ambient api-key auth, and OAuth adapters (refresh/to_auth over the
   existing token primitives; GitHub Copilot derives per-credential base
   URLs), plus `builtin_models()`. 17 ported models-runtime contracts pass in
-  `tests/models_runtime.rs`. Known gaps, tracked below: interactive OAuth
-  login is not yet wired to `AuthInteraction`; the harness still streams
-  through the compat globals; the compat surface has not been reimplemented
-  over the runtime.
+  `tests/models_runtime.rs`. Known gaps, tracked below: the harness still
+  streams through the compat globals when no explicit `Models` collection is
+  configured; the compat surface has not been reimplemented over the
+  runtime. (Interactive OAuth login has since been wired to
+  `AuthInteraction` — see the entry above.)
 - Aligned the core of pi `7f29e7a3` "feat: add provider-scoped environment
   overrides (#5807)": `StreamOptions` gains a request-scoped `env` map,
   `get_provider_env_value`/`get_env_api_key_scoped`/`find_env_keys_scoped`

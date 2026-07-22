@@ -26683,3 +26683,199 @@ async fn openai_codex_device_code_login_polls_and_exchanges_authorization_code()
     );
     assert_eq!(credentials.refresh, "codex-refresh");
 }
+
+mod interactive_oauth_login {
+    use super::{mock_json_sequence_server, mock_json_server};
+    use async_trait::async_trait;
+    use ri_llm_provider::auth::{
+        AuthEvent, AuthInteraction, AuthPrompt, login_builtin_oauth_provider,
+        login_github_copilot_with_urls, wait_for_callback_or_manual_code,
+    };
+    use ri_llm_provider::{
+        GitHubCopilotModelPolicyOptions, GitHubCopilotUrls, OAuthCallbackServerOptions,
+        OAuthLoginFlow, start_oauth_callback_server,
+    };
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    struct ScriptedAuthInteraction {
+        answers: Mutex<VecDeque<String>>,
+        prompts: Mutex<Vec<AuthPrompt>>,
+        events: Mutex<Vec<AuthEvent>>,
+    }
+
+    impl ScriptedAuthInteraction {
+        fn new(answers: &[&str]) -> Self {
+            Self {
+                answers: Mutex::new(answers.iter().map(|answer| (*answer).to_owned()).collect()),
+                prompts: Mutex::new(Vec::new()),
+                events: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AuthInteraction for ScriptedAuthInteraction {
+        async fn prompt(&self, prompt: AuthPrompt) -> Result<String, String> {
+            self.prompts.lock().expect("prompts").push(prompt);
+            let next = self.answers.lock().expect("answers").pop_front();
+            match next {
+                Some(answer) => Ok(answer),
+                // No scripted answer: behave like a prompt the user never
+                // resolves, so callback races can win.
+                None => std::future::pending().await,
+            }
+        }
+
+        fn notify(&self, event: AuthEvent) {
+            self.events.lock().expect("events").push(event);
+        }
+    }
+
+    async fn test_login_flow(state: &str) -> OAuthLoginFlow {
+        let callback_server = start_oauth_callback_server(OAuthCallbackServerOptions {
+            bind_host: "127.0.0.1".to_owned(),
+            port: 0,
+            callback_path: "/auth/callback".to_owned(),
+            redirect_uri: String::new(),
+            expected_state: state.to_owned(),
+            success_message: "done".to_owned(),
+        })
+        .await
+        .expect("callback server");
+        OAuthLoginFlow {
+            auth_url: "https://auth.example/authorize".to_owned(),
+            instructions: Some("Complete login in your browser.".to_owned()),
+            redirect_uri: callback_server.redirect_uri.clone(),
+            verifier: "test-verifier".to_owned(),
+            state: state.to_owned(),
+            local_addr: callback_server.local_addr,
+            callback_server,
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_unknown_providers_and_invalid_inputs() {
+        let interaction = ScriptedAuthInteraction::new(&[]);
+        let err = login_builtin_oauth_provider("mistral", &interaction)
+            .await
+            .expect_err("unknown provider");
+        assert_eq!(err, "OAuth login is not implemented for provider: mistral");
+
+        let interaction = ScriptedAuthInteraction::new(&["bogus"]);
+        let err = login_builtin_oauth_provider("openai-codex", &interaction)
+            .await
+            .expect_err("unknown method");
+        assert_eq!(err, "Unknown OpenAI Codex login method: bogus");
+        assert!(matches!(
+            interaction.prompts.lock().expect("prompts").first(),
+            Some(AuthPrompt::Select { message, options })
+                if message == "Select OpenAI Codex login method:" && options.len() == 2
+        ));
+
+        let interaction = ScriptedAuthInteraction::new(&["not a domain"]);
+        let err = login_builtin_oauth_provider("github-copilot", &interaction)
+            .await
+            .expect_err("invalid domain");
+        assert_eq!(err, "Invalid GitHub Enterprise URL/domain");
+    }
+
+    #[tokio::test]
+    async fn copilot_login_notifies_device_code_and_returns_credentials() {
+        let (device_url, _device_task) = mock_json_server(
+            r#"{"device_code":"device-code","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","interval":1,"expires_in":60}"#,
+        )
+        .await;
+        let (poll_url, _poll_task) =
+            mock_json_sequence_server(vec![r#"{"access_token":"ghu_refresh_token"}"#]).await;
+        let token = "tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;";
+        let (refresh_url, _refresh_task) = mock_json_server(
+            r#"{"token":"tid=test;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;","expires_at":9999999999}"#,
+        )
+        .await;
+        let urls = GitHubCopilotUrls {
+            device_code_url: device_url,
+            access_token_url: poll_url,
+            copilot_token_url: refresh_url,
+        };
+        let interaction = ScriptedAuthInteraction::new(&[]);
+
+        let credential = login_github_copilot_with_urls(
+            &urls,
+            Some("ghe.example.com"),
+            &interaction,
+            &GitHubCopilotModelPolicyOptions::disabled(),
+        )
+        .await
+        .expect("copilot login");
+
+        assert_eq!(credential.access, token);
+        assert_eq!(credential.refresh, "ghu_refresh_token");
+        assert_eq!(
+            credential
+                .extra
+                .get("enterpriseUrl")
+                .and_then(|v| v.as_str()),
+            Some("ghe.example.com")
+        );
+        let events = interaction.events.lock().expect("events");
+        assert!(matches!(
+            &events[0],
+            AuthEvent::DeviceCode { user_code, interval_seconds: Some(1), .. }
+                if user_code == "ABCD-EFGH"
+        ));
+        assert!(matches!(
+            &events[1],
+            AuthEvent::Progress { message } if message == "Enabling models..."
+        ));
+    }
+
+    #[tokio::test]
+    async fn callback_manual_race_accepts_manual_redirect_url() {
+        let flow = test_login_flow("test-state").await;
+        let interaction = ScriptedAuthInteraction::new(&[
+            "https://example.com/callback?code=manual-code&state=test-state",
+        ]);
+        let authorization = wait_for_callback_or_manual_code(flow, &interaction, "state mismatch")
+            .await
+            .expect("manual authorization");
+        assert_eq!(authorization.code, "manual-code");
+        assert_eq!(authorization.state, "test-state");
+        assert_eq!(authorization.verifier, "test-verifier");
+        assert!(matches!(
+            interaction.events.lock().expect("events").first(),
+            Some(AuthEvent::AuthUrl { url, .. }) if url == "https://auth.example/authorize"
+        ));
+    }
+
+    #[tokio::test]
+    async fn callback_manual_race_rejects_state_mismatch() {
+        let flow = test_login_flow("test-state").await;
+        let interaction = ScriptedAuthInteraction::new(&[
+            "https://example.com/callback?code=manual-code&state=wrong-state",
+        ]);
+        let err = wait_for_callback_or_manual_code(flow, &interaction, "state mismatch")
+            .await
+            .expect_err("mismatch");
+        assert_eq!(err, "state mismatch");
+    }
+
+    #[tokio::test]
+    async fn callback_manual_race_accepts_browser_callback() {
+        let flow = test_login_flow("test-state").await;
+        let callback_url = format!(
+            "http://{}/auth/callback?code=cb-code&state=test-state",
+            flow.local_addr
+        );
+        let interaction = ScriptedAuthInteraction::new(&[]);
+        let request = tokio::spawn(async move {
+            let _ = reqwest::get(callback_url).await;
+        });
+        let authorization = wait_for_callback_or_manual_code(flow, &interaction, "state mismatch")
+            .await
+            .expect("callback authorization");
+        request.await.expect("request task");
+        assert_eq!(authorization.code, "cb-code");
+        assert_eq!(authorization.state, "test-state");
+    }
+}
