@@ -24108,6 +24108,57 @@ async fn mock_reusable_websocket_server(
     (format!("http://{addr}"), task)
 }
 
+async fn mock_websocket_connection_sequence_server(
+    connections: Vec<Vec<Value>>,
+) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind websocket sequence mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let task = tokio::spawn(async move {
+        let mut messages = Vec::new();
+        for events in connections {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut handshake = Vec::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                let n = socket.read(&mut buf).await.expect("read handshake");
+                if n == 0 {
+                    break;
+                }
+                handshake.extend_from_slice(&buf[..n]);
+                if request_is_complete(&handshake) {
+                    break;
+                }
+            }
+            socket
+                .write_all(
+                    b"HTTP/1.1 101 Switching Protocols\r\n\
+                      Upgrade: websocket\r\n\
+                      Connection: Upgrade\r\n\
+                      Sec-WebSocket-Accept: test\r\n\r\n",
+                )
+                .await
+                .expect("write handshake response");
+            messages.push(read_client_websocket_text_frame(&mut socket).await);
+            for event in events {
+                socket
+                    .write_all(&server_websocket_text_frame(&event.to_string()))
+                    .await
+                    .expect("write websocket frame");
+            }
+            let _ = socket.shutdown().await;
+        }
+        messages
+    });
+    (format!("http://{addr}"), task)
+}
+
 async fn read_client_websocket_text_frame(socket: &mut tokio::net::TcpStream) -> String {
     use tokio::io::AsyncReadExt;
 
@@ -26212,4 +26263,270 @@ async fn openai_completions_stream_holds_early_reasoning_details_for_late_tool_c
         tool_call.thought_signature.as_deref(),
         Some(reasoning_detail.to_string().as_str())
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn builtin_openai_codex_provider_reconnects_websocket_on_connection_limit() {
+    reset_openai_codex_websocket_debug_stats(Some("ws-conn-limit-session"));
+    let (base_url, request_task) = mock_websocket_connection_sequence_server(vec![
+        vec![json!({
+            "type": "error",
+            "error": {
+                "code": "websocket_connection_limit_reached",
+                "message": "too many connections"
+            }
+        })],
+        vec![
+            json!({ "type": "response.created", "response": { "id": "resp_conn_limit" } }),
+            json!({
+                "type": "response.output_item.added",
+                "item": { "type": "message", "id": "msg_conn_limit", "role": "assistant", "content": [] }
+            }),
+            json!({ "type": "response.output_text.delta", "delta": "Reconnected" }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "id": "msg_conn_limit",
+                    "content": [{ "type": "output_text", "text": "Reconnected" }]
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_conn_limit",
+                    "status": "completed",
+                    "usage": { "input_tokens": 5, "output_tokens": 2, "total_tokens": 7 }
+                }
+            }),
+        ],
+    ])
+    .await;
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.session_id = Some("ws-conn-limit-session".to_owned());
+    options.stream.transport = Some(Transport::Auto);
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete after reconnect");
+    let requests = request_task.await.expect("request task");
+
+    assert_eq!(message.stop_reason, StopReason::Stop);
+    assert_eq!(text_of(&message), Some("Reconnected"));
+    assert_eq!(requests.len(), 2, "one retry after the connection limit");
+    assert!(
+        message
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic["type"] != "provider_transport_failure"),
+        "a successful reconnect should not report transport diagnostics"
+    );
+    let stats = get_openai_codex_websocket_debug_stats("ws-conn-limit-session")
+        .expect("websocket debug stats");
+    assert_eq!(stats.requests, 2);
+    assert_eq!(stats.sse_fallbacks, 0);
+    cleanup_openai_codex_websocket_sessions(Some("ws-conn-limit-session")).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn builtin_openai_codex_provider_surfaces_nested_websocket_error_payloads() {
+    reset_openai_codex_websocket_debug_stats(Some("ws-nested-error-session"));
+    let (base_url, request_task) = mock_websocket_server(vec![json!({
+        "type": "error",
+        "error": { "code": "bad_request", "message": "nested provider rejection" }
+    })])
+    .await;
+    let mut model = get_model("openai-codex", "gpt-5.5").expect("codex model");
+    model.base_url = base_url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some(codex_test_token());
+    options.stream.session_id = Some("ws-nested-error-session".to_owned());
+    options.stream.transport = Some(Transport::Auto);
+
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("complete with nested provider error");
+    let _request = request_task.await.expect("request task");
+
+    assert_eq!(message.stop_reason, StopReason::Error);
+    assert_eq!(
+        message.error_message.as_deref(),
+        Some("Error Code bad_request: nested provider rejection")
+    );
+}
+
+#[test]
+fn openai_codex_websocket_session_rotation_uses_max_age() {
+    assert!(!openai_codex_websocket_session_expired(0, 54 * 60 * 1000));
+    assert!(openai_codex_websocket_session_expired(0, 55 * 60 * 1000));
+    assert!(openai_codex_websocket_session_expired(
+        1_000_000,
+        1_000_000 + 56 * 60 * 1000
+    ));
+}
+
+#[test]
+fn openai_codex_device_user_code_response_parsing_matches_provider() {
+    let err = parse_openai_codex_device_user_code_response(404, "").expect_err("404");
+    assert!(err.contains("device code login is not enabled"));
+
+    let err = parse_openai_codex_device_user_code_response(500, "boom").expect_err("500");
+    assert_eq!(
+        err,
+        "OpenAI Codex device code request failed with status 500: boom"
+    );
+
+    let err = parse_openai_codex_device_user_code_response(
+        200,
+        r#"{"device_auth_id":"auth-1","user_code":"CODE","interval":-1}"#,
+    )
+    .expect_err("negative interval");
+    assert!(err.starts_with("Invalid OpenAI Codex device code response:"));
+
+    let device = parse_openai_codex_device_user_code_response(
+        200,
+        r#"{"device_auth_id":"auth-1","user_code":"CODE","interval":" 5 "}"#,
+    )
+    .expect("string interval");
+    assert_eq!(
+        device,
+        OpenAICodexDeviceAuth {
+            device_auth_id: "auth-1".to_owned(),
+            user_code: "CODE".to_owned(),
+            interval_seconds: 5,
+        }
+    );
+}
+
+#[test]
+fn openai_codex_device_token_poll_response_parsing_matches_provider() {
+    use ri_llm_provider::device_code::DeviceCodePollResponse;
+
+    let complete = parse_openai_codex_device_token_poll_response(
+        200,
+        r#"{"authorization_code":"code-1","code_verifier":"verifier-1"}"#,
+    );
+    assert_eq!(
+        complete,
+        DeviceCodePollResponse::Complete(OpenAICodexDeviceAuthorization {
+            authorization_code: "code-1".to_owned(),
+            code_verifier: "verifier-1".to_owned(),
+        })
+    );
+
+    let invalid =
+        parse_openai_codex_device_token_poll_response(200, r#"{"authorization_code":""}"#);
+    assert!(matches!(
+        invalid,
+        DeviceCodePollResponse::Failed { message } if message.starts_with("Invalid OpenAI Codex device auth token response:")
+    ));
+
+    assert_eq!(
+        parse_openai_codex_device_token_poll_response(403, ""),
+        DeviceCodePollResponse::Pending
+    );
+    assert_eq!(
+        parse_openai_codex_device_token_poll_response(404, ""),
+        DeviceCodePollResponse::Pending
+    );
+    assert_eq!(
+        parse_openai_codex_device_token_poll_response(
+            400,
+            r#"{"error":"deviceauth_authorization_pending"}"#
+        ),
+        DeviceCodePollResponse::Pending
+    );
+    assert_eq!(
+        parse_openai_codex_device_token_poll_response(
+            400,
+            r#"{"error":{"code":"deviceauth_authorization_pending"}}"#
+        ),
+        DeviceCodePollResponse::Pending
+    );
+    assert_eq!(
+        parse_openai_codex_device_token_poll_response(429, r#"{"error":"slow_down"}"#),
+        DeviceCodePollResponse::SlowDown {
+            interval_seconds: None
+        }
+    );
+    let failed = parse_openai_codex_device_token_poll_response(500, "boom");
+    assert!(matches!(
+        failed,
+        DeviceCodePollResponse::Failed { message } if message == "OpenAI Codex device auth failed with status 500: boom"
+    ));
+}
+
+#[tokio::test]
+async fn openai_codex_device_code_login_polls_and_exchanges_authorization_code() {
+    let (user_code_url, user_code_task) =
+        mock_json_server(r#"{"device_auth_id":"auth-1","user_code":"ABCD-1234","interval":2}"#)
+            .await;
+    let (token_poll_url, token_poll_task) = mock_json_status_sequence_server(vec![
+        (403, "Forbidden", ""),
+        (
+            400,
+            "Bad Request",
+            r#"{"error":"deviceauth_authorization_pending"}"#,
+        ),
+        (
+            200,
+            "OK",
+            r#"{"authorization_code":"auth-code","code_verifier":"verifier"}"#,
+        ),
+    ])
+    .await;
+    let (exchange_url, exchange_task) = mock_json_server(codex_oauth_token_response(
+        &codex_test_token(),
+        "codex-refresh",
+        3600,
+    ))
+    .await;
+    let seen_device = Arc::new(Mutex::new(None::<OpenAICodexDeviceAuth>));
+    let seen_device_ref = seen_device.clone();
+    let sleeps = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let sleeps_ref = sleeps.clone();
+
+    let credentials = login_openai_codex_device_code_with_urls_with_sleeper(
+        &user_code_url,
+        &token_poll_url,
+        &exchange_url,
+        move |device| {
+            *seen_device_ref.lock().expect("seen device") = Some(device.clone());
+        },
+        0,
+        move |delay_ms| {
+            sleeps_ref.lock().expect("sleeps").push(delay_ms);
+            std::future::ready(())
+        },
+    )
+    .await
+    .expect("device code login");
+
+    let _ = user_code_task.await.expect("user code task");
+    let poll_requests = token_poll_task.await.expect("token poll task");
+    let exchange_request = exchange_task.await.expect("exchange task");
+
+    assert_eq!(
+        seen_device
+            .lock()
+            .expect("seen device")
+            .as_ref()
+            .map(|device| device.user_code.clone()),
+        Some("ABCD-1234".to_owned())
+    );
+    assert_eq!(sleeps.lock().expect("sleeps").as_slice(), &[2_000, 2_000]);
+    assert_eq!(poll_requests.len(), 3);
+    assert!(poll_requests[0].contains(r#""device_auth_id":"auth-1""#));
+    assert!(poll_requests[0].contains(r#""user_code":"ABCD-1234""#));
+    assert!(exchange_request.contains("grant_type=authorization_code"));
+    assert!(exchange_request.contains("code=auth-code"));
+    assert!(exchange_request.contains("code_verifier=verifier"));
+    assert!(
+        exchange_request
+            .contains("redirect_uri=https%3A%2F%2Fauth.openai.com%2Fdeviceauth%2Fcallback")
+    );
+    assert_eq!(credentials.refresh, "codex-refresh");
 }

@@ -2024,6 +2024,22 @@ not part of this pass.
   block, applying them once the block registers (pi #5114); detail
   validation now requires non-empty string id/data and resolves tool calls
   through the streaming id map.
+- Codex transport increments: cached websocket sessions now rotate after the
+  55-minute server lifetime (`openai_codex_websocket_session_expired`, pi
+  #6268) with the creation time carried across per-session reuse; the
+  websocket path retries once on `websocket_connection_limit_reached` before
+  falling back to SSE (pi #5973); Codex error events are mapped ahead of the
+  started marker (matching pi's `mapCodexEvents` ordering) with nested
+  `error.code`/`error.message` payload extraction shared with the stream
+  processor. Codex device-code login (pi #4911) is ported on the shared
+  device-code poller: `deviceauth/usercode` request/parse (string intervals,
+  404 "not enabled"), token polling (403/404 and
+  `deviceauth_authorization_pending` → pending, `slow_down`, invalid-response
+  failures), and authorization-code exchange against the
+  `deviceauth/callback` redirect. zstd SSE request compression (pi 0ac3cfe0)
+  is deliberately deferred: it needs the C-binding `zstd` crate and pi itself
+  falls back to uncompressed bodies when the encoder is unavailable, which is
+  the path ri keeps.
 - Models runtime harness integration (pi phase 6, transitional):
   `AgentHarnessOptions.models` accepts a `Models` collection. When present it
   is the harness's stream path (the agent loop's stream provider dispatches
@@ -2298,9 +2314,9 @@ Alignment; the following upstream increments remain open:
   on generated entries).
 - SQLite session storage (`packages/storage`, #6594) — scope decision
   pending.
-- Codex transport increments: zstd SSE compression, WebSocket
-  connection-limit reconnect and stale-session rotation, SSE header-timeout
-  tuning, device-code login (#4911).
+- Codex zstd SSE request compression (deferred: requires the C-binding
+  `zstd` crate; uncompressed bodies remain accepted) and SSE header-timeout
+  tuning.
 
 - Strict provider live/E2E completion still requires running the gated provider
   matrix with real API keys, provider-specific environment configuration,

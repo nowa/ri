@@ -936,13 +936,17 @@ impl OpenAIResponsesStreamProcessor {
                 self.terminal = true;
             }
             "error" => {
+                // Codex nests the error payload under `error`; prefer the
+                // top-level fields and fall back to the nested object.
                 let code = event
                     .get("code")
                     .and_then(Value::as_str)
+                    .or_else(|| event.pointer("/error/code").and_then(Value::as_str))
                     .unwrap_or("unknown");
                 let message = event
                     .get("message")
                     .and_then(Value::as_str)
+                    .or_else(|| event.pointer("/error/message").and_then(Value::as_str))
                     .unwrap_or("Unknown error");
                 return Err(format!("Error Code {code}: {message}"));
             }

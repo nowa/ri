@@ -20,6 +20,30 @@ use tokio::{
 
 pub const DEFAULT_OPENAI_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 pub const OPENAI_CODEX_WEBSOCKET_BETA: &str = "responses_websockets=2026-02-06";
+pub const OPENAI_CODEX_WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE: &str =
+    "websocket_connection_limit_reached";
+/// Codex closes websocket sessions server-side after about an hour; rotate
+/// cached connections before that so a request never lands on a stale socket
+/// (pi #6268).
+pub const OPENAI_CODEX_SESSION_WEBSOCKET_MAX_AGE_MS: i64 = 55 * 60 * 1000;
+
+pub fn openai_codex_websocket_session_expired(created_at_ms: i64, now_ms: i64) -> bool {
+    now_ms - created_at_ms >= OPENAI_CODEX_SESSION_WEBSOCKET_MAX_AGE_MS
+}
+
+/// Read the error code of a Codex `error` event, preferring the top-level
+/// `code` and falling back to the nested `error.code` (pi
+/// `extractCodexEventError`).
+pub fn openai_codex_error_event_code(event: &serde_json::Value) -> Option<&str> {
+    event
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            event
+                .pointer("/error/code")
+                .and_then(serde_json::Value::as_str)
+        })
+}
 pub const OPENAI_CODEX_MAX_RETRIES: usize = 3;
 pub const OPENAI_CODEX_BASE_RETRY_DELAY_MS: u64 = 1000;
 

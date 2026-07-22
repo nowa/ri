@@ -76,11 +76,16 @@ const BUILTIN_API_PROVIDER_SOURCE_ID: &str = "builtin-http";
 struct CachedCodexWebSocket {
     socket: OpenAICodexWebSocket,
     continuation: Option<OpenAICodexCachedWebSocketContinuation>,
+    created_at_ms: i64,
 }
 
 enum CodexWebSocketStreamError {
     Transport(String),
     NonTransport(String),
+    /// The server refused the connection with
+    /// `websocket_connection_limit_reached`; the caller retries once before
+    /// falling back to SSE (pi #5973).
+    ConnectionLimit(String),
 }
 
 impl CodexWebSocketStreamError {
@@ -96,9 +101,15 @@ impl CodexWebSocketStreamError {
         matches!(self, Self::NonTransport(_))
     }
 
+    fn is_connection_limit(&self) -> bool {
+        matches!(self, Self::ConnectionLimit(_))
+    }
+
     fn into_message(self) -> String {
         match self {
-            Self::Transport(error) | Self::NonTransport(error) => error,
+            Self::Transport(error) | Self::NonTransport(error) | Self::ConnectionLimit(error) => {
+                error
+            }
         }
     }
 }
@@ -906,65 +917,81 @@ fn spawn_openai_codex_responses_request(
             record_openai_codex_websocket_sse_fallback_for_session(session_id.as_deref());
         }
         if transport != Transport::Sse && !websocket_disabled_for_session {
-            let mut websocket_started = false;
-            match stream_openai_codex_websocket_json(
-                &model,
-                &options,
-                &websocket_url,
-                &websocket_headers,
-                &payload,
-                &sender,
-                &mut output,
-                &mut websocket_started,
-            )
-            .await
-            {
-                Ok(()) => return,
-                Err(error) if error.is_non_transport() => {
-                    push_provider_error(
-                        &sender,
-                        &mut output,
-                        StopReason::Error,
-                        error.into_message(),
-                    );
-                    return;
-                }
-                Err(error) if websocket_started => {
-                    let error = error.into_message();
-                    record_openai_codex_websocket_failure_for_session(
-                        session_id.as_deref(),
-                        &error,
-                    );
-                    append_assistant_message_diagnostic(
-                        &mut output,
-                        provider_transport_failure_diagnostic(
-                            transport,
-                            None,
-                            error.clone(),
-                            true,
-                            payload.to_string().len(),
-                        ),
-                    );
-                    push_provider_error(&sender, &mut output, StopReason::Error, error);
-                    return;
-                }
-                Err(error) => {
-                    let error = error.into_message();
-                    record_openai_codex_websocket_failure_for_session(
-                        session_id.as_deref(),
-                        &error,
-                    );
-                    append_assistant_message_diagnostic(
-                        &mut output,
-                        provider_transport_failure_diagnostic(
-                            transport,
-                            Some("sse"),
-                            error,
-                            false,
-                            payload.to_string().len(),
-                        ),
-                    );
-                    record_openai_codex_websocket_sse_fallback_for_session(session_id.as_deref());
+            let mut retried_websocket_connection_limit = false;
+            loop {
+                let mut websocket_started = false;
+                match stream_openai_codex_websocket_json(
+                    &model,
+                    &options,
+                    &websocket_url,
+                    &websocket_headers,
+                    &payload,
+                    &sender,
+                    &mut output,
+                    &mut websocket_started,
+                )
+                .await
+                {
+                    Ok(()) => return,
+                    Err(error)
+                        if !websocket_started
+                            && error.is_connection_limit()
+                            && !retried_websocket_connection_limit =>
+                    {
+                        // Reconnect once when the server rejects the socket for
+                        // hitting its connection limit (pi #5973).
+                        retried_websocket_connection_limit = true;
+                        continue;
+                    }
+                    Err(error) if error.is_non_transport() => {
+                        push_provider_error(
+                            &sender,
+                            &mut output,
+                            StopReason::Error,
+                            error.into_message(),
+                        );
+                        return;
+                    }
+                    Err(error) if websocket_started => {
+                        let error = error.into_message();
+                        record_openai_codex_websocket_failure_for_session(
+                            session_id.as_deref(),
+                            &error,
+                        );
+                        append_assistant_message_diagnostic(
+                            &mut output,
+                            provider_transport_failure_diagnostic(
+                                transport,
+                                None,
+                                error.clone(),
+                                true,
+                                payload.to_string().len(),
+                            ),
+                        );
+                        push_provider_error(&sender, &mut output, StopReason::Error, error);
+                        return;
+                    }
+                    Err(error) => {
+                        let error = error.into_message();
+                        record_openai_codex_websocket_failure_for_session(
+                            session_id.as_deref(),
+                            &error,
+                        );
+                        append_assistant_message_diagnostic(
+                            &mut output,
+                            provider_transport_failure_diagnostic(
+                                transport,
+                                Some("sse"),
+                                error,
+                                false,
+                                payload.to_string().len(),
+                            ),
+                        );
+                        record_openai_codex_websocket_sse_fallback_for_session(
+                            session_id.as_deref(),
+                        );
+                        break;
+                    }
                 }
             }
         }
@@ -1194,20 +1221,32 @@ async fn stream_openai_codex_websocket_json(
     let transport = options.stream.transport.unwrap_or(Transport::Auto);
     let use_cached_context = matches!(transport, Transport::Auto | Transport::WebsocketCached);
     let session_id = options.stream.session_id.clone();
-    let cached = if let Some(session_id) = session_id.as_deref() {
+    let mut cached = if let Some(session_id) = session_id.as_deref() {
         codex_ws_cache().lock().await.remove(session_id)
     } else {
         None
     };
+    // Rotate sessions past their server-side lifetime instead of reusing a
+    // socket the server is about to close (pi #6268).
+    if let Some(entry) = cached.take_if(|entry| {
+        crate::openai_codex_responses::openai_codex_websocket_session_expired(
+            entry.created_at_ms,
+            now_millis() as i64,
+        )
+    }) {
+        let mut socket = entry.socket;
+        let _ = socket.close().await;
+    }
     let reused_connection = cached.is_some();
-    let (mut socket, continuation) = if let Some(cached) = cached {
-        (cached.socket, cached.continuation)
+    let (mut socket, continuation, connection_created_at_ms) = if let Some(cached) = cached {
+        (cached.socket, cached.continuation, cached.created_at_ms)
     } else {
         (
             OpenAICodexWebSocket::connect(url, headers)
                 .await
                 .map_err(CodexWebSocketStreamError::transport)?,
             None,
+            now_millis() as i64,
         )
     };
 
@@ -1256,17 +1295,38 @@ async fn stream_openai_codex_websocket_json(
                     "WebSocket stream closed before response.completed",
                 )
             })?;
+        let event_type = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        // Codex error events fail the stream before it counts as started
+        // (pi maps them ahead of the first-event marker), so a
+        // connection-limit rejection can be retried on a fresh socket.
+        if event_type == "error" {
+            let code = crate::openai_codex_responses::openai_codex_error_event_code(&event)
+                .unwrap_or("unknown")
+                .to_owned();
+            let message = event
+                .get("message")
+                .and_then(Value::as_str)
+                .or_else(|| event.pointer("/error/message").and_then(Value::as_str))
+                .unwrap_or("Unknown error");
+            let message = format!("Error Code {code}: {message}");
+            let _ = socket.close().await;
+            if code
+                == crate::openai_codex_responses::OPENAI_CODEX_WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE
+            {
+                return Err(CodexWebSocketStreamError::ConnectionLimit(message));
+            }
+            return Err(CodexWebSocketStreamError::non_transport(message));
+        }
         if !*websocket_started {
             *websocket_started = true;
             sender.push(AssistantMessageEvent::Start {
                 partial: output.clone(),
             });
         }
-        let event_type = event
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
         processor
             .process_event(event, output, sender, model)
             .map_err(|error| {
@@ -1291,6 +1351,7 @@ async fn stream_openai_codex_websocket_json(
                     CachedCodexWebSocket {
                         socket,
                         continuation,
+                        created_at_ms: connection_created_at_ms,
                     },
                 );
             } else {

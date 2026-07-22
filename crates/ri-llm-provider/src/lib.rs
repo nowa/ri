@@ -57,6 +57,7 @@ pub use azure_openai::*;
 pub use bedrock::*;
 pub use cli::*;
 pub use deferred_tools::*;
+pub use device_code::*;
 pub use diagnostics::*;
 pub use env_api_keys::*;
 pub use estimate::*;

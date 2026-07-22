@@ -409,3 +409,267 @@ fn form_encode(value: &str) -> String {
 fn oauth_callback_host() -> String {
     std::env::var("PI_OAUTH_CALLBACK_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned())
 }
+
+pub const OPENAI_CODEX_DEVICE_USER_CODE_URL: &str =
+    "https://auth.openai.com/api/accounts/deviceauth/usercode";
+pub const OPENAI_CODEX_DEVICE_TOKEN_URL: &str =
+    "https://auth.openai.com/api/accounts/deviceauth/token";
+pub const OPENAI_CODEX_DEVICE_VERIFICATION_URI: &str = "https://auth.openai.com/codex/device";
+pub const OPENAI_CODEX_DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
+pub const OPENAI_CODEX_DEVICE_CODE_TIMEOUT_SECONDS: u64 = 15 * 60;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAICodexDeviceAuth {
+    pub device_auth_id: String,
+    pub user_code: String,
+    pub interval_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAICodexDeviceAuthorization {
+    pub authorization_code: String,
+    pub code_verifier: String,
+}
+
+pub fn build_openai_codex_device_user_code_request() -> OAuthHttpRequest {
+    build_openai_codex_device_user_code_request_with_url(OPENAI_CODEX_DEVICE_USER_CODE_URL)
+}
+
+pub fn build_openai_codex_device_user_code_request_with_url(url: &str) -> OAuthHttpRequest {
+    OAuthHttpRequest {
+        url: url.to_owned(),
+        method: "POST".to_owned(),
+        headers: BTreeMap::from([("Content-Type".to_owned(), "application/json".to_owned())]),
+        body: serde_json::json!({ "client_id": OPENAI_CODEX_OAUTH_CLIENT_ID }).to_string(),
+    }
+}
+
+pub fn parse_openai_codex_device_user_code_response(
+    status: u16,
+    response_body: &str,
+) -> Result<OpenAICodexDeviceAuth, String> {
+    if status == 404 {
+        return Err(
+            "OpenAI Codex device code login is not enabled for this server. Use browser login or verify the server URL."
+                .to_owned(),
+        );
+    }
+    if status / 100 != 2 {
+        let suffix = if response_body.is_empty() {
+            String::new()
+        } else {
+            format!(": {response_body}")
+        };
+        return Err(format!(
+            "OpenAI Codex device code request failed with status {status}{suffix}"
+        ));
+    }
+    let data: Value = serde_json::from_str(response_body)
+        .map_err(|_| format!("Invalid OpenAI Codex device code response: {response_body}"))?;
+    let device_auth_id = data
+        .get("device_auth_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty());
+    let user_code = data
+        .get("user_code")
+        .and_then(Value::as_str)
+        .filter(|code| !code.is_empty());
+    // `interval` may arrive as a number or a numeric string.
+    let interval_seconds = match data.get("interval") {
+        Some(Value::String(value)) => value.trim().parse::<f64>().ok(),
+        Some(value) => value.as_f64(),
+        None => None,
+    }
+    .filter(|interval| interval.is_finite() && *interval >= 0.0);
+    match (device_auth_id, user_code, interval_seconds) {
+        (Some(device_auth_id), Some(user_code), Some(interval_seconds)) => {
+            Ok(OpenAICodexDeviceAuth {
+                device_auth_id: device_auth_id.to_owned(),
+                user_code: user_code.to_owned(),
+                interval_seconds: interval_seconds as u64,
+            })
+        }
+        _ => Err(format!("Invalid OpenAI Codex device code response: {data}")),
+    }
+}
+
+pub async fn request_openai_codex_device_auth() -> Result<OpenAICodexDeviceAuth, String> {
+    request_openai_codex_device_auth_with_url(OPENAI_CODEX_DEVICE_USER_CODE_URL).await
+}
+
+pub async fn request_openai_codex_device_auth_with_url(
+    url: &str,
+) -> Result<OpenAICodexDeviceAuth, String> {
+    let request = build_openai_codex_device_user_code_request_with_url(url);
+    let response = send_oauth_http_request(&request).await?;
+    parse_openai_codex_device_user_code_response(response.status, &response.body)
+}
+
+pub fn build_openai_codex_device_token_poll_request(
+    device: &OpenAICodexDeviceAuth,
+) -> OAuthHttpRequest {
+    build_openai_codex_device_token_poll_request_with_url(device, OPENAI_CODEX_DEVICE_TOKEN_URL)
+}
+
+pub fn build_openai_codex_device_token_poll_request_with_url(
+    device: &OpenAICodexDeviceAuth,
+    url: &str,
+) -> OAuthHttpRequest {
+    OAuthHttpRequest {
+        url: url.to_owned(),
+        method: "POST".to_owned(),
+        headers: BTreeMap::from([("Content-Type".to_owned(), "application/json".to_owned())]),
+        body: serde_json::json!({
+            "device_auth_id": device.device_auth_id,
+            "user_code": device.user_code,
+        })
+        .to_string(),
+    }
+}
+
+pub fn parse_openai_codex_device_token_poll_response(
+    status: u16,
+    response_body: &str,
+) -> crate::device_code::DeviceCodePollResponse<OpenAICodexDeviceAuthorization> {
+    use crate::device_code::DeviceCodePollResponse;
+    if status / 100 == 2 {
+        let parsed = serde_json::from_str::<Value>(response_body).ok();
+        let authorization_code = parsed
+            .as_ref()
+            .and_then(|data| data.get("authorization_code"))
+            .and_then(Value::as_str)
+            .filter(|code| !code.is_empty());
+        let code_verifier = parsed
+            .as_ref()
+            .and_then(|data| data.get("code_verifier"))
+            .and_then(Value::as_str)
+            .filter(|verifier| !verifier.is_empty());
+        return match (authorization_code, code_verifier) {
+            (Some(authorization_code), Some(code_verifier)) => {
+                DeviceCodePollResponse::Complete(OpenAICodexDeviceAuthorization {
+                    authorization_code: authorization_code.to_owned(),
+                    code_verifier: code_verifier.to_owned(),
+                })
+            }
+            _ => DeviceCodePollResponse::Failed {
+                message: format!(
+                    "Invalid OpenAI Codex device auth token response: {response_body}"
+                ),
+            },
+        };
+    }
+    if status == 403 || status == 404 {
+        return DeviceCodePollResponse::Pending;
+    }
+    let error_code = serde_json::from_str::<Value>(response_body)
+        .ok()
+        .and_then(|data| {
+            let error = data.get("error")?.clone();
+            match error {
+                Value::String(code) => Some(code),
+                Value::Object(_) => error
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                _ => None,
+            }
+        });
+    match error_code.as_deref() {
+        Some("deviceauth_authorization_pending") => DeviceCodePollResponse::Pending,
+        Some("slow_down") => DeviceCodePollResponse::SlowDown {
+            interval_seconds: None,
+        },
+        _ => {
+            let suffix = if response_body.is_empty() {
+                String::new()
+            } else {
+                format!(": {response_body}")
+            };
+            DeviceCodePollResponse::Failed {
+                message: format!("OpenAI Codex device auth failed with status {status}{suffix}"),
+            }
+        }
+    }
+}
+
+pub async fn poll_openai_codex_device_auth_with_url_with_sleeper<F, Fut>(
+    device: &OpenAICodexDeviceAuth,
+    token_url: &str,
+    start_ms: i64,
+    sleep: F,
+) -> Result<OpenAICodexDeviceAuthorization, String>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let config = crate::device_code::DeviceCodePollConfig {
+        interval_seconds: Some(device.interval_seconds),
+        expires_in_seconds: Some(OPENAI_CODEX_DEVICE_CODE_TIMEOUT_SECONDS),
+        wait_before_first_poll: false,
+    };
+    let request = build_openai_codex_device_token_poll_request_with_url(device, token_url);
+    crate::device_code::poll_device_code_flow_with_sleeper(
+        &config,
+        start_ms,
+        || async {
+            let response = send_oauth_http_request(&request).await?;
+            Ok(parse_openai_codex_device_token_poll_response(
+                response.status,
+                &response.body,
+            ))
+        },
+        sleep,
+    )
+    .await
+}
+
+pub async fn login_openai_codex_device_code_with_urls_with_sleeper<C, F, Fut>(
+    user_code_url: &str,
+    device_token_url: &str,
+    exchange_token_url: &str,
+    on_device_code: C,
+    start_ms: i64,
+    sleep: F,
+) -> Result<OAuthCredentials, String>
+where
+    C: FnOnce(&OpenAICodexDeviceAuth),
+    F: FnMut(u64) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let device = request_openai_codex_device_auth_with_url(user_code_url).await?;
+    on_device_code(&device);
+    let authorization = poll_openai_codex_device_auth_with_url_with_sleeper(
+        &device,
+        device_token_url,
+        start_ms,
+        sleep,
+    )
+    .await?;
+    exchange_openai_codex_authorization_code_with_url_at(
+        &authorization.authorization_code,
+        &authorization.code_verifier,
+        Some(OPENAI_CODEX_DEVICE_REDIRECT_URI),
+        exchange_token_url,
+        start_ms,
+    )
+    .await
+}
+
+pub async fn login_openai_codex_device_code<C>(
+    on_device_code: C,
+) -> Result<OAuthCredentials, String>
+where
+    C: FnOnce(&OpenAICodexDeviceAuth),
+{
+    login_openai_codex_device_code_with_urls_with_sleeper(
+        OPENAI_CODEX_DEVICE_USER_CODE_URL,
+        OPENAI_CODEX_DEVICE_TOKEN_URL,
+        OPENAI_CODEX_OAUTH_TOKEN_URL,
+        on_device_code,
+        now_millis() as i64,
+        |delay_ms| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        },
+    )
+    .await
+}
