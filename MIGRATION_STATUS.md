@@ -1989,6 +1989,32 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Started the pi v0.80.0 Models runtime refactor (A): the `Provider` string
+  alias is renamed `ProviderId`; new `auth` module ports pi `src/auth/*`
+  (`Credential`/`ModelAuth`/`AuthResult` data model, `ApiKeyAuth`/`OAuthAuth`
+  behavior traits with `AuthInteraction` login callbacks, `CredentialStore`
+  with per-provider serialized `modify` writes and an in-memory default,
+  injectable `AuthContext`, `env_api_key_auth`, and the
+  stored-credential-owns-provider resolution with double-checked-locking
+  OAuth refresh in `resolve_provider_auth`); new `models_store` module ports
+  `ModelsStore`/`ProviderModelsStore`; new `models_runtime` module ports the
+  `Provider` runtime trait, `create_provider` (baseline + dynamic overlay
+  with shared in-flight refresh dedupe and store persistence, single or
+  per-api dispatch plus a registry `Resolver` variant), and the cloneable
+  `Models` collection (sync model reads, concurrent `refresh` with error
+  collection and offline cache restoration, `check_auth`/`get_available`
+  with `filter_models`, `get_auth` with request overrides, `login`/`logout`,
+  and `stream`/`complete`/`stream_simple`/`complete_simple` that resolve
+  auth lazily and surface failures as stream error events); `faux_provider`
+  returns an unregistered runtime provider handle for explicit collections;
+  `providers_all` builds built-in factories over the generated catalog seed,
+  env-var/ambient api-key auth, and OAuth adapters (refresh/to_auth over the
+  existing token primitives; GitHub Copilot derives per-credential base
+  URLs), plus `builtin_models()`. 17 ported models-runtime contracts pass in
+  `tests/models_runtime.rs`. Known gaps, tracked below: interactive OAuth
+  login is not yet wired to `AuthInteraction`; the harness still streams
+  through the compat globals; the compat surface has not been reimplemented
+  over the runtime.
 - Aligned the core of pi `7f29e7a3` "feat: add provider-scoped environment
   overrides (#5807)": `StreamOptions` gains a request-scoped `env` map,
   `get_provider_env_value`/`get_env_api_key_scoped`/`find_env_keys_scoped`

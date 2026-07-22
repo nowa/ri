@@ -7,7 +7,7 @@ use std::{
 };
 
 pub type Api = String;
-pub type Provider = String;
+pub type ProviderId = String;
 pub type ImagesApi = String;
 pub type ImagesProvider = String;
 
@@ -350,7 +350,7 @@ pub struct AssistantMessage {
     #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub content: Vec<AssistantContent>,
     pub api: Api,
-    pub provider: Provider,
+    pub provider: ProviderId,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_model: Option<String>,
@@ -737,7 +737,7 @@ pub struct Model {
     pub id: String,
     pub name: String,
     pub api: Api,
-    pub provider: Provider,
+    pub provider: ProviderId,
     pub base_url: String,
     pub reasoning: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

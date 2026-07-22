@@ -432,12 +432,13 @@ impl FauxProvider {
     }
 }
 
-pub fn register_faux_provider(options: RegisterFauxProviderOptions) -> FauxProviderRegistration {
+fn build_faux_core(
+    options: RegisterFauxProviderOptions,
+) -> (String, String, Vec<Model>, Arc<FauxProvider>) {
     let api = options.api.unwrap_or_else(|| random_id(DEFAULT_API));
     let provider_name = options
         .provider
         .unwrap_or_else(|| DEFAULT_PROVIDER.to_owned());
-    let source_id = random_id("faux-provider");
     let token_size = options.token_size.unwrap_or(TokenSize {
         min: DEFAULT_MIN_TOKEN_SIZE,
         max: DEFAULT_MAX_TOKEN_SIZE,
@@ -483,7 +484,7 @@ pub fn register_faux_provider(options: RegisterFauxProviderOptions) -> FauxProvi
 
     let provider = Arc::new(FauxProvider {
         api: api.clone(),
-        provider: provider_name,
+        provider: provider_name.clone(),
         pending_responses: Mutex::new(VecDeque::new()),
         call_count: Arc::new(AtomicUsize::new(0)),
         prompt_cache: Arc::new(Mutex::new(BTreeMap::new())),
@@ -491,7 +492,12 @@ pub fn register_faux_provider(options: RegisterFauxProviderOptions) -> FauxProvi
         max_token_size,
         tokens_per_second: options.tokens_per_second,
     });
+    (api, provider_name, models, provider)
+}
 
+pub fn register_faux_provider(options: RegisterFauxProviderOptions) -> FauxProviderRegistration {
+    let (api, _provider_name, models, provider) = build_faux_core(options);
+    let source_id = random_id("faux-provider");
     register_api_provider(provider.clone(), Some(source_id.clone()));
 
     FauxProviderRegistration {
@@ -499,6 +505,87 @@ pub fn register_faux_provider(options: RegisterFauxProviderOptions) -> FauxProvi
         provider,
         source_id,
         models,
+    }
+}
+
+/// Handle to a faux runtime [`crate::models_runtime::Provider`] for explicit
+/// `Models` collections. Nothing is registered globally.
+pub struct FauxProviderHandle {
+    pub provider: Arc<dyn crate::models_runtime::Provider>,
+    pub api: String,
+    pub models: Vec<Model>,
+    inner: Arc<FauxProvider>,
+}
+
+impl FauxProviderHandle {
+    pub fn get_model(&self) -> Model {
+        self.models[0].clone()
+    }
+
+    pub fn get_model_by_id(&self, model_id: &str) -> Option<Model> {
+        self.models
+            .iter()
+            .find(|model| model.id == model_id)
+            .cloned()
+    }
+
+    pub fn state(&self) -> FauxState {
+        FauxState {
+            call_count: self.inner.call_count.clone(),
+        }
+    }
+
+    pub fn set_responses(&self, responses: impl IntoIterator<Item = FauxResponseStep>) {
+        *self.inner.pending_responses.lock() = responses.into_iter().collect();
+    }
+
+    pub fn append_responses(&self, responses: impl IntoIterator<Item = FauxResponseStep>) {
+        self.inner.pending_responses.lock().extend(responses);
+    }
+
+    pub fn pending_response_count(&self) -> usize {
+        self.inner.pending_responses.lock().len()
+    }
+}
+
+struct FauxRuntimeAuth;
+
+#[async_trait::async_trait]
+impl crate::auth::ApiKeyAuth for FauxRuntimeAuth {
+    fn name(&self) -> &str {
+        "Faux"
+    }
+
+    async fn resolve(
+        &self,
+        _ctx: &dyn crate::auth::AuthContext,
+        _credential: Option<&crate::auth::ApiKeyCredential>,
+    ) -> Result<Option<crate::auth::AuthResult>, String> {
+        Ok(Some(crate::auth::AuthResult::default()))
+    }
+}
+
+/// Build a faux runtime provider for explicit `Models` collections, mirroring
+/// pi `fauxProvider()`.
+pub fn faux_provider(options: RegisterFauxProviderOptions) -> FauxProviderHandle {
+    let (api, provider_name, models, inner) = build_faux_core(options);
+    let provider = crate::models_runtime::create_provider({
+        let mut create = crate::models_runtime::CreateProviderOptions::new(
+            provider_name,
+            crate::auth::ProviderAuth {
+                api_key: Some(Arc::new(FauxRuntimeAuth)),
+                oauth: None,
+            },
+            crate::models_runtime::ProviderApiDispatch::Single(inner.clone()),
+        );
+        create.models = models.clone();
+        create
+    });
+    FauxProviderHandle {
+        provider,
+        api,
+        models,
+        inner,
     }
 }
 

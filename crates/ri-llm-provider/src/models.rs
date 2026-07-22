@@ -57,6 +57,21 @@ pub fn reset_models() {
     *MODEL_REGISTRY.write() = seed_models();
 }
 
+/// Generated-catalog provider ids, independent of the mutable compat
+/// registry.
+pub fn seed_provider_ids() -> Vec<String> {
+    seed_models().keys().cloned().collect()
+}
+
+/// Generated-catalog models for one provider, independent of the mutable
+/// compat registry.
+pub fn seed_provider_models(provider_id: &str) -> Vec<Model> {
+    seed_models()
+        .get(provider_id)
+        .map(|models| models.values().cloned().collect())
+        .unwrap_or_default()
+}
+
 pub fn calculate_cost(model: &Model, usage: &mut Usage) -> UsageCost {
     // Request-wide pricing tiers: the highest matching input threshold applies
     // to the full request.
