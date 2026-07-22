@@ -27407,3 +27407,73 @@ async fn builtin_openai_codex_provider_compresses_sse_request_bodies_with_zstd()
     assert!(request.contains("\"model\":\"gpt-5.5\""));
     assert!(request.contains("\"store\":false"));
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn pi_messages_api_streams_events_and_maps_errors() {
+    // Payload shape mirrors pi: { model, context, options } posted to /messages.
+    let model = Model::faux("pi-messages", "radius", "radius-model");
+    let mut options = SimpleStreamOptions {
+        reasoning: Some(ThinkingLevel::High),
+        ..Default::default()
+    };
+    options.stream.max_tokens = Some(512);
+    options.stream.session_id = Some("session-1".to_owned());
+    let payload = build_pi_messages_payload(&model, &user_context("hello"), &options);
+    assert_eq!(payload["model"], "radius-model");
+    assert_eq!(payload["options"]["maxTokens"], 512);
+    assert_eq!(payload["options"]["reasoning"], "high");
+    assert_eq!(payload["options"]["sessionId"], "session-1");
+    assert_eq!(payload["context"]["messages"][0]["role"], "user");
+    assert_eq!(
+        pi_messages_url(&model, true),
+        format!("{}/messages?debug=1", model.base_url)
+    );
+
+    // End-to-end SSE round trip through the registered api provider.
+    let (url, request_task) = mock_sse_server(
+        "data: {\"type\":\"start\"}\n\n\
+         data: {\"type\":\"text_start\",\"contentIndex\":0}\n\n\
+         data: {\"type\":\"text_delta\",\"contentIndex\":0,\"delta\":\"Hi\"}\n\n\
+         data: {\"type\":\"text_end\",\"contentIndex\":0,\"content\":\"Hi there\"}\n\n\
+         data: {\"type\":\"done\",\"reason\":\"stop\",\"usage\":{\"input\":3,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":5,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0}},\"responseId\":\"resp_pi\"}\n\n",
+    )
+    .await;
+    let mut model = Model::faux("pi-messages", "radius", "radius-model");
+    model.base_url = url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("radius-key".to_owned());
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("pi-messages stream");
+    let request = request_task.await.expect("request task");
+    assert_eq!(text_of(&message), Some("Hi there"));
+    assert_eq!(message.response_id.as_deref(), Some("resp_pi"));
+    assert_eq!(message.usage.input, 3);
+    assert!(request.contains("POST /messages"));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer radius-key")
+    );
+    assert!(request.contains("\"model\":\"radius-model\""));
+
+    // HTTP errors surface pi's formatted message with the error code.
+    let (url, _task) = mock_json_status_server(
+        429,
+        "Too Many Requests",
+        r#"{"error":{"message":"slow down","code":"rate_limited"}}"#,
+    )
+    .await;
+    let mut model = Model::faux("pi-messages", "radius", "radius-model");
+    model.base_url = url;
+    let mut options = SimpleStreamOptions::default();
+    options.stream.api_key = Some("radius-key".to_owned());
+    let message = complete_simple(&model, user_context("hello"), options)
+        .await
+        .expect("error result");
+    assert_eq!(message.stop_reason, StopReason::Error);
+    assert_eq!(
+        message.error_message.as_deref(),
+        Some("429 Too Many Requests: slow down (rate_limited)")
+    );
+}

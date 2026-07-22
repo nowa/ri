@@ -2076,6 +2076,18 @@ not part of this pass.
   policy enabling. `BuiltInOAuthAdapter::login` now delegates here, so
   `Models::login` performs real interactive logins for the built-in OAuth
   providers.
+- pi-messages API (pi `api/pi-messages.ts`): new `pi_messages` module and
+  `PiMessagesHttpProvider` registered as a built-in api. Requests POST
+  `{ model, context, options }` (temperature/maxTokens/reasoning/
+  cacheRetention with the legacy `PI_CACHE_RETENTION` env opt-in/
+  sessionId/toolChoice) to `<base_url>/messages` with bearer auth and an
+  optional `debug=1` flag; the SSE stream of serialized assistant events
+  (text/thinking/toolcall with streaming-JSON arguments, rewrite
+  diagnostics, terminal done/error with usage) converts into ri's event
+  stream, and HTTP failures format pi's `PiMessagesResponseError` message
+  with the error code. `RADIUS_API_KEY` env mapping added; the Radius
+  gateway provider itself (gateway OAuth, persisted dynamic catalog)
+  remains open.
 - Codex zstd SSE request compression (pi 0ac3cfe0): the SSE responses path
   compresses the request body once per stream with zstd level 3 and sends
   `Content-Encoding: zstd` (reused across retries); compression failure
@@ -2394,10 +2406,11 @@ Alignment; the following upstream increments remain open:
   provider factories, provider-owned auth/`CredentialStore`, `/compat`
   entrypoint, per-provider generated catalogs) — deferred by decision; ri
   still mirrors the pre-0.80 global registry surface.
-- Catalog refresh residue: Radius/pi-messages is the one generated-catalog
-  provider family still absent (its `pi-messages` api has no ri
-  implementation). Regenerating the embedded `models_generated/` data
-  requires re-running pi's generator (network).
+- Radius gateway provider (gateway OAuth via `loadRadiusOAuth`, persisted
+  dynamic catalog from `radius-config`): the underlying `pi-messages` api
+  is now implemented; the provider wiring remains open. Regenerating the
+  embedded `models_generated/` data requires re-running pi's generator
+  (network).
 - SQLite storage follow-ups: materialized-state caches
   (`session_materialized`/`entry_materialized`) and `branch_entries`
   acceleration with cursor paging. Deferred deliberately: ri's SQLite

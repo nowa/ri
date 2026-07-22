@@ -11,6 +11,7 @@ pub fn api_key_env_vars(provider: &str) -> Option<&'static [&'static str]> {
         "qwen-token-plan" => Some(&["QWEN_TOKEN_PLAN_API_KEY"]),
         "qwen-token-plan-cn" => Some(&["QWEN_TOKEN_PLAN_CN_API_KEY"]),
         "nvidia" => Some(&["NVIDIA_API_KEY"]),
+        "radius" => Some(&["RADIUS_API_KEY"]),
         "zai-coding-cn" => Some(&["ZAI_CODING_CN_API_KEY"]),
         "google" => Some(&["GEMINI_API_KEY"]),
         "google-vertex" => Some(&["GOOGLE_CLOUD_API_KEY"]),

@@ -59,7 +59,7 @@ use crate::{
     },
     types::{
         AssistantMessage, AssistantMessageEvent, Context, Model, ProviderResponse,
-        SimpleStreamOptions, StopReason, Tool, Transport, Usage, now_millis,
+        SimpleStreamOptions, StopReason, StreamOptions, Tool, Transport, Usage, now_millis,
     },
 };
 use futures::StreamExt;
@@ -138,6 +138,7 @@ pub fn ensure_builtin_api_providers() {
 
 pub fn register_builtin_api_providers() {
     register_builtin_api_provider(Arc::new(AnthropicMessagesHttpProvider));
+    register_builtin_api_provider(Arc::new(PiMessagesHttpProvider));
     register_builtin_api_provider(Arc::new(OpenAICompletionsHttpProvider));
     register_builtin_api_provider(Arc::new(MistralHttpProvider));
     register_builtin_api_provider(Arc::new(OpenAIResponsesHttpProvider));
@@ -187,6 +188,7 @@ fn register_missing_builtin_api_providers() {
         "bedrock-converse-stream",
         Arc::new(BedrockConverseStreamHttpProvider),
     );
+    register_builtin_api_provider_if_missing("pi-messages", Arc::new(PiMessagesHttpProvider));
 }
 
 fn register_builtin_api_provider_if_missing(api: &str, provider: Arc<dyn ApiProvider>) {
@@ -197,6 +199,149 @@ fn register_builtin_api_provider_if_missing(api: &str, provider: Arc<dyn ApiProv
 
 fn register_builtin_api_provider(provider: Arc<dyn ApiProvider>) {
     register_api_provider(provider, Some(BUILTIN_API_PROVIDER_SOURCE_ID.to_owned()));
+}
+
+struct PiMessagesHttpProvider;
+
+impl ApiProvider for PiMessagesHttpProvider {
+    fn api(&self) -> &str {
+        "pi-messages"
+    }
+
+    fn stream(
+        &self,
+        model: &Model,
+        context: Context,
+        options: StreamOptions,
+    ) -> Result<AssistantMessageEventStream, ProviderError> {
+        self.stream_simple(
+            model,
+            context,
+            SimpleStreamOptions {
+                stream: options,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn stream_simple(
+        &self,
+        model: &Model,
+        context: Context,
+        options: SimpleStreamOptions,
+    ) -> Result<AssistantMessageEventStream, ProviderError> {
+        let api_key = options
+            .stream
+            .api_key
+            .clone()
+            .or_else(|| get_env_api_key_scoped(&model.provider, &options.stream.env))
+            .ok_or_else(|| {
+                ProviderError::Provider(format!(
+                    "No API key provided for provider \"{}\"",
+                    model.provider
+                ))
+            })?;
+        let debug = options.stream.extra.get("debug").and_then(Value::as_bool) == Some(true);
+        let url = crate::pi_messages::pi_messages_url(model, debug);
+        let payload = build_pi_messages_payload_checked(model, &context, &options)?;
+        let (sender, stream) = assistant_message_event_stream();
+        let model = model.clone();
+        tokio::spawn(async move {
+            let mut output = empty_assistant_message(&model);
+            if let Err(error) = stream_pi_messages_sse(
+                &model,
+                &options,
+                &url,
+                &api_key,
+                payload,
+                &sender,
+                &mut output,
+            )
+            .await
+            {
+                push_provider_error(&sender, &mut output, StopReason::Error, error);
+            }
+        });
+        Ok(stream)
+    }
+}
+
+fn build_pi_messages_payload_checked(
+    model: &Model,
+    context: &Context,
+    options: &SimpleStreamOptions,
+) -> Result<Value, ProviderError> {
+    let payload = crate::pi_messages::build_pi_messages_payload(model, context, options);
+    options
+        .apply_payload_hooks(model, payload)
+        .map_err(ProviderError::Provider)
+}
+
+async fn stream_pi_messages_sse(
+    model: &Model,
+    options: &SimpleStreamOptions,
+    url: &str,
+    api_key: &str,
+    payload: Value,
+    sender: &crate::AssistantMessageEventSender,
+    output: &mut AssistantMessage,
+) -> Result<(), String> {
+    if push_abort_if_requested(sender, options, output) {
+        return Ok(());
+    }
+    let client = reqwest_client_for_target(url)?;
+    let mut request = client
+        .post(url)
+        .json(&payload)
+        .header("authorization", format!("Bearer {api_key}"))
+        .header("accept", "text/event-stream");
+    for (name, value) in &options.stream.headers {
+        request = request.header(name, value);
+    }
+    if let Some(timeout_ms) = options.stream.timeout_ms {
+        request = request.timeout(std::time::Duration::from_millis(timeout_ms));
+    }
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    emit_simple_response_hooks(model, options, &response).await?;
+    let status = response.status();
+    if !status.is_success() {
+        let status_text = status.canonical_reason().unwrap_or_default().to_owned();
+        let body = response.text().await.map_err(|error| error.to_string())?;
+        return Err(crate::pi_messages::pi_messages_response_error_message(
+            status.as_u16(),
+            &status_text,
+            &body,
+        ));
+    }
+
+    let mut byte_stream = response.bytes_stream();
+    let mut parser = SseJsonParser::default();
+    let mut events = Vec::new();
+    let mut processor = crate::pi_messages::PiMessagesStreamProcessor::new();
+    while let Some(chunk) = byte_stream.next().await {
+        if push_abort_if_requested(sender, options, output) {
+            return Ok(());
+        }
+        let chunk = chunk.map_err(|error| error.to_string())?;
+        parser.push_bytes(&chunk, &mut events);
+        for event in events.drain(..) {
+            processor.process_event(event, output, sender);
+            if processor.is_terminal() {
+                return Ok(());
+            }
+        }
+    }
+    parser.finish(&mut events);
+    for event in events.drain(..) {
+        processor.process_event(event, output, sender);
+        if processor.is_terminal() {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "{} stream ended without a terminal event",
+        model.provider
+    ))
 }
 
 struct OpenAICompletionsHttpProvider;
