@@ -2389,8 +2389,11 @@ Alignment; the following upstream increments remain open:
   backend), so the caches only pay off once ri adopts pi's lazy
   cursor-based reads; the schema tables are already in place.
 - Codex zstd SSE request compression (deferred: requires the C-binding
-  `zstd` crate; uncompressed bodies remain accepted) and SSE header-timeout
-  tuning.
+  `zstd` crate; uncompressed bodies remain accepted). SSE header-timeout
+  tuning needs no port: pi 54113731 replaced the fixed 20s pre-header
+  timeout with the caller's `timeoutMs`, and ri already applies
+  `StreamOptions.timeout_ms` as the request timeout (none when unset),
+  which matches pi HEAD's observable behavior.
 
 - Strict provider live/E2E completion still requires running the gated provider
   matrix with real API keys, provider-specific environment configuration,
