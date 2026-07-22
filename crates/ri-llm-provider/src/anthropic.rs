@@ -4,6 +4,7 @@ use crate::{
     ThinkingContent, ThinkingLevel, Tool, ToolCall, ToolResultContent, Usage, UserContent,
     UserContentValue,
     anthropic_compat::{from_claude_code_tool_name, to_claude_code_tool_name},
+    deferred_tools::split_deferred_tools,
     github_copilot_headers::build_copilot_dynamic_headers,
     json_repair::{parse_json_with_repair, parse_streaming_json, sanitize_surrogates},
     message_transform::transform_messages,
@@ -696,6 +697,46 @@ pub fn build_anthropic_simple_payload_for_client(
     build_anthropic_payload(model, context, payload_options)
 }
 
+/// Whether the model accepts client-side `tool_reference` blocks for
+/// message-anchored tool loading.
+fn supports_anthropic_tool_references(model: &Model) -> bool {
+    if let Some(value) = model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("supportsToolReferences"))
+        .and_then(Value::as_bool)
+    {
+        return value;
+    }
+    default_supports_anthropic_tool_references(model)
+}
+
+/// Default for `supportsToolReferences`: first-party Anthropic models except
+/// Haiku (rejects client-side tool_reference blocks) and models that predate
+/// tool search (Claude 3.x, Opus/Sonnet 4.0, Opus 4.1).
+fn default_supports_anthropic_tool_references(model: &Model) -> bool {
+    if model.provider != "anthropic" || model.id.contains("haiku") {
+        return false;
+    }
+    static VERSION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^claude-(?:opus|sonnet|fable)-(\d+)(?:-(\d+))?(?:-|$)")
+            .expect("valid version pattern")
+    });
+    let Some(captures) = VERSION.captures(&model.id) else {
+        return false;
+    };
+    let major = captures
+        .get(1)
+        .and_then(|value| value.as_str().parse::<u32>().ok())
+        .unwrap_or(0);
+    let minor = captures
+        .get(2)
+        .filter(|value| value.as_str().len() < 8)
+        .and_then(|value| value.as_str().parse::<u32>().ok())
+        .unwrap_or(0);
+    major > 4 || (major == 4 && minor >= 5)
+}
+
 pub fn build_anthropic_payload(
     model: &Model,
     context: &Context,
@@ -704,13 +745,49 @@ pub fn build_anthropic_payload(
     let cache_retention = resolve_anthropic_cache_retention(options.cache_retention);
     let cache_control = anthropic_cache_control(model, cache_retention);
     let use_claude_code_tool_names = options.use_claude_code_tool_names;
+    let transformed_messages = transform_messages(
+        &context.messages,
+        model,
+        Some(&|id, _model, _source| normalize_anthropic_tool_call_id(id)),
+    );
+    let normalize_tool_name = |name: &str| -> String {
+        if use_claude_code_tool_names {
+            to_claude_code_tool_name(name)
+        } else {
+            name.to_owned()
+        }
+    };
+    let placement_context = Context {
+        system_prompt: None,
+        messages: transformed_messages.clone(),
+        tools: context.tools.clone(),
+    };
+    let placement = split_deferred_tools(
+        &placement_context,
+        supports_anthropic_tool_references(model),
+        normalize_tool_name,
+    );
+    let mut immediate_tools = placement.immediate.clone();
+    let mut deferred_tools = placement
+        .deferred
+        .iter()
+        .map(|(_, tool)| tool.clone())
+        .collect::<Vec<_>>();
+    if immediate_tools.is_empty() && !deferred_tools.is_empty() {
+        immediate_tools = std::mem::take(&mut deferred_tools);
+    }
+    let deferred_tool_names = if deferred_tools.is_empty() {
+        std::collections::BTreeSet::new()
+    } else {
+        placement.deferred_names()
+    };
     let mut payload = json!({
         "model": model.id,
-        "messages": convert_anthropic_messages(
-            context,
-            model,
+        "messages": convert_anthropic_messages_from_transformed(
+            &transformed_messages,
             cache_control.as_ref(),
             use_claude_code_tool_names,
+            &deferred_tool_names,
         ),
         "max_tokens": options.max_tokens.unwrap_or(model.max_tokens / 3),
         "stream": true,
@@ -747,26 +824,33 @@ pub fn build_anthropic_payload(
         payload["system"] = Value::Array(system_blocks);
     }
 
-    if !context.tools.is_empty() {
-        let last_tool_index = context.tools.len().saturating_sub(1);
-        payload["tools"] = Value::Array(
-            context
-                .tools
-                .iter()
-                .enumerate()
-                .map(|(index, tool)| {
-                    format_anthropic_tool(
-                        tool,
-                        supports_anthropic_eager_tool_input_streaming(model),
-                        (index == last_tool_index
-                            && supports_anthropic_cache_control_on_tools(model))
+    if !immediate_tools.is_empty() || !deferred_tools.is_empty() {
+        let last_tool_index = immediate_tools.len().saturating_sub(1);
+        let mut tools = immediate_tools
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| {
+                format_anthropic_tool(
+                    tool,
+                    supports_anthropic_eager_tool_input_streaming(model),
+                    (index == last_tool_index && supports_anthropic_cache_control_on_tools(model))
                         .then_some(cache_control.as_ref())
                         .flatten(),
-                        use_claude_code_tool_names,
-                    )
-                })
-                .collect(),
-        );
+                    use_claude_code_tool_names,
+                )
+            })
+            .collect::<Vec<_>>();
+        for tool in &deferred_tools {
+            let mut formatted = format_anthropic_tool(
+                tool,
+                supports_anthropic_eager_tool_input_streaming(model),
+                None,
+                use_claude_code_tool_names,
+            );
+            formatted["defer_loading"] = Value::Bool(true);
+            tools.push(formatted);
+        }
+        payload["tools"] = Value::Array(tools);
     }
     if let Some(metadata_user_id) = options.metadata_user_id {
         payload["metadata"] = json!({ "user_id": metadata_user_id });
@@ -975,6 +1059,21 @@ fn convert_anthropic_messages(
         model,
         Some(&|id, _model, _source| normalize_anthropic_tool_call_id(id)),
     );
+    convert_anthropic_messages_from_transformed(
+        &transformed_messages,
+        cache_control,
+        use_claude_code_tool_names,
+        &std::collections::BTreeSet::new(),
+    )
+}
+
+fn convert_anthropic_messages_from_transformed(
+    transformed_messages: &[Message],
+    cache_control: Option<&Value>,
+    use_claude_code_tool_names: bool,
+    deferred_tool_names: &std::collections::BTreeSet<String>,
+) -> Vec<Value> {
+    let mut loaded_tool_names = std::collections::BTreeSet::new();
     let mut messages = Vec::new();
     let mut index = 0;
     while index < transformed_messages.len() {
@@ -1077,20 +1176,61 @@ fn convert_anthropic_messages(
             }
             Message::ToolResult(_) => {
                 let mut tool_results = Vec::new();
+                let mut sibling_content = Vec::new();
                 let mut next = index;
                 while next < transformed_messages.len() {
                     let Message::ToolResult(tool_result) = &transformed_messages[next] else {
                         break;
                     };
-                    tool_results.push(json!({
-                        "type": "tool_result",
-                        "tool_use_id": tool_result.tool_call_id,
-                        "content": convert_anthropic_tool_result_content(&tool_result.content),
-                        "is_error": tool_result.is_error,
-                    }));
+                    let mut references = Vec::new();
+                    for name in tool_result.added_tool_names.as_deref().unwrap_or_default() {
+                        let normalized_name = if use_claude_code_tool_names {
+                            to_claude_code_tool_name(name)
+                        } else {
+                            name.clone()
+                        };
+                        if !deferred_tool_names.contains(&normalized_name)
+                            || loaded_tool_names.contains(&normalized_name)
+                        {
+                            continue;
+                        }
+                        loaded_tool_names.insert(normalized_name.clone());
+                        references.push(json!({
+                            "type": "tool_reference",
+                            "tool_name": normalized_name,
+                        }));
+                    }
+                    let converted_content =
+                        convert_anthropic_tool_result_content(&tool_result.content);
+                    // Anthropic rejects tool references mixed with ordinary
+                    // tool-result content, so displaced content follows every
+                    // tool_result block.
+                    if references.is_empty() {
+                        tool_results.push(json!({
+                            "type": "tool_result",
+                            "tool_use_id": tool_result.tool_call_id,
+                            "content": converted_content,
+                            "is_error": tool_result.is_error,
+                        }));
+                    } else {
+                        tool_results.push(json!({
+                            "type": "tool_result",
+                            "tool_use_id": tool_result.tool_call_id,
+                            "content": Value::Array(references),
+                            "is_error": tool_result.is_error,
+                        }));
+                        match converted_content {
+                            Value::String(text) => {
+                                sibling_content.push(json!({ "type": "text", "text": text }));
+                            }
+                            Value::Array(blocks) => sibling_content.extend(blocks),
+                            other => sibling_content.push(other),
+                        }
+                    }
                     next += 1;
                 }
                 index = next - 1;
+                tool_results.extend(sibling_content);
                 messages.push(json!({ "role": "user", "content": tool_results }));
             }
         }

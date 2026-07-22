@@ -155,11 +155,22 @@ pub fn build_openai_codex_responses_payload(
     context: &Context,
     options: OpenAICodexResponsesPayloadOptions,
 ) -> Value {
-    let messages = crate::openai_responses::convert_openai_responses_messages(
+    let placement = crate::deferred_tools::split_deferred_tools(
+        context,
+        model
+            .compat
+            .as_ref()
+            .and_then(|compat| compat.get("supportsToolSearch"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        |name| name.to_owned(),
+    );
+    let messages = crate::openai_responses::convert_openai_responses_messages_with_deferred(
         model,
         context,
         &["openai", "openai-codex", "opencode"],
         false,
+        &placement.deferred,
     );
     let mut payload = json!({
         "model": model.id,
@@ -182,9 +193,14 @@ pub fn build_openai_codex_responses_payload(
     if let Some(service_tier) = options.service_tier {
         payload["service_tier"] = Value::String(service_tier);
     }
-    if !context.tools.is_empty() {
-        payload["tools"] =
-            Value::Array(context.tools.iter().map(format_openai_codex_tool).collect());
+    if !placement.immediate.is_empty() {
+        payload["tools"] = Value::Array(
+            placement
+                .immediate
+                .iter()
+                .map(format_openai_codex_tool)
+                .collect(),
+        );
     }
     if let Some(reasoning_effort) = options.reasoning_effort
         && let Some(effort) = openai_codex_reasoning_effort(model, reasoning_effort)

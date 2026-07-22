@@ -1989,6 +1989,27 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Aligned pi `3d8f7435` "feat(ai): support message-anchored tool loading
+  (#6474)" plus `f16b4e0c` Kimi deferred tools for the OpenAI Completions API:
+  new `ri-llm-provider::deferred_tools` module ports `splitDeferredTools`
+  (name-normalized dedupe, deferred = `addedToolNames` markers not preceded by
+  a use). `AgentToolResult` gains `added_tool_names`, carried onto persisted
+  tool-result messages by the agent loop. Anthropic: models satisfying the pi
+  `supportsToolReferences` default (first-party non-Haiku Claude ≥ 4.5) or an
+  explicit compat override split tools into immediate + `defer_loading`
+  definitions, emit `tool_reference` blocks inside the anchoring tool result,
+  and displace the original tool output as sibling content after the
+  tool_result blocks; a single remaining tool set stays immediate. OpenAI
+  Responses/Codex: `supportsToolSearch` compat routes deferred definitions
+  through client-executed `tool_search_call`/`tool_search_output` transcript
+  items (ids derived via `short_hash`), keeping only immediate tools in the
+  prompt. OpenAI Completions: `deferredToolsMode: "kimi"` compat excludes
+  deferred definitions from `tools` and emits Kimi-style `{role: "system",
+  tools}` messages after tool-result groups. Context estimation already
+  accounts for `addedToolNames` tool tokens. Catalog compat flags for
+  gpt-5.x/Codex models are deferred to the catalog refresh. Verified with
+  `cargo test -p ri-llm-provider --test provider_core -- deferred` and the
+  full local suites.
 - Aligned the pi robustness increment batch: `351efc82` assistant messages
   that stop with `length` no longer execute their tool calls — each gets an
   error tool result telling the model to re-issue the call with complete

@@ -24997,3 +24997,308 @@ fn null_message_content_normalizes_to_empty_at_deserialization() {
     .expect("user");
     assert_eq!(user.content, UserContentValue::Blocks(Vec::new()));
 }
+
+fn deferred_tool(name: &str) -> Tool {
+    Tool {
+        name: name.to_owned(),
+        description: format!("The {name} tool"),
+        parameters: json!({
+            "type": "object",
+            "properties": { "value": { "type": "string" } },
+            "required": ["value"]
+        }),
+    }
+}
+
+fn deferred_context(tools: Vec<Tool>, added_tool_names: Vec<String>) -> Context {
+    let mut assistant = empty_assistant_for_model(
+        &get_model("anthropic", "claude-opus-4-6").expect("anthropic model"),
+    );
+    assistant.content = vec![AssistantContent::ToolCall(ToolCall {
+        id: "call_1".to_owned(),
+        name: "base_tool".to_owned(),
+        arguments: Map::new(),
+        thought_signature: None,
+    })];
+    assistant.stop_reason = StopReason::ToolUse;
+    assistant.timestamp = 2;
+    let mut user = UserMessage::text("Hello");
+    user.timestamp = 1;
+    let mut tail_user = UserMessage::text("Hello");
+    tail_user.timestamp = 4;
+    Context {
+        system_prompt: None,
+        messages: vec![
+            Message::User(user),
+            Message::Assistant(assistant),
+            Message::ToolResult(ToolResultMessage {
+                tool_call_id: "call_1".to_owned(),
+                tool_name: "base_tool".to_owned(),
+                content: vec![ToolResultContent::text("done")],
+                details: None,
+                usage: None,
+                is_error: false,
+                added_tool_names: Some(added_tool_names),
+                timestamp: 3,
+            }),
+            Message::User(tail_user),
+        ],
+        tools,
+    }
+}
+
+fn anthropic_tool_result_content(payload: &Value) -> Vec<Value> {
+    payload["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter_map(|message| message["content"].as_array())
+        .find(|content| content.iter().any(|block| block["type"] == "tool_result"))
+        .expect("tool result content")
+        .clone()
+}
+
+#[test]
+fn anthropic_loads_deferred_tool_at_its_tool_result_marker() {
+    let model = get_model("anthropic", "claude-opus-4-6").expect("model");
+    let context = deferred_context(
+        vec![deferred_tool("base_tool"), deferred_tool("late_tool")],
+        vec!["late_tool".to_owned()],
+    );
+    let payload = build_anthropic_payload(&model, &context, AnthropicPayloadOptions::default());
+
+    let tools = payload["tools"].as_array().expect("tools");
+    assert_eq!(tools[0]["name"], json!("base_tool"));
+    assert!(tools[0].get("defer_loading").is_none());
+    assert_eq!(tools[1]["name"], json!("late_tool"));
+    assert_eq!(tools[1]["defer_loading"], json!(true));
+
+    let content = anthropic_tool_result_content(&payload);
+    let tool_result = content
+        .iter()
+        .find(|block| block["type"] == "tool_result")
+        .expect("tool result");
+    assert_eq!(
+        tool_result["content"],
+        json!([{ "type": "tool_reference", "tool_name": "late_tool" }])
+    );
+    // Displaced tool output follows the tool_result blocks.
+    assert!(
+        content
+            .iter()
+            .any(|block| block["type"] == "text" && block["text"] == json!("done"))
+    );
+}
+
+#[test]
+fn anthropic_deferred_tools_fall_back_for_unsupported_and_disabled_models() {
+    // A model that predates tool search keeps the plain tool list.
+    let old_model = get_model("anthropic", "claude-3-5-sonnet-20241022").expect("model");
+    let context = deferred_context(
+        vec![deferred_tool("base_tool"), deferred_tool("late_tool")],
+        vec!["late_tool".to_owned()],
+    );
+    let payload = build_anthropic_payload(&old_model, &context, AnthropicPayloadOptions::default());
+    let tools = payload["tools"].as_array().expect("tools");
+    assert!(tools.iter().all(|tool| tool.get("defer_loading").is_none()));
+    let tool_result_content = anthropic_tool_result_content(&payload);
+    assert!(
+        !tool_result_content
+            .iter()
+            .any(|block| block["type"] == "tool_result"
+                && block["content"].as_array().is_some_and(|content| content
+                    .iter()
+                    .any(|inner| inner["type"] == "tool_reference")))
+    );
+
+    // An explicit compat override disables references on a supporting model.
+    let mut disabled = get_model("anthropic", "claude-opus-4-6").expect("model");
+    let mut compat = disabled
+        .compat
+        .clone()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    compat.insert("supportsToolReferences".to_owned(), json!(false));
+    disabled.compat = Some(Value::Object(compat));
+    let payload = build_anthropic_payload(&disabled, &context, AnthropicPayloadOptions::default());
+    let tools = payload["tools"].as_array().expect("tools");
+    assert!(tools.iter().all(|tool| tool.get("defer_loading").is_none()));
+
+    // A marked tool missing from Context.tools is not resurrected.
+    let context = deferred_context(
+        vec![deferred_tool("base_tool")],
+        vec!["late_tool".to_owned()],
+    );
+    let model = get_model("anthropic", "claude-opus-4-6").expect("model");
+    let payload = build_anthropic_payload(&model, &context, AnthropicPayloadOptions::default());
+    assert_eq!(
+        payload["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .map(|tool| tool["name"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!("base_tool")]
+    );
+
+    // A tool already used before its marker stays immediate.
+    let mut context = deferred_context(
+        vec![deferred_tool("base_tool"), deferred_tool("late_tool")],
+        vec!["late_tool".to_owned()],
+    );
+    let Message::Assistant(assistant) = &mut context.messages[1] else {
+        panic!("expected assistant");
+    };
+    assistant.content = vec![AssistantContent::ToolCall(ToolCall {
+        id: "call_1".to_owned(),
+        name: "late_tool".to_owned(),
+        arguments: Map::new(),
+        thought_signature: None,
+    })];
+    let payload = build_anthropic_payload(&model, &context, AnthropicPayloadOptions::default());
+    let tools = payload["tools"].as_array().expect("tools");
+    assert_eq!(tools.len(), 2);
+    assert!(tools.iter().all(|tool| tool.get("defer_loading").is_none()));
+
+    // When every current tool is marked, one stays immediate.
+    let context = deferred_context(
+        vec![deferred_tool("late_tool")],
+        vec!["late_tool".to_owned()],
+    );
+    let payload = build_anthropic_payload(&model, &context, AnthropicPayloadOptions::default());
+    let tools = payload["tools"].as_array().expect("tools");
+    assert_eq!(tools.len(), 1);
+    assert!(tools[0].get("defer_loading").is_none());
+}
+
+#[test]
+fn openai_responses_loads_deferred_tools_through_client_tool_search() {
+    let mut model = get_model("openai", "gpt-5.4").expect("model");
+    let mut compat = model
+        .compat
+        .clone()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    compat.insert("supportsToolSearch".to_owned(), json!(true));
+    model.compat = Some(Value::Object(compat));
+    let context = deferred_context(
+        vec![deferred_tool("base_tool"), deferred_tool("late_tool")],
+        vec!["late_tool".to_owned()],
+    );
+
+    let payload =
+        build_openai_responses_payload(&model, &context, OpenAIResponsesPayloadOptions::default());
+    let tool_names = payload["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|tool| tool["name"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(tool_names, vec![json!("base_tool")]);
+
+    let input = payload["input"].as_array().expect("input");
+    let search_call = input
+        .iter()
+        .find(|item| item["type"] == "tool_search_call")
+        .expect("tool search call");
+    assert_eq!(search_call["execution"], json!("client"));
+    assert_eq!(search_call["status"], json!("completed"));
+    assert_eq!(search_call["arguments"]["query"], json!("late_tool"));
+    assert_eq!(search_call["arguments"]["limit"], json!(1));
+    let search_output = input
+        .iter()
+        .find(|item| item["type"] == "tool_search_output")
+        .expect("tool search output");
+    assert_eq!(search_output["call_id"], search_call["call_id"]);
+    assert_eq!(search_output["tools"][0]["name"], json!("late_tool"));
+    assert_eq!(search_output["tools"][0]["defer_loading"], json!(true));
+
+    // Without tool-search support the full tool list stays in the prompt.
+    let plain_model = get_model("openai", "gpt-5.4").expect("model");
+    let payload = build_openai_responses_payload(
+        &plain_model,
+        &context,
+        OpenAIResponsesPayloadOptions::default(),
+    );
+    assert_eq!(payload["tools"].as_array().expect("tools").len(), 2);
+    assert!(
+        !payload["input"]
+            .as_array()
+            .expect("input")
+            .iter()
+            .any(|item| item["type"] == "tool_search_call")
+    );
+}
+
+#[test]
+fn kimi_deferred_tools_serialize_as_system_tool_definitions() {
+    let mut model = Model::faux("openai-completions", "moonshotai", "deferred-tools-model");
+    model.compat = Some(json!({ "deferredToolsMode": "kimi" }));
+    let context = deferred_context(
+        vec![deferred_tool("base_tool"), deferred_tool("late_tool")],
+        vec!["late_tool".to_owned()],
+    );
+
+    let payload = build_openai_completions_payload(
+        &model,
+        &context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    let tool_names = payload["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|tool| tool["function"]["name"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(tool_names, vec![json!("base_tool")]);
+    let kimi_message = payload["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| message["role"] == "system" && message.get("tools").is_some())
+        .expect("kimi system tools message");
+    assert!(kimi_message.get("content").is_none());
+    assert_eq!(
+        kimi_message["tools"][0]["function"]["name"],
+        json!("late_tool")
+    );
+
+    // Without Kimi mode, tools stay in the standard tool list.
+    let plain_model = Model::faux("openai-completions", "moonshotai", "deferred-tools-model");
+    let payload = build_openai_completions_payload(
+        &plain_model,
+        &context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    assert_eq!(payload["tools"].as_array().expect("tools").len(), 2);
+    assert!(
+        !payload["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .any(|message| message["role"] == "system" && message.get("tools").is_some())
+    );
+}
+
+#[test]
+fn context_estimate_counts_tools_added_after_latest_usage_checkpoint() {
+    let mut context = deferred_context(
+        vec![deferred_tool("base_tool"), deferred_tool("late_tool")],
+        vec!["late_tool".to_owned()],
+    );
+    // Give the assistant usage so trailing estimation applies from there.
+    let Message::Assistant(assistant) = &mut context.messages[1] else {
+        panic!("expected assistant");
+    };
+    assistant.usage.input = 500;
+    assistant.usage.total_tokens = 500;
+
+    let with_added = estimate_context_tokens(&context);
+    let Message::ToolResult(tool_result) = &mut context.messages[2] else {
+        panic!("expected tool result");
+    };
+    tool_result.added_tool_names = None;
+    let without_added = estimate_context_tokens(&context);
+    assert!(with_added.tokens > without_added.tokens);
+    assert_eq!(with_added.usage_tokens, without_added.usage_tokens);
+}

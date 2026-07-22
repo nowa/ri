@@ -44,11 +44,22 @@ pub fn build_openai_completions_payload(
         payload["store"] = Value::Bool(false);
     }
 
-    if !context.tools.is_empty() {
-        let last_tool_index = context.tools.len() - 1;
+    let deferred_tool_names =
+        if openai_completions_deferred_tools_mode(model).as_deref() == Some("kimi") {
+            deferred_tool_names_from_messages(&context.messages)
+        } else {
+            Vec::new()
+        };
+    let active_tools = context
+        .tools
+        .iter()
+        .filter(|tool| !deferred_tool_names.contains(&tool.name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !active_tools.is_empty() {
+        let last_tool_index = active_tools.len() - 1;
         payload["tools"] = Value::Array(
-            context
-                .tools
+            active_tools
                 .iter()
                 .enumerate()
                 .map(|(index, tool)| {
@@ -101,6 +112,37 @@ pub fn build_openai_completions_payload(
     payload
 }
 
+/// Provider-specific deferred-tool delivery mode from `model.compat`.
+fn openai_completions_deferred_tools_mode(model: &Model) -> Option<String> {
+    model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("deferredToolsMode"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn deferred_tool_names_from_messages(messages: &[Message]) -> Vec<String> {
+    let mut names = Vec::new();
+    for message in messages {
+        if let Message::ToolResult(tool_result) = message {
+            for name in tool_result.added_tool_names.as_deref().unwrap_or_default() {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
+        }
+    }
+    names
+}
+
+fn tools_by_name(tools: &[Tool], names: &[String]) -> Vec<Tool> {
+    names
+        .iter()
+        .filter_map(|name| tools.iter().find(|tool| &tool.name == name).cloned())
+        .collect()
+}
+
 pub fn convert_openai_completions_messages(model: &Model, context: &Context) -> Vec<Value> {
     convert_openai_completions_messages_with_cache(model, context, None)
 }
@@ -129,6 +171,7 @@ fn convert_openai_completions_messages_with_cache(
         Some(&|id, model, _source| normalize_openai_completions_tool_call_id(id, model)),
     );
     let mut last_role: Option<&str> = None;
+    let mut kimi_deferred_tool_names: Vec<String> = Vec::new();
     let mut index = 0;
     while index < transformed_messages.len() {
         let message = &transformed_messages[index];
@@ -266,6 +309,8 @@ fn convert_openai_completions_messages_with_cache(
             Message::ToolResult(_) => {
                 let mut image_blocks = Vec::new();
                 let mut next = index;
+                let kimi_deferred_mode =
+                    openai_completions_deferred_tools_mode(model).as_deref() == Some("kimi");
                 while next < transformed_messages.len() {
                     let Message::ToolResult(tool_result) = &transformed_messages[next] else {
                         break;
@@ -298,6 +343,13 @@ fn convert_openai_completions_messages_with_cache(
                         tool_message["name"] = Value::String(tool_result.tool_name.clone());
                     }
                     messages.push(tool_message);
+                    if kimi_deferred_mode {
+                        for name in tool_result.added_tool_names.as_deref().unwrap_or_default() {
+                            if !kimi_deferred_tool_names.contains(name) {
+                                kimi_deferred_tool_names.push(name.clone());
+                            }
+                        }
+                    }
 
                     if has_images && model.input.contains(&crate::InputKind::Image) {
                         for content in &tool_result.content {
@@ -315,6 +367,20 @@ fn convert_openai_completions_messages_with_cache(
                 }
 
                 index = next - 1;
+                if !kimi_deferred_tool_names.is_empty() {
+                    let deferred_tools = tools_by_name(&context.tools, &kimi_deferred_tool_names);
+                    if !deferred_tools.is_empty() {
+                        // Kimi accepts a system message with tools but omits
+                        // the standard content field.
+                        messages.push(json!({
+                            "role": "system",
+                            "tools": deferred_tools
+                                .iter()
+                                .map(|tool| format_tool(tool, model, None))
+                                .collect::<Vec<_>>(),
+                        }));
+                    }
+                }
                 if !image_blocks.is_empty() {
                     if requires_assistant_after_tool_result(model) {
                         messages.push(json!({

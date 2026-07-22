@@ -251,6 +251,7 @@ impl AgentToolExecutor for ConditionalTerminateExecutor {
                 "echoed: {value}"
             )))],
             details: Some(json!({ "value": value })),
+            added_tool_names: None,
             terminate,
             usage: None,
         })
@@ -502,6 +503,7 @@ impl AgentToolResultHook for ReplacingToolResultHook {
                     "patched result",
                 ))],
                 details: Some(json!({ "patched": true })),
+                added_tool_names: None,
                 terminate: true,
                 usage: None,
             },
@@ -3205,6 +3207,7 @@ impl AgentToolExecutor for UsageEchoExecutor {
             content: vec![AgentToolResultContent::Text(TextContent::new("echoed"))],
             details: None,
             usage: Some(self.usage.clone()),
+            added_tool_names: None,
             terminate: false,
         })
     }

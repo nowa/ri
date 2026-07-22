@@ -1038,6 +1038,7 @@ fn error_tool_result(error: impl Into<String>) -> crate::types::AgentToolResult 
         )],
         details: Some(serde_json::Value::Object(Default::default())),
         usage: None,
+        added_tool_names: None,
         terminate: false,
     }
 }
@@ -1077,7 +1078,10 @@ fn tool_result_message_from_outcome(outcome: ToolExecutionOutcome) -> ToolResult
         details: outcome.result.details,
         usage: outcome.result.usage,
         is_error: outcome.is_error,
-        added_tool_names: None,
+        added_tool_names: outcome
+            .result
+            .added_tool_names
+            .filter(|names| !names.is_empty()),
         timestamp: ri_llm_provider::now_millis(),
     }
 }

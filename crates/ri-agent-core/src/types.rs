@@ -136,6 +136,10 @@ pub struct AgentToolResult {
     /// main LLM context accounting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// Names of tools introduced by this result and available from this
+    /// transcript point onward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_tool_names: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub terminate: bool,
 }
@@ -153,6 +157,7 @@ impl AgentToolResult {
             content: vec![AgentToolResultContent::Text(TextContent::new(text))],
             details: None,
             usage: None,
+            added_tool_names: None,
             terminate: false,
         }
     }

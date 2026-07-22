@@ -19,16 +19,31 @@ pub struct OpenAIResponsesPayloadOptions {
     pub reasoning_summary: Option<String>,
 }
 
+fn supports_openai_responses_tool_search(model: &Model) -> bool {
+    model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("supportsToolSearch"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 pub fn build_openai_responses_payload(
     model: &Model,
     context: &Context,
     options: OpenAIResponsesPayloadOptions,
 ) -> Value {
-    let messages = convert_openai_responses_messages(
+    let placement = crate::deferred_tools::split_deferred_tools(
+        context,
+        supports_openai_responses_tool_search(model),
+        |name| name.to_owned(),
+    );
+    let messages = convert_openai_responses_messages_with_deferred(
         model,
         context,
         &["openai", "openai-codex", "opencode"],
         true,
+        &placement.deferred,
     );
     let cache_retention = resolve_openai_responses_cache_retention(options.cache_retention);
     let mut payload = json!({
@@ -54,8 +69,8 @@ pub fn build_openai_responses_payload(
     if let Some(temperature) = options.temperature {
         payload["temperature"] = json!(temperature);
     }
-    if !context.tools.is_empty() {
-        payload["tools"] = Value::Array(convert_openai_responses_tools(&context.tools, None));
+    if !placement.immediate.is_empty() {
+        payload["tools"] = Value::Array(convert_openai_responses_tools(&placement.immediate, None));
     }
     if let Some(service_tier) = options.service_tier {
         payload["service_tier"] = Value::String(service_tier);
@@ -91,17 +106,29 @@ pub fn build_openai_responses_payload(
 }
 
 pub fn convert_openai_responses_tools(tools: &[Tool], strict: Option<bool>) -> Vec<Value> {
+    convert_openai_responses_tools_with_defer(tools, strict, false)
+}
+
+pub fn convert_openai_responses_tools_with_defer(
+    tools: &[Tool],
+    strict: Option<bool>,
+    defer_loading: bool,
+) -> Vec<Value> {
     let strict = strict.unwrap_or(false);
     tools
         .iter()
         .map(|tool| {
-            json!({
+            let mut converted = json!({
                 "type": "function",
                 "name": tool.name,
                 "description": tool.description,
                 "parameters": tool.parameters,
                 "strict": strict,
-            })
+            });
+            if defer_loading {
+                converted["defer_loading"] = Value::Bool(true);
+            }
+            converted
         })
         .collect()
 }
@@ -199,6 +226,23 @@ pub fn convert_openai_responses_messages(
     allowed_tool_call_providers: &[&str],
     include_system_prompt: bool,
 ) -> Vec<Value> {
+    convert_openai_responses_messages_with_deferred(
+        model,
+        context,
+        allowed_tool_call_providers,
+        include_system_prompt,
+        &[],
+    )
+}
+
+pub fn convert_openai_responses_messages_with_deferred(
+    model: &Model,
+    context: &Context,
+    allowed_tool_call_providers: &[&str],
+    include_system_prompt: bool,
+    deferred_tools: &[(String, Tool)],
+) -> Vec<Value> {
+    let mut loaded_tool_names = std::collections::BTreeSet::new();
     let allowed_tool_call_providers = allowed_tool_call_providers
         .iter()
         .copied()
@@ -366,6 +410,50 @@ pub fn convert_openai_responses_messages(
                     "call_id": call_id,
                     "output": output,
                 }));
+
+                let mut loaded_tools = Vec::new();
+                for name in tool_result.added_tool_names.as_deref().unwrap_or_default() {
+                    if loaded_tool_names.contains(name) {
+                        continue;
+                    }
+                    let Some(tool) = deferred_tools
+                        .iter()
+                        .find(|(deferred_name, _)| deferred_name == name)
+                        .map(|(_, tool)| tool)
+                    else {
+                        continue;
+                    };
+                    loaded_tool_names.insert(name.clone());
+                    loaded_tools.push(tool.clone());
+                }
+                if !loaded_tools.is_empty() {
+                    let names = loaded_tools
+                        .iter()
+                        .map(|tool| tool.name.clone())
+                        .collect::<Vec<_>>();
+                    let search_call_id = format!(
+                        "pi_tool_load_{}",
+                        short_hash(&format!("{}:{}", tool_result.tool_call_id, names.join(",")))
+                    );
+                    messages.push(json!({
+                        "type": "tool_search_call",
+                        "call_id": search_call_id,
+                        "execution": "client",
+                        "status": "completed",
+                        "arguments": { "query": names.join(" "), "limit": names.len() },
+                    }));
+                    messages.push(json!({
+                        "type": "tool_search_output",
+                        "call_id": search_call_id,
+                        "execution": "client",
+                        "status": "completed",
+                        "tools": convert_openai_responses_tools_with_defer(
+                            &loaded_tools,
+                            None,
+                            true,
+                        ),
+                    }));
+                }
             }
         }
         message_index += 1;
