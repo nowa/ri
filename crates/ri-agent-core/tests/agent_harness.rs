@@ -1603,6 +1603,181 @@ async fn agent_harness_compacts_session_and_persists_summary() {
 }
 
 #[tokio::test]
+async fn agent_harness_retries_transient_compaction_errors_and_emits_retry_events() {
+    let mut definition = FauxModelDefinition::new("retry-summary-model");
+    definition.max_tokens = 8_192;
+    let registration = register_faux_provider(RegisterFauxProviderOptions {
+        models: vec![definition],
+        ..Default::default()
+    });
+    let calls = Arc::new(Mutex::new(0u32));
+    let first_calls = calls.clone();
+    let second_calls = calls.clone();
+    registration.set_responses(vec![
+        faux_response_factory(move |_, _, _, _| {
+            *first_calls.lock().expect("calls") += 1;
+            faux_assistant_message(
+                "",
+                FauxAssistantOptions {
+                    stop_reason: Some(StopReason::Error),
+                    error_message: Some("terminated".to_owned()),
+                    ..Default::default()
+                },
+            )
+        }),
+        faux_response_factory(move |_, _, _, _| {
+            *second_calls.lock().expect("calls") += 1;
+            faux_assistant_message("## Goal\nRecovered summary", Default::default())
+        }),
+    ]);
+
+    let mut session = Session::new(InMemorySessionStorage::new());
+    session
+        .append_message(Message::User(UserMessage::text("one")))
+        .expect("append user");
+    session
+        .append_message(Message::Assistant(faux_assistant_message(
+            "two",
+            Default::default(),
+        )))
+        .expect("append assistant");
+    session
+        .append_message(Message::User(UserMessage::text("recent")))
+        .expect("append recent");
+
+    let mut options =
+        AgentHarnessOptions::new(test_env(), session.clone(), registration.get_model());
+    options.get_api_key_and_headers = Some(Arc::new(|_| {
+        Ok(ProviderAuth {
+            api_key: Some("retry-key".to_owned()),
+            headers: BTreeMap::new(),
+        })
+    }));
+    options.retry = Some(RetryPolicy {
+        enabled: true,
+        max_retries: 1,
+        base_delay_ms: 0,
+    });
+    let harness = AgentHarness::new(options);
+    let retry_events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let retry_events_ref = retry_events.clone();
+    harness.subscribe(move |event| {
+        if let AgentHarnessEvent::Retry(retry_event) = event {
+            retry_events_ref
+                .lock()
+                .expect("events")
+                .push(match retry_event {
+                    RetryEvent::Scheduled { operation, .. } => {
+                        format!("retry_scheduled:{operation:?}")
+                    }
+                    RetryEvent::AttemptStart { operation } => {
+                        format!("retry_attempt_start:{operation:?}")
+                    }
+                    RetryEvent::Finished { operation } => format!("retry_finished:{operation:?}"),
+                });
+        }
+    });
+
+    let result = harness
+        .compact_session(AgentHarnessCompactionOptions {
+            settings: CompactionThresholdSettings {
+                enabled: true,
+                reserve_tokens: 128,
+                keep_recent_tokens: 1,
+            },
+            custom_instructions: None,
+        })
+        .await
+        .expect("compact")
+        .expect("compaction result");
+
+    assert!(result.summary.contains("Recovered summary"));
+    assert_eq!(*calls.lock().expect("calls"), 2);
+    assert_eq!(
+        *retry_events.lock().expect("events"),
+        vec![
+            "retry_scheduled:Compaction".to_owned(),
+            "retry_attempt_start:Compaction".to_owned(),
+            "retry_finished:Compaction".to_owned(),
+        ]
+    );
+    registration.unregister();
+}
+
+#[tokio::test]
+async fn agent_harness_does_not_retry_non_retryable_compaction_errors() {
+    let mut definition = FauxModelDefinition::new("no-retry-summary-model");
+    definition.max_tokens = 8_192;
+    let registration = register_faux_provider(RegisterFauxProviderOptions {
+        models: vec![definition],
+        ..Default::default()
+    });
+    let calls = Arc::new(Mutex::new(0u32));
+    let calls_ref = calls.clone();
+    registration.set_responses(vec![faux_response_factory(move |_, _, _, _| {
+        *calls_ref.lock().expect("calls") += 1;
+        faux_assistant_message(
+            "",
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::Error),
+                error_message: Some("insufficient_quota".to_owned()),
+                ..Default::default()
+            },
+        )
+    })]);
+
+    let mut session = Session::new(InMemorySessionStorage::new());
+    session
+        .append_message(Message::User(UserMessage::text("one")))
+        .expect("append user");
+    session
+        .append_message(Message::User(UserMessage::text("recent")))
+        .expect("append recent");
+
+    let mut options =
+        AgentHarnessOptions::new(test_env(), session.clone(), registration.get_model());
+    options.get_api_key_and_headers = Some(Arc::new(|_| {
+        Ok(ProviderAuth {
+            api_key: Some("retry-key".to_owned()),
+            headers: BTreeMap::new(),
+        })
+    }));
+    options.retry = Some(RetryPolicy {
+        enabled: true,
+        max_retries: 1,
+        base_delay_ms: 0,
+    });
+    let harness = AgentHarness::new(options);
+    let retry_events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let retry_events_ref = retry_events.clone();
+    harness.subscribe(move |event| {
+        if let AgentHarnessEvent::Retry(_) = event {
+            retry_events_ref
+                .lock()
+                .expect("events")
+                .push("retry".to_owned());
+        }
+    });
+
+    let error = harness
+        .compact_session(AgentHarnessCompactionOptions {
+            settings: CompactionThresholdSettings {
+                enabled: true,
+                reserve_tokens: 128,
+                keep_recent_tokens: 1,
+            },
+            custom_instructions: None,
+        })
+        .await
+        .expect_err("compaction should fail");
+
+    assert!(error.to_string().contains("insufficient_quota"));
+    assert_eq!(*calls.lock().expect("calls"), 1);
+    assert!(retry_events.lock().expect("events").is_empty());
+    registration.unregister();
+}
+
+#[tokio::test]
 async fn agent_harness_session_before_compact_hook_can_supply_summary() {
     let mut definition = FauxModelDefinition::new("hook-summary-model");
     definition.max_tokens = 8_192;

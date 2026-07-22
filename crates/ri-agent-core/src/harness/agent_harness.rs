@@ -21,8 +21,8 @@ use futures::future::BoxFuture;
 use parking_lot::Mutex;
 use ri_llm_provider::{
     AssistantMessage, CacheRetention, ImageContent, Message, Model, ProviderPayloadHook,
-    ProviderResponse, ProviderResponseHook, SimpleStreamOptions, ThinkingLevel, Transport, Usage,
-    UserContent, UserContentValue, UserMessage, now_millis,
+    ProviderResponse, ProviderResponseHook, RetryCallbacks, RetryPolicy, SimpleStreamOptions,
+    ThinkingLevel, Transport, Usage, UserContent, UserContentValue, UserMessage, now_millis,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -373,9 +373,35 @@ pub struct NavigateTreeResult {
     pub summary_entry: Option<SessionTreeEntry>,
 }
 
+/// Which harness operation a retry event belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryOperation {
+    Compaction,
+    BranchSummary,
+}
+
+/// Retry lifecycle events emitted around compaction/branch-summary retries.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RetryEvent {
+    Scheduled {
+        operation: RetryOperation,
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        error_message: String,
+    },
+    AttemptStart {
+        operation: RetryOperation,
+    },
+    Finished {
+        operation: RetryOperation,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum AgentHarnessEvent {
     Agent(AgentEvent),
+    Retry(RetryEvent),
     QueueUpdate(QueueUpdateEvent),
     Abort(AbortResult),
     ResourcesUpdate(ResourcesUpdateEvent),
@@ -510,6 +536,8 @@ pub struct AgentHarnessOptions {
     pub follow_up_mode: QueueMode,
     pub tool_execution: ToolExecutionMode,
     pub max_turns: usize,
+    /// Retry policy for transient compaction/branch-summary failures.
+    pub retry: Option<RetryPolicy>,
 }
 
 impl AgentHarnessOptions {
@@ -530,6 +558,7 @@ impl AgentHarnessOptions {
             follow_up_mode: QueueMode::OneAtATime,
             tool_execution: ToolExecutionMode::Parallel,
             max_turns: 16,
+            retry: None,
         }
     }
 }
@@ -766,6 +795,7 @@ pub struct AgentHarness {
     idle_notify: Notify,
     tool_execution: Mutex<ToolExecutionMode>,
     max_turns: Mutex<usize>,
+    retry: Option<RetryPolicy>,
 }
 
 impl AgentHarness {
@@ -811,6 +841,7 @@ impl AgentHarness {
             idle_notify: Notify::new(),
             tool_execution: Mutex::new(options.tool_execution),
             max_turns: Mutex::new(options.max_turns),
+            retry: options.retry,
         }
     }
 
@@ -1334,6 +1365,8 @@ impl AgentHarness {
                         headers,
                         options.custom_instructions.as_deref(),
                         (thinking_level != ThinkingLevel::Off).then_some(thinking_level),
+                        self.retry.as_ref(),
+                        Some(&self.retry_callbacks(RetryOperation::Compaction)),
                     )
                     .await
                     {
@@ -1440,6 +1473,8 @@ impl AgentHarness {
                                     summary_options.custom_instructions.as_deref(),
                                     summary_options.replace_instructions,
                                     summary_options.reserve_tokens,
+                                    self.retry.as_ref(),
+                                    Some(&self.retry_callbacks(RetryOperation::BranchSummary)),
                                 )
                                 .await
                                 {
@@ -1581,6 +1616,8 @@ impl AgentHarness {
                     custom_instructions,
                     replace_instructions,
                     options.reserve_tokens,
+                    self.retry.as_ref(),
+                    Some(&self.retry_callbacks(RetryOperation::BranchSummary)),
                 )
                 .await
                 .map_err(AgentHarnessError::branch_summary)?;
@@ -2120,6 +2157,40 @@ impl AgentHarness {
                 resources: self.get_resources(),
             },
         )
+    }
+
+    fn retry_callbacks(&self, operation: RetryOperation) -> RetryCallbacks {
+        let scheduled_listeners = self.listeners.clone();
+        let attempt_listeners = self.listeners.clone();
+        let finished_listeners = self.listeners.clone();
+        RetryCallbacks {
+            on_retry_scheduled: Some(Arc::new(
+                move |attempt, max_attempts, delay_ms, error_message| {
+                    emit_to(
+                        &scheduled_listeners,
+                        &AgentHarnessEvent::Retry(RetryEvent::Scheduled {
+                            operation,
+                            attempt,
+                            max_attempts,
+                            delay_ms,
+                            error_message: error_message.to_owned(),
+                        }),
+                    );
+                },
+            )),
+            on_retry_attempt_start: Some(Arc::new(move || {
+                emit_to(
+                    &attempt_listeners,
+                    &AgentHarnessEvent::Retry(RetryEvent::AttemptStart { operation }),
+                );
+            })),
+            on_retry_finished: Some(Arc::new(move |_, _, _| {
+                emit_to(
+                    &finished_listeners,
+                    &AgentHarnessEvent::Retry(RetryEvent::Finished { operation }),
+                );
+            })),
+        }
     }
 
     fn emit(&self, event: AgentHarnessEvent) {

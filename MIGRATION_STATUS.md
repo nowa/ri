@@ -1989,6 +1989,29 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Aligned pi `utils/retry.ts` and its consumers: `243f64be` "report aborted
+  retry attempts as unsuccessful", `162179af` "add branch/compact retries to
+  agent-harness", `8e53e0e4` "compaction & branch summarization follow retry
+  policy", `57d96d72` "add ResourceExhausted as a retryable error", `4285712b`
+  "fix(ai): retry Bun socket drops", `d53b5676` "fix(ai): retry Cloudflare 524
+  timeouts", and `8fb1e877` "fix(ai): disable hidden provider 429 retries".
+  New `ri-llm-provider::retry` module ports pi's retryable/non-retryable
+  provider error patterns (including 524, socket-drop wording,
+  `ResourceExhausted`, early-EOF stream endings, and quota/billing
+  non-retryables), `RetryPolicy`, `RetryCallbacks`, `retry_assistant_call`
+  with exponential backoff, abort-flag-aware backoff sleep that normalizes to
+  an aborted message, and aborted-retry-attempt reporting as unsuccessful.
+  `complete_simple_with_retries` wraps summarization calls;
+  `generate_summary`, the turn-prefix summarizer, `compact`, and
+  `generate_branch_summary` accept a retry policy plus callbacks;
+  `AgentHarnessOptions.retry` wires the policy through harness compaction and
+  branch-summary paths, emitting new
+  `AgentHarnessEvent::Retry(Scheduled/AttemptStart/Finished)` events tagged
+  with the operation. pi's SDK-level hidden-429-retry disabling has no ri
+  counterpart because ri never used provider SDK retries; ri's own policy is
+  the only retry layer. Verified with
+  `cargo test -p ri-llm-provider --test provider_core -- retry_` and the
+  harness retry tests in `ri-agent-core`.
 - Aligned pi `2fd38684` "add usage info to branch summary, compaction and tool
   result entries (#6671)": `ToolResultMessage` and `AgentToolResult` gain an
   optional `usage` field for tool-execution usage (not part of main LLM

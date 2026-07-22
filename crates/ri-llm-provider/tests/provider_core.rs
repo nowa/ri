@@ -24489,3 +24489,348 @@ fn aws_eventstream_frame(payload: &[u8]) -> Vec<u8> {
     frame.extend_from_slice(&0_u32.to_be_bytes());
     frame
 }
+
+fn retry_error_message(error_message: &str) -> AssistantMessage {
+    faux_assistant_message(
+        "",
+        FauxAssistantOptions {
+            stop_reason: Some(StopReason::Error),
+            error_message: Some(error_message.to_owned()),
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn retry_classification_matches_pi_provider_error_patterns() {
+    let openai_explicit = "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID req_******** in your message.";
+    let bedrock_explicit = "{\"message\":\"The system encountered an unexpected error during processing. Try your request again.\"}";
+    let nvidia_nim = "ResourceExhausted: Worker local total request limit reached (288/48)";
+    let bun_socket = "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()";
+    let early_eof = "OpenAI Responses stream ended before a terminal response event";
+
+    for retryable in [
+        openai_explicit,
+        bedrock_explicit,
+        nvidia_nim,
+        bun_socket,
+        early_eof,
+        "overloaded_error",
+        "524 status code (no body)",
+    ] {
+        assert!(
+            is_retryable_assistant_error(&retry_error_message(retryable)),
+            "expected retryable: {retryable}"
+        );
+    }
+
+    // Provider limit errors stay non-retryable even when they carry a 429.
+    assert!(!is_retryable_assistant_error(&retry_error_message(
+        "429 quota exceeded"
+    )));
+    assert!(!is_retryable_assistant_error(&faux_assistant_message(
+        "not an error",
+        Default::default()
+    )));
+}
+
+#[tokio::test]
+async fn retry_assistant_call_matches_pi_retry_loop_semantics() {
+    let enabled = RetryPolicy {
+        enabled: true,
+        max_retries: 3,
+        base_delay_ms: 0,
+    };
+    let disabled = RetryPolicy {
+        enabled: false,
+        max_retries: 3,
+        base_delay_ms: 0,
+    };
+
+    // Success returns immediately without retrying.
+    let calls = Arc::new(Mutex::new(0u32));
+    let calls_ref = calls.clone();
+    let result = retry_assistant_call::<_, _, String>(
+        || {
+            *calls_ref.lock().expect("calls") += 1;
+            async { Ok(faux_assistant_message("ok", Default::default())) }
+        },
+        Some(&enabled),
+        None,
+        None,
+    )
+    .await
+    .expect("call");
+    assert_eq!(text_of(&result), Some("ok"));
+    assert_eq!(*calls.lock().expect("calls"), 1);
+
+    // Aborted messages are never retried.
+    let scheduled = Arc::new(Mutex::new(Vec::<u32>::new()));
+    let scheduled_ref = scheduled.clone();
+    let callbacks = RetryCallbacks {
+        on_retry_scheduled: Some(Arc::new(move |attempt, _, _, _| {
+            scheduled_ref.lock().expect("scheduled").push(attempt);
+        })),
+        ..Default::default()
+    };
+    let result = retry_assistant_call::<_, _, String>(
+        || async {
+            Ok(faux_assistant_message(
+                "",
+                FauxAssistantOptions {
+                    stop_reason: Some(StopReason::Aborted),
+                    ..Default::default()
+                },
+            ))
+        },
+        Some(&enabled),
+        None,
+        Some(&callbacks),
+    )
+    .await
+    .expect("call");
+    assert_eq!(result.stop_reason, StopReason::Aborted);
+    assert!(scheduled.lock().expect("scheduled").is_empty());
+
+    // Non-retryable errors return immediately without callbacks.
+    let finished = Arc::new(Mutex::new(Vec::<(bool, u32, Option<String>)>::new()));
+    let finished_ref = finished.clone();
+    let callbacks = RetryCallbacks {
+        on_retry_finished: Some(Arc::new(move |success, attempt, final_error| {
+            finished_ref.lock().expect("finished").push((
+                success,
+                attempt,
+                final_error.map(str::to_owned),
+            ));
+        })),
+        ..Default::default()
+    };
+    let result = retry_assistant_call::<_, _, String>(
+        || async { Ok(retry_error_message("insufficient_quota")) },
+        Some(&enabled),
+        None,
+        Some(&callbacks),
+    )
+    .await
+    .expect("call");
+    assert_eq!(result.stop_reason, StopReason::Error);
+    assert!(finished.lock().expect("finished").is_empty());
+
+    // Transient errors retry up to max_retries then report the final error.
+    let calls = Arc::new(Mutex::new(0u32));
+    let calls_ref = calls.clone();
+    let result = retry_assistant_call::<_, _, String>(
+        || {
+            *calls_ref.lock().expect("calls") += 1;
+            async { Ok(retry_error_message("terminated")) }
+        },
+        Some(&enabled),
+        None,
+        Some(&callbacks),
+    )
+    .await
+    .expect("call");
+    assert_eq!(result.stop_reason, StopReason::Error);
+    assert_eq!(*calls.lock().expect("calls"), 4);
+    assert_eq!(
+        finished.lock().expect("finished").as_slice(),
+        &[(false, 3, Some("terminated".to_owned()))]
+    );
+    finished.lock().expect("finished").clear();
+
+    // Retry stops once a call succeeds and reports success.
+    let calls = Arc::new(Mutex::new(0u32));
+    let calls_ref = calls.clone();
+    let result = retry_assistant_call::<_, _, String>(
+        || {
+            let calls = calls_ref.clone();
+            async move {
+                let mut calls = calls.lock().expect("calls");
+                *calls += 1;
+                if *calls < 3 {
+                    Ok(retry_error_message("terminated"))
+                } else {
+                    Ok(faux_assistant_message("recovered", Default::default()))
+                }
+            }
+        },
+        Some(&enabled),
+        None,
+        Some(&callbacks),
+    )
+    .await
+    .expect("call");
+    assert_eq!(text_of(&result), Some("recovered"));
+    assert_eq!(*calls.lock().expect("calls"), 3);
+    assert_eq!(
+        finished.lock().expect("finished").as_slice(),
+        &[(true, 2, None)]
+    );
+    finished.lock().expect("finished").clear();
+
+    // A retried call that aborts is reported as unsuccessful.
+    let calls = Arc::new(Mutex::new(0u32));
+    let calls_ref = calls.clone();
+    let result = retry_assistant_call::<_, _, String>(
+        || {
+            let calls = calls_ref.clone();
+            async move {
+                let mut calls = calls.lock().expect("calls");
+                *calls += 1;
+                if *calls == 1 {
+                    Ok(retry_error_message("terminated"))
+                } else {
+                    Ok(faux_assistant_message(
+                        "",
+                        FauxAssistantOptions {
+                            stop_reason: Some(StopReason::Aborted),
+                            ..Default::default()
+                        },
+                    ))
+                }
+            }
+        },
+        Some(&enabled),
+        None,
+        Some(&callbacks),
+    )
+    .await
+    .expect("call");
+    assert_eq!(result.stop_reason, StopReason::Aborted);
+    assert_eq!(*calls.lock().expect("calls"), 2);
+    assert_eq!(
+        finished.lock().expect("finished").as_slice(),
+        &[(false, 1, None)]
+    );
+
+    // Disabled policy never retries.
+    let calls = Arc::new(Mutex::new(0u32));
+    let calls_ref = calls.clone();
+    let result = retry_assistant_call::<_, _, String>(
+        || {
+            *calls_ref.lock().expect("calls") += 1;
+            async { Ok(retry_error_message("terminated")) }
+        },
+        Some(&disabled),
+        None,
+        None,
+    )
+    .await
+    .expect("call");
+    assert_eq!(result.stop_reason, StopReason::Error);
+    assert_eq!(*calls.lock().expect("calls"), 1);
+}
+
+#[tokio::test]
+async fn retry_assistant_call_orders_attempt_start_after_backoff() {
+    let enabled = RetryPolicy {
+        enabled: true,
+        max_retries: 3,
+        base_delay_ms: 0,
+    };
+    let events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let produce_events = events.clone();
+    let scheduled_events = events.clone();
+    let attempt_events = events.clone();
+    let calls = Arc::new(Mutex::new(0u32));
+    let calls_ref = calls.clone();
+    let callbacks = RetryCallbacks {
+        on_retry_scheduled: Some(Arc::new(move |attempt, _, _, _| {
+            scheduled_events
+                .lock()
+                .expect("events")
+                .push(format!("retry:{attempt}"));
+        })),
+        on_retry_attempt_start: Some(Arc::new(move || {
+            attempt_events
+                .lock()
+                .expect("events")
+                .push("attempt-start".to_owned());
+        })),
+        ..Default::default()
+    };
+    let result = retry_assistant_call::<_, _, String>(
+        || {
+            let events = produce_events.clone();
+            let calls = calls_ref.clone();
+            async move {
+                let mut calls = calls.lock().expect("calls");
+                events
+                    .lock()
+                    .expect("events")
+                    .push(format!("produce:{}", *calls));
+                *calls += 1;
+                if *calls < 3 {
+                    Ok(retry_error_message("terminated"))
+                } else {
+                    Ok(faux_assistant_message("recovered", Default::default()))
+                }
+            }
+        },
+        Some(&enabled),
+        None,
+        Some(&callbacks),
+    )
+    .await
+    .expect("call");
+    assert_eq!(text_of(&result), Some("recovered"));
+    assert_eq!(
+        events.lock().expect("events").as_slice(),
+        &[
+            "produce:0",
+            "retry:1",
+            "attempt-start",
+            "produce:1",
+            "retry:2",
+            "attempt-start",
+            "produce:2",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn retry_assistant_call_aborts_backoff_and_returns_aborted_message() {
+    let policy = RetryPolicy {
+        enabled: true,
+        max_retries: 5,
+        base_delay_ms: 10_000,
+    };
+    let abort_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let finished = Arc::new(Mutex::new(Vec::<(bool, u32, Option<String>)>::new()));
+    let finished_ref = finished.clone();
+    let callbacks = RetryCallbacks {
+        on_retry_finished: Some(Arc::new(move |success, attempt, final_error| {
+            finished_ref.lock().expect("finished").push((
+                success,
+                attempt,
+                final_error.map(str::to_owned),
+            ));
+        })),
+        ..Default::default()
+    };
+    let calls = Arc::new(Mutex::new(0u32));
+    let calls_ref = calls.clone();
+    let abort_for_task = abort_flag.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        abort_for_task.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+    let result = retry_assistant_call::<_, _, String>(
+        || {
+            *calls_ref.lock().expect("calls") += 1;
+            async { Ok(retry_error_message("terminated")) }
+        },
+        Some(&policy),
+        Some(&abort_flag),
+        Some(&callbacks),
+    )
+    .await
+    .expect("call");
+    assert_eq!(result.stop_reason, StopReason::Aborted);
+    assert_eq!(result.error_message, None);
+    assert_eq!(*calls.lock().expect("calls"), 1);
+    assert_eq!(
+        finished.lock().expect("finished").as_slice(),
+        &[(false, 1, Some("terminated".to_owned()))]
+    );
+}

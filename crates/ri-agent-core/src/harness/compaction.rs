@@ -3,9 +3,9 @@ use super::session::{
     SessionTreeEntry, bash_execution_to_text, build_session_context,
 };
 use ri_llm_provider::{
-    AssistantContent, Context, Message, Model, SimpleStreamOptions, StopReason, StreamOptions,
-    TextContent, ThinkingLevel, ToolResultContent, Usage, UserContent, UserContentValue,
-    complete_simple,
+    AssistantContent, AssistantMessage, Context, Message, Model, ProviderError, RetryCallbacks,
+    RetryPolicy, SimpleStreamOptions, StopReason, StreamOptions, TextContent, ThinkingLevel,
+    ToolResultContent, Usage, UserContent, UserContentValue, complete_simple, retry_assistant_call,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -554,6 +554,25 @@ pub fn prepare_compaction(
     }))
 }
 
+/// Run `complete_simple` under the caller's retry policy, mirroring pi
+/// `completeSimpleWithRetries`.
+pub async fn complete_simple_with_retries(
+    model: &Model,
+    context: &Context,
+    options: &SimpleStreamOptions,
+    retry: Option<&RetryPolicy>,
+    callbacks: Option<&RetryCallbacks>,
+) -> Result<AssistantMessage, ProviderError> {
+    let abort_flag = options.stream.abort_flag.clone();
+    retry_assistant_call(
+        || complete_simple(model, context.clone(), options.clone()),
+        retry,
+        abort_flag.as_ref(),
+        callbacks,
+    )
+    .await
+}
+
 /// A generated summary plus the usage of the LLM call that produced it,
 /// mirroring pi `generateSummary`'s `{ text, usage }` result.
 #[derive(Debug, Clone, PartialEq)]
@@ -571,6 +590,8 @@ pub async fn generate_summary(
     custom_instructions: Option<&str>,
     previous_summary: Option<&str>,
     thinking_level: Option<ThinkingLevel>,
+    retry: Option<&RetryPolicy>,
+    callbacks: Option<&RetryCallbacks>,
 ) -> Result<SummaryOutput, CompactionError> {
     generate_summary_with_prompt(
         current_messages,
@@ -582,6 +603,8 @@ pub async fn generate_summary(
         previous_summary,
         thinking_level,
         false,
+        retry,
+        callbacks,
     )
     .await
 }
@@ -593,6 +616,8 @@ pub async fn compact(
     headers: Option<BTreeMap<String, String>>,
     custom_instructions: Option<&str>,
     thinking_level: Option<ThinkingLevel>,
+    retry: Option<&RetryPolicy>,
+    callbacks: Option<&RetryCallbacks>,
 ) -> Result<CompactionResult, CompactionError> {
     if preparation.first_kept_entry_id.is_empty() {
         return Err(CompactionError::new(
@@ -616,6 +641,8 @@ pub async fn compact(
                     custom_instructions,
                     preparation.previous_summary.as_deref(),
                     thinking_level,
+                    retry,
+                    callbacks,
                 )
                 .await?;
                 (history.text, Some(history.usage))
@@ -627,6 +654,8 @@ pub async fn compact(
                 api_key,
                 headers,
                 thinking_level,
+                retry,
+                callbacks,
             )
             .await?;
             let combined_usage = match history_usage {
@@ -650,6 +679,8 @@ pub async fn compact(
                 custom_instructions,
                 preparation.previous_summary.as_deref(),
                 thinking_level,
+                retry,
+                callbacks,
             )
             .await?;
             (summary.text, Some(summary.usage))
@@ -781,6 +812,8 @@ pub async fn generate_branch_summary(
     custom_instructions: Option<&str>,
     replace_instructions: bool,
     reserve_tokens: Option<u64>,
+    retry: Option<&RetryPolicy>,
+    callbacks: Option<&RetryCallbacks>,
 ) -> Result<BranchSummaryResult, BranchSummaryError> {
     let reserve_tokens = reserve_tokens.unwrap_or(16_384);
     let token_budget = model.context_window.saturating_sub(reserve_tokens);
@@ -818,10 +851,10 @@ pub async fn generate_branch_summary(
         })],
         tools: Vec::new(),
     };
-    let response = complete_simple(
+    let response = complete_simple_with_retries(
         model,
-        context,
-        SimpleStreamOptions {
+        &context,
+        &SimpleStreamOptions {
             stream: StreamOptions {
                 max_tokens: Some(2_048),
                 api_key: Some(api_key.into()),
@@ -830,6 +863,8 @@ pub async fn generate_branch_summary(
             },
             ..Default::default()
         },
+        retry,
+        callbacks,
     )
     .await
     .map_err(|error| {
@@ -1265,6 +1300,8 @@ async fn generate_turn_prefix_summary(
     api_key: String,
     headers: Option<BTreeMap<String, String>>,
     thinking_level: Option<ThinkingLevel>,
+    retry: Option<&RetryPolicy>,
+    callbacks: Option<&RetryCallbacks>,
 ) -> Result<SummaryOutput, CompactionError> {
     generate_summary_with_prompt(
         messages,
@@ -1276,6 +1313,8 @@ async fn generate_turn_prefix_summary(
         None,
         thinking_level,
         true,
+        retry,
+        callbacks,
     )
     .await
 }
@@ -1290,6 +1329,8 @@ async fn generate_summary_with_prompt(
     previous_summary: Option<&str>,
     thinking_level: Option<ThinkingLevel>,
     turn_prefix: bool,
+    retry: Option<&RetryPolicy>,
+    callbacks: Option<&RetryCallbacks>,
 ) -> Result<SummaryOutput, CompactionError> {
     let max_tokens = if turn_prefix {
         summary_max_tokens(reserve_tokens, model.max_tokens, 5, 10)
@@ -1331,10 +1372,12 @@ async fn generate_summary_with_prompt(
         })],
         tools: Vec::new(),
     };
-    let response = complete_simple(
+    let response = complete_simple_with_retries(
         model,
-        context,
-        summary_options(model, max_tokens, api_key, headers, thinking_level),
+        &context,
+        &summary_options(model, max_tokens, api_key, headers, thinking_level),
+        retry,
+        callbacks,
     )
     .await
     .map_err(|error| {
