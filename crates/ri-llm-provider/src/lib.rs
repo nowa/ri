@@ -12,6 +12,7 @@ pub mod azure_openai;
 pub mod bedrock;
 pub mod cli;
 pub mod deferred_tools;
+pub mod device_code;
 pub mod diagnostics;
 pub mod env_api_keys;
 pub mod estimate;

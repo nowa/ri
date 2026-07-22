@@ -1,5 +1,9 @@
 use crate::{
     anthropic_oauth::{OAuthHttpRequest, send_oauth_http_request},
+    device_code::{
+        DeviceCodePollConfig, DeviceCodePollProgress, DeviceCodePollResponse, DeviceCodePollState,
+        poll_device_code_flow_with_sleeper,
+    },
     models::get_models,
     types::now_millis,
 };
@@ -11,9 +15,6 @@ pub const GITHUB_COPILOT_USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
 pub const GITHUB_COPILOT_EDITOR_VERSION: &str = "vscode/1.107.0";
 pub const GITHUB_COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
 pub const GITHUB_COPILOT_INTEGRATION_ID: &str = "vscode-chat";
-
-const INITIAL_POLL_INTERVAL_MULTIPLIER: f64 = 1.2;
-const SLOW_DOWN_POLL_INTERVAL_MULTIPLIER: f64 = 1.4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitHubCopilotUrls {
@@ -96,106 +97,101 @@ pub enum GitHubDevicePollOutcome {
     TimedOut { slow_down_seen: bool },
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct GitHubDevicePollState {
-    deadline_ms: i64,
-    interval_ms: u64,
-    interval_multiplier: f64,
-    slow_down_responses: u32,
-}
-
-impl GitHubDevicePollState {
-    pub fn new(now_ms: i64, interval_seconds: u64, expires_in_seconds: u64) -> Self {
-        Self {
-            deadline_ms: now_ms + expires_in_seconds as i64 * 1000,
-            interval_ms: interval_seconds.saturating_mul(1000).max(1000),
-            interval_multiplier: INITIAL_POLL_INTERVAL_MULTIPLIER,
-            slow_down_responses: 0,
-        }
-    }
-
-    pub fn next_poll(&self, now_ms: i64) -> GitHubDevicePollOutcome {
-        if now_ms >= self.deadline_ms {
-            return GitHubDevicePollOutcome::TimedOut {
-                slow_down_seen: self.slow_down_responses > 0,
-            };
-        }
-        let remaining_ms = (self.deadline_ms - now_ms).max(0) as u64;
-        let adjusted_interval = (self.interval_ms as f64 * self.interval_multiplier).ceil() as u64;
-        let delay_ms = adjusted_interval.min(remaining_ms);
-        GitHubDevicePollOutcome::Poll {
-            delay_ms,
-            poll_at_ms: now_ms + delay_ms as i64,
-        }
-    }
-
-    pub fn apply_response(
-        &mut self,
-        response: GitHubDeviceTokenResponse,
-    ) -> GitHubDevicePollOutcome {
-        match response {
-            GitHubDeviceTokenResponse::AuthorizationPending => GitHubDevicePollOutcome::Poll {
-                delay_ms: 0,
-                poll_at_ms: 0,
-            },
-            GitHubDeviceTokenResponse::SlowDown { interval_seconds } => {
-                self.slow_down_responses += 1;
-                self.interval_ms = interval_seconds
-                    .filter(|interval| *interval > 0)
-                    .map(|interval| interval * 1000)
-                    .unwrap_or_else(|| (self.interval_ms + 5000).max(1000));
-                self.interval_multiplier = SLOW_DOWN_POLL_INTERVAL_MULTIPLIER;
-                GitHubDevicePollOutcome::Poll {
-                    delay_ms: 0,
-                    poll_at_ms: 0,
-                }
-            }
-            GitHubDeviceTokenResponse::Success { access_token } => {
-                GitHubDevicePollOutcome::Success { access_token }
-            }
-            GitHubDeviceTokenResponse::Error { error, description } => {
-                let suffix = description
-                    .filter(|description| !description.is_empty())
-                    .map(|description| format!(": {description}"))
-                    .unwrap_or_default();
-                GitHubDevicePollOutcome::Failed {
-                    message: format!("Device flow failed: {error}{suffix}"),
-                }
-            }
-        }
-    }
-
-    pub fn slow_down_seen(&self) -> bool {
-        self.slow_down_responses > 0
+fn github_device_poll_config(
+    interval_seconds: u64,
+    expires_in_seconds: u64,
+) -> DeviceCodePollConfig {
+    DeviceCodePollConfig {
+        interval_seconds: Some(interval_seconds),
+        expires_in_seconds: Some(expires_in_seconds),
+        // GitHub answers a poll inside the throttle window with slow_down, so
+        // wait one interval before the first poll (pi #6187).
+        wait_before_first_poll: true,
     }
 }
 
+fn github_device_poll_response(
+    response: GitHubDeviceTokenResponse,
+) -> DeviceCodePollResponse<String> {
+    match response {
+        GitHubDeviceTokenResponse::AuthorizationPending => DeviceCodePollResponse::Pending,
+        GitHubDeviceTokenResponse::SlowDown { interval_seconds } => {
+            DeviceCodePollResponse::SlowDown { interval_seconds }
+        }
+        GitHubDeviceTokenResponse::Success { access_token } => {
+            DeviceCodePollResponse::Complete(access_token)
+        }
+        GitHubDeviceTokenResponse::Error { error, description } => {
+            let suffix = description
+                .filter(|description| !description.is_empty())
+                .map(|description| format!(": {description}"))
+                .unwrap_or_default();
+            DeviceCodePollResponse::Failed {
+                message: format!("Device flow failed: {error}{suffix}"),
+            }
+        }
+    }
+}
+
+/// Replay a response script against the shared poll cadence, recording when
+/// each poll would fire. Test-facing.
 pub fn simulate_github_device_poll_times(
     start_ms: i64,
     interval_seconds: u64,
     expires_in_seconds: u64,
     responses: &[GitHubDeviceTokenResponse],
 ) -> (Vec<i64>, GitHubDevicePollOutcome) {
-    let mut state = GitHubDevicePollState::new(start_ms, interval_seconds, expires_in_seconds);
+    let config = github_device_poll_config(interval_seconds, expires_in_seconds);
+    let mut state = DeviceCodePollState::new(start_ms, &config);
     let mut now_ms = start_ms;
     let mut poll_times = Vec::new();
-
-    for response in responses {
-        match state.next_poll(now_ms) {
-            GitHubDevicePollOutcome::Poll { poll_at_ms, .. } => {
-                now_ms = poll_at_ms;
-                poll_times.push(now_ms);
-            }
-            outcome => return (poll_times, outcome),
+    if let Some(delay_ms) = state.initial_wait_ms(now_ms) {
+        now_ms += delay_ms as i64;
+    }
+    let mut responses = responses.iter();
+    loop {
+        if !state.should_poll(now_ms) {
+            return (
+                poll_times,
+                GitHubDevicePollOutcome::TimedOut {
+                    slow_down_seen: state.slow_down_seen(),
+                },
+            );
         }
-
-        match state.apply_response(response.clone()) {
-            GitHubDevicePollOutcome::Poll { .. } => {}
-            outcome => return (poll_times, outcome),
+        let Some(response) = responses.next() else {
+            return (
+                poll_times,
+                GitHubDevicePollOutcome::Poll {
+                    delay_ms: 0,
+                    poll_at_ms: now_ms,
+                },
+            );
+        };
+        poll_times.push(now_ms);
+        match state.apply_response(github_device_poll_response(response.clone())) {
+            DeviceCodePollProgress::Continue => {}
+            DeviceCodePollProgress::Complete(access_token) => {
+                return (
+                    poll_times,
+                    GitHubDevicePollOutcome::Success { access_token },
+                );
+            }
+            DeviceCodePollProgress::Failed { message } => {
+                return (poll_times, GitHubDevicePollOutcome::Failed { message });
+            }
+        }
+        match state.wait_after_poll_ms(now_ms) {
+            Some(delay_ms) => now_ms += delay_ms as i64,
+            None => {
+                return (
+                    poll_times,
+                    GitHubDevicePollOutcome::TimedOut {
+                        slow_down_seen: state.slow_down_seen(),
+                    },
+                );
+            }
         }
     }
-
-    (poll_times, state.next_poll(now_ms))
 }
 
 pub fn normalize_github_domain(input: &str) -> Option<String> {
@@ -392,35 +388,18 @@ where
     F: FnMut(u64) -> Fut,
     Fut: Future<Output = ()>,
 {
-    let mut state =
-        GitHubDevicePollState::new(start_ms, device.interval_seconds, device.expires_in_seconds);
-    let mut now_ms = start_ms;
-    loop {
-        match state.next_poll(now_ms) {
-            GitHubDevicePollOutcome::Poll {
-                delay_ms,
-                poll_at_ms,
-            } => {
-                sleep(delay_ms).await;
-                now_ms = poll_at_ms;
-            }
-            GitHubDevicePollOutcome::TimedOut { slow_down_seen } => {
-                return Err(github_device_flow_timeout_message(slow_down_seen));
-            }
-            GitHubDevicePollOutcome::Failed { message } => return Err(message),
-            GitHubDevicePollOutcome::Success { access_token } => return Ok(access_token),
-        }
-
-        let response = poll_github_copilot_access_token_for_urls(urls, &device.device_code).await?;
-        match state.apply_response(response) {
-            GitHubDevicePollOutcome::Poll { .. } => {}
-            GitHubDevicePollOutcome::Success { access_token } => return Ok(access_token),
-            GitHubDevicePollOutcome::Failed { message } => return Err(message),
-            GitHubDevicePollOutcome::TimedOut { slow_down_seen } => {
-                return Err(github_device_flow_timeout_message(slow_down_seen));
-            }
-        }
-    }
+    let config = github_device_poll_config(device.interval_seconds, device.expires_in_seconds);
+    poll_device_code_flow_with_sleeper(
+        &config,
+        start_ms,
+        || async {
+            let response =
+                poll_github_copilot_access_token_for_urls(urls, &device.device_code).await?;
+            Ok(github_device_poll_response(response))
+        },
+        &mut sleep,
+    )
+    .await
 }
 
 pub async fn login_github_copilot_device_flow_for_urls<C>(
@@ -813,14 +792,6 @@ fn required_u64(value: &Value, field: &str, label: &str) -> Result<u64, String> 
         .get(field)
         .and_then(Value::as_u64)
         .ok_or_else(|| format!("{label} response was missing {field}"))
-}
-
-fn github_device_flow_timeout_message(slow_down_seen: bool) -> String {
-    if slow_down_seen {
-        "Device flow timed out after one or more slow_down responses. This is often caused by clock drift in WSL or VM environments. Please sync or restart the VM clock and try again.".to_owned()
-    } else {
-        "Device flow timed out".to_owned()
-    }
 }
 
 fn form_body(params: &[(&str, &str)]) -> String {

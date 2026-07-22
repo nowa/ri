@@ -8369,7 +8369,7 @@ fn github_copilot_oauth_poll_waits_before_first_poll_and_slows_down() {
 
     assert_eq!(
         poll_times,
-        vec![start + 6_000, start + 12_000, start + 26_000]
+        vec![start + 5_000, start + 10_000, start + 20_000]
     );
     assert_eq!(
         outcome,
@@ -8399,10 +8399,7 @@ fn github_copilot_oauth_poll_uses_remaining_lifetime_before_slow_down_timeout() 
         ],
     );
 
-    assert_eq!(
-        poll_times,
-        vec![start + 6_000, start + 20_000, start + 25_000]
-    );
+    assert_eq!(poll_times, vec![start + 5_000, start + 15_000]);
     assert_eq!(
         outcome,
         GitHubDevicePollOutcome::TimedOut {
@@ -8635,7 +8632,7 @@ async fn github_copilot_oauth_complete_device_flow_waits_and_refreshes() {
 
     assert_eq!(
         sleeps.lock().expect("sleeps").as_slice(),
-        &[6_000, 6_000, 14_000]
+        &[5_000, 5_000, 10_000]
     );
     assert_eq!(
         seen_device
@@ -8919,7 +8916,6 @@ async fn github_copilot_oauth_complete_device_flow_times_out_after_slow_down() {
     let (poll_url, poll_requests_task) = mock_json_sequence_server(vec![
         r#"{"error":"slow_down","error_description":"wait","interval":10}"#,
         r#"{"error":"slow_down","error_description":"still waiting","interval":15}"#,
-        r#"{"error":"authorization_pending","error_description":"pending"}"#,
     ])
     .await;
     let urls = GitHubCopilotUrls {
@@ -8953,9 +8949,9 @@ async fn github_copilot_oauth_complete_device_flow_times_out_after_slow_down() {
 
     assert_eq!(
         sleeps.lock().expect("sleeps").as_slice(),
-        &[6_000, 14_000, 5_000]
+        &[5_000, 10_000, 10_000]
     );
-    assert_eq!(poll_requests.len(), 3);
+    assert_eq!(poll_requests.len(), 2);
     assert!(err.contains("Device flow timed out after one or more slow_down responses"));
     assert!(err.contains("clock drift"));
 }
@@ -25785,4 +25781,193 @@ fn scoped_env_reaches_provider_configuration_consumers() {
         resolve_google_vertex_api_key_scoped(None, &env).as_deref(),
         Some("scoped-google")
     );
+}
+
+mod device_code_polling {
+    use ri_llm_provider::device_code::{
+        DeviceCodePollConfig, DeviceCodePollResponse, poll_device_code_flow_with_sleeper,
+    };
+    use std::sync::{Arc, Mutex};
+
+    async fn run_flow(
+        config: &DeviceCodePollConfig,
+        responses: Vec<DeviceCodePollResponse<&'static str>>,
+    ) -> (Result<&'static str, String>, Vec<u64>) {
+        let responses = Arc::new(Mutex::new(responses.into_iter()));
+        let sleeps = Arc::new(Mutex::new(Vec::new()));
+        let sleeps_ref = sleeps.clone();
+        let result = poll_device_code_flow_with_sleeper(
+            config,
+            0,
+            || {
+                let responses = responses.clone();
+                async move {
+                    responses
+                        .lock()
+                        .expect("responses")
+                        .next()
+                        .ok_or_else(|| "unexpected extra poll".to_owned())
+                }
+            },
+            move |delay_ms| {
+                sleeps_ref.lock().expect("sleeps").push(delay_ms);
+                std::future::ready(())
+            },
+        )
+        .await;
+        let sleeps = sleeps.lock().expect("sleeps").clone();
+        (result, sleeps)
+    }
+
+    #[tokio::test]
+    async fn polls_immediately_and_returns_the_completed_value() {
+        let config = DeviceCodePollConfig {
+            interval_seconds: Some(2),
+            expires_in_seconds: Some(30),
+            wait_before_first_poll: false,
+        };
+        let (result, sleeps) = run_flow(
+            &config,
+            vec![
+                DeviceCodePollResponse::Pending,
+                DeviceCodePollResponse::Complete("token"),
+            ],
+        )
+        .await;
+        assert_eq!(result, Ok("token"));
+        assert_eq!(sleeps, vec![2_000]);
+    }
+
+    #[tokio::test]
+    async fn can_wait_before_the_first_poll() {
+        let config = DeviceCodePollConfig {
+            interval_seconds: Some(2),
+            expires_in_seconds: Some(30),
+            wait_before_first_poll: true,
+        };
+        let (result, sleeps) =
+            run_flow(&config, vec![DeviceCodePollResponse::Complete("token")]).await;
+        assert_eq!(result, Ok("token"));
+        assert_eq!(sleeps, vec![2_000]);
+    }
+
+    #[tokio::test]
+    async fn increases_the_interval_by_five_seconds_after_slow_down_without_a_server_interval() {
+        let config = DeviceCodePollConfig {
+            interval_seconds: Some(2),
+            expires_in_seconds: Some(900),
+            wait_before_first_poll: false,
+        };
+        let (result, sleeps) = run_flow(
+            &config,
+            vec![
+                DeviceCodePollResponse::SlowDown {
+                    interval_seconds: None,
+                },
+                DeviceCodePollResponse::Complete("token"),
+            ],
+        )
+        .await;
+        assert_eq!(result, Ok("token"));
+        assert_eq!(sleeps, vec![7_000]);
+    }
+
+    #[tokio::test]
+    async fn honors_the_server_provided_slow_down_interval() {
+        let config = DeviceCodePollConfig {
+            interval_seconds: Some(2),
+            expires_in_seconds: Some(900),
+            wait_before_first_poll: false,
+        };
+        let (result, sleeps) = run_flow(
+            &config,
+            vec![
+                DeviceCodePollResponse::SlowDown {
+                    interval_seconds: Some(10),
+                },
+                DeviceCodePollResponse::Pending,
+                DeviceCodePollResponse::Complete("token"),
+            ],
+        )
+        .await;
+        assert_eq!(result, Ok("token"));
+        assert_eq!(sleeps, vec![10_000, 10_000]);
+    }
+
+    #[tokio::test]
+    async fn defaults_to_five_seconds_and_clamps_the_minimum_interval() {
+        let default_interval = DeviceCodePollConfig {
+            interval_seconds: None,
+            expires_in_seconds: Some(900),
+            wait_before_first_poll: true,
+        };
+        let (result, sleeps) = run_flow(
+            &default_interval,
+            vec![DeviceCodePollResponse::Complete("token")],
+        )
+        .await;
+        assert_eq!(result, Ok("token"));
+        assert_eq!(sleeps, vec![5_000]);
+
+        let zero_interval = DeviceCodePollConfig {
+            interval_seconds: Some(0),
+            expires_in_seconds: Some(900),
+            wait_before_first_poll: true,
+        };
+        let (result, sleeps) = run_flow(
+            &zero_interval,
+            vec![DeviceCodePollResponse::Complete("token")],
+        )
+        .await;
+        assert_eq!(result, Ok("token"));
+        assert_eq!(sleeps, vec![1_000]);
+    }
+
+    #[tokio::test]
+    async fn times_out_with_and_without_slow_down_context() {
+        let config = DeviceCodePollConfig {
+            interval_seconds: Some(2),
+            expires_in_seconds: Some(3),
+            wait_before_first_poll: false,
+        };
+        let (result, sleeps) = run_flow(
+            &config,
+            vec![
+                DeviceCodePollResponse::Pending,
+                DeviceCodePollResponse::Pending,
+            ],
+        )
+        .await;
+        assert_eq!(result, Err("Device flow timed out".to_owned()));
+        assert_eq!(sleeps, vec![2_000, 1_000]);
+
+        let (result, _) = run_flow(
+            &config,
+            vec![DeviceCodePollResponse::SlowDown {
+                interval_seconds: Some(5),
+            }],
+        )
+        .await;
+        let message = result.expect_err("timeout");
+        assert!(message.contains("after one or more slow_down responses"));
+        assert!(message.contains("clock drift"));
+    }
+
+    #[tokio::test]
+    async fn propagates_failed_poll_results() {
+        let config = DeviceCodePollConfig {
+            interval_seconds: Some(2),
+            expires_in_seconds: Some(900),
+            wait_before_first_poll: false,
+        };
+        let (result, sleeps) = run_flow(
+            &config,
+            vec![DeviceCodePollResponse::Failed {
+                message: "Device flow failed: access_denied".to_owned(),
+            }],
+        )
+        .await;
+        assert_eq!(result, Err("Device flow failed: access_denied".to_owned()));
+        assert!(sleeps.is_empty());
+    }
 }

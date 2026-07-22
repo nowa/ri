@@ -1998,6 +1998,15 @@ not part of this pass.
   `get_provider_env_value`; `BedrockClientOptions` and
   `AzureOpenAIConfigOptions` carry the scoped map. Verified with
   `scoped_env_reaches_provider_configuration_consumers`.
+- Ported pi's shared device-code polling semantics: new
+  `device_code::DeviceCodePollState`/`poll_device_code_flow_with_sleeper`
+  mirrors `pollOAuthDeviceCodeFlow` (RFC 8628 defaults, 1s minimum interval,
+  +5s slow_down increments, server-provided `slow_down` interval wins, an
+  optional wait-before-first-poll, and slow_down-aware timeout messages). The
+  GitHub Copilot flow now runs on the shared cadence with
+  `wait_before_first_poll` (pi #6187), dropping the pre-refactor 1.2x/1.4x
+  poll multipliers; poll-cadence tests were re-baselined to pi-HEAD timings
+  and pi's `oauth-device-code` test cases were ported.
 - Models runtime harness integration (pi phase 6, transitional):
   `AgentHarnessOptions.models` accepts a `Models` collection. When present it
   is the harness's stream path (the agent loop's stream provider dispatches
@@ -2279,10 +2288,6 @@ Alignment; the following upstream increments remain open:
 - Codex transport increments: zstd SSE compression, WebSocket
   connection-limit reconnect and stale-session rotation, SSE header-timeout
   tuning, device-code login (#4911).
-- Device-code OAuth polish: server-provided `slow_down` intervals and Copilot
-  token-poll delays.
-- Remaining scoped-env consumers for #5807 (Bedrock/Azure/Cloudflare/Vertex
-  configuration reads).
 
 - Strict provider live/E2E completion still requires running the gated provider
   matrix with real API keys, provider-specific environment configuration,
