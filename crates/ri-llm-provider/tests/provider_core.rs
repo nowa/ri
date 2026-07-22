@@ -15163,7 +15163,7 @@ fn openai_responses_stream_maps_text_deltas_and_replays_text_signature() {
 }
 
 #[tokio::test]
-async fn openai_responses_stream_ignores_text_delta_before_content_part() {
+async fn openai_responses_stream_preserves_out_of_order_item_deltas() {
     let model = get_model("openai", "gpt-5.5").expect("openai model");
     let mut output = empty_assistant_for_model(&model);
     let (sender, stream) = assistant_message_event_stream();
@@ -15172,33 +15172,186 @@ async fn openai_responses_stream_ignores_text_delta_before_content_part() {
         [
             json!({
                 "type": "response.output_item.added",
+                "output_index": 0,
+                "item": { "type": "reasoning", "id": "rs_ooo", "summary": [] }
+            }),
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 1,
                 "item": {
                     "type": "message",
-                    "id": "msg_no_part",
+                    "id": "msg_ooo",
                     "role": "assistant",
                     "status": "in_progress",
                     "content": []
                 }
             }),
-            json!({ "type": "response.output_text.delta", "delta": "ignored" }),
+            json!({
+                "type": "response.output_text.delta",
+                "output_index": 1,
+                "delta": "Hello"
+            }),
+            json!({
+                "type": "response.reasoning_summary_text.delta",
+                "output_index": 0,
+                "delta": "thinking after text started"
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "output_index": 1,
+                "delta": " world"
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "reasoning",
+                    "id": "rs_ooo",
+                    "summary": [
+                        { "type": "summary_text", "text": "thinking after text started" }
+                    ]
+                }
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": {
+                    "type": "message",
+                    "id": "msg_ooo",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{ "type": "output_text", "text": "Hello world" }]
+                }
+            }),
         ],
         &mut output,
         &sender,
         &model,
     )
-    .expect("process ignored text delta");
+    .expect("process out-of-order stream");
     drop(sender);
 
-    let AssistantContent::Text(text) = &output.content[0] else {
+    let AssistantContent::Thinking(thinking) = &output.content[0] else {
+        panic!("thinking block");
+    };
+    assert_eq!(thinking.thinking, "thinking after text started");
+    let AssistantContent::Text(text) = &output.content[1] else {
         panic!("text block");
     };
-    assert!(text.text.is_empty());
+    assert_eq!(text.text, "Hello world");
+
     let events = collect_events(stream).await;
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, AssistantMessageEvent::TextDelta { .. }))
-    );
+    let thinking_deltas: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AssistantMessageEvent::ThinkingDelta { content_index, .. } => Some(*content_index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(thinking_deltas, vec![0]);
+    let text_deltas: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AssistantMessageEvent::TextDelta { content_index, .. } => Some(*content_index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text_deltas, vec![1, 1]);
+}
+
+#[test]
+fn openai_responses_stream_backfills_encrypted_content_from_response_completed() {
+    let model = get_model("azure-openai-responses", "gpt-5-mini").expect("azure model");
+
+    // A done item that already carries encrypted_content keeps its own value.
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, _stream) = assistant_message_event_stream();
+    process_openai_responses_events(
+        [
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": { "type": "reasoning", "id": "rs_done", "summary": [] }
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "reasoning",
+                    "id": "rs_done",
+                    "summary": [],
+                    "encrypted_content": "from-output-item-done"
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_test",
+                    "status": "completed",
+                    "output": [{
+                        "type": "reasoning",
+                        "id": "rs_done",
+                        "summary": [],
+                        "encrypted_content": "from-response-completed"
+                    }]
+                }
+            }),
+        ],
+        &mut output,
+        &sender,
+        &model,
+    )
+    .expect("process stream");
+    let AssistantContent::Thinking(thinking) = &output.content[0] else {
+        panic!("thinking block");
+    };
+    let signature: serde_json::Value =
+        serde_json::from_str(thinking.thinking_signature.as_deref().expect("signature"))
+            .expect("signature json");
+    assert_eq!(signature["encrypted_content"], "from-output-item-done");
+
+    // A done item that omitted encrypted_content is backfilled from the
+    // terminal response payload (Azure, pi #6608).
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, _stream) = assistant_message_event_stream();
+    process_openai_responses_events(
+        [
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": { "type": "reasoning", "id": "rs_missing", "summary": [] }
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": { "type": "reasoning", "id": "rs_missing", "summary": [] }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_test",
+                    "status": "completed",
+                    "output": [{
+                        "type": "reasoning",
+                        "id": "rs_missing",
+                        "summary": [],
+                        "encrypted_content": "from-response-completed"
+                    }]
+                }
+            }),
+        ],
+        &mut output,
+        &sender,
+        &model,
+    )
+    .expect("process stream");
+    let AssistantContent::Thinking(thinking) = &output.content[0] else {
+        panic!("thinking block");
+    };
+    let signature: serde_json::Value =
+        serde_json::from_str(thinking.thinking_signature.as_deref().expect("signature"))
+            .expect("signature json");
+    assert_eq!(signature["encrypted_content"], "from-response-completed");
 }
 
 #[tokio::test]

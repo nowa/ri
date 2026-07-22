@@ -2007,6 +2007,16 @@ not part of this pass.
   `wait_before_first_poll` (pi #6187), dropping the pre-refactor 1.2x/1.4x
   poll multipliers; poll-cadence tests were re-baselined to pi-HEAD timings
   and pi's `oauth-device-code` test cases were ported.
+- Rebuilt the OpenAI Responses stream processor on per-`output_index` slots
+  (pi #6009): reasoning/message/function_call items each keep their own
+  content block and scratch `partial_json`, so interleaved deltas from
+  out-of-order items no longer clobber a single cursor; events without
+  `output_index` share one legacy slot key for fixture compatibility. Added
+  the `response.completed`/`response.incomplete` reasoning-signature backfill
+  (pi #6608): `encrypted_content` missing from `output_item.done` is filled
+  from the terminal response payload so Azure `store: false` replay stays
+  stateless. Dropped the pre-refactor `content_part.added` gating and
+  raw-item bookkeeping to match pi HEAD semantics.
 - Models runtime harness integration (pi phase 6, transitional):
   `AgentHarnessOptions.models` accepts a `Models` collection. When present it
   is the harness's stream path (the agent loop's stream provider dispatches
@@ -2281,10 +2291,8 @@ Alignment; the following upstream increments remain open:
   on generated entries).
 - SQLite session storage (`packages/storage`, #6594) — scope decision
   pending.
-- Deeper OpenAI Responses reasoning-replay increments: out-of-order reasoning
-  item preservation, `encrypted_content` backfill from `response.completed`
-  (#6608), synthetic message ids (#5148), early reasoning-details
-  preservation.
+- Deeper OpenAI Responses reasoning-replay increments still open: synthetic
+  message ids (#5148) and early reasoning-details preservation (#5114).
 - Codex transport increments: zstd SSE compression, WebSocket
   connection-limit reconnect and stale-session rotation, SSE header-timeout
   tuning, device-code login (#4911).
