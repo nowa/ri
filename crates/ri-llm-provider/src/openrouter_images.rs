@@ -346,6 +346,7 @@ pub fn parse_openrouter_images_usage(raw_usage: &Value, model: &ImagesModel) -> 
         output,
         cache_read,
         cache_write,
+        cache_write_1h: None,
         reasoning: None,
         total_tokens: input + output + cache_read + cache_write,
         cost: UsageCost::default(),

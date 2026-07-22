@@ -873,6 +873,7 @@ fn session_persists_compaction_and_branch_summary_usage() {
         output: 2,
         cache_read: 3,
         cache_write: 4,
+        cache_write_1h: None,
         reasoning: None,
         total_tokens: 10,
         cost: ri_llm_provider::UsageCost {

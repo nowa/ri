@@ -217,6 +217,11 @@ pub fn combine_usage(first: &Usage, second: &Usage) -> Usage {
         output: first.output + second.output,
         cache_read: first.cache_read + second.cache_read,
         cache_write: first.cache_write + second.cache_write,
+        cache_write_1h: if first.cache_write_1h.is_some() || second.cache_write_1h.is_some() {
+            Some(first.cache_write_1h.unwrap_or(0) + second.cache_write_1h.unwrap_or(0))
+        } else {
+            None
+        },
         reasoning: if first.reasoning.is_some() || second.reasoning.is_some() {
             Some(first.reasoning.unwrap_or(0) + second.reasoning.unwrap_or(0))
         } else {

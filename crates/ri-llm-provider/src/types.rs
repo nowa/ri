@@ -114,6 +114,10 @@ pub struct Usage {
     pub output: u64,
     pub cache_read: u64,
     pub cache_write: u64,
+    /// Subset of `cache_write` written with 1h retention. Only Anthropic
+    /// reports this split.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_1h: Option<u64>,
     /// Reasoning/thinking tokens, when the provider reports them. This is a
     /// subset of `output`: `output` already includes these tokens. Set to a
     /// number (possibly 0) by providers that expose a reasoning breakdown;
@@ -131,6 +135,7 @@ impl Usage {
             output: 0,
             cache_read: 0,
             cache_write: 0,
+            cache_write_1h: None,
             reasoning: None,
             total_tokens: 0,
             cost: UsageCost::default(),

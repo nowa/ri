@@ -1166,6 +1166,7 @@ fn anthropic_model_metadata_matches_generated_catalog() {
         output: 1_000_000,
         cache_read: 1_000_000,
         cache_write: 1_000_000,
+        cache_write_1h: None,
         reasoning: None,
         total_tokens: 4_000_000,
         cost: UsageCost::default(),
@@ -3499,6 +3500,7 @@ fn openai_codex_model_metadata_matches_generated_catalog() {
         output: 50_000,
         cache_read: 50_000,
         cache_write: 50_000,
+        cache_write_1h: None,
         reasoning: None,
         total_tokens: 200_000,
         cost: UsageCost::default(),
@@ -12533,7 +12535,13 @@ fn anthropic_sse_parser_maps_provider_stop_reason_errors() {
         ]);
 
         let result = process_anthropic_sse_body(&model, &body).expect("parsed error reason");
-        let expected_error = format!("Provider stop_reason: {reason}");
+        // Refusals surface the model refusal message; other error stop
+        // reasons keep the provider stop-reason text.
+        let expected_error = if reason == "refusal" {
+            "The model refused to complete the request".to_owned()
+        } else {
+            format!("Provider stop_reason: {reason}")
+        };
         assert_eq!(result.stop_reason, StopReason::Error, "{reason}");
         assert_eq!(
             result.error_message.as_deref(),
@@ -13660,7 +13668,7 @@ fn anthropic_stream_processor_returns_error_for_provider_stop_reason_errors() {
         )
         .expect_err("refusal stop reason should fail the stream");
 
-    assert_eq!(error, "Provider stop_reason: refusal");
+    assert_eq!(error, "The model refused to complete the request");
     assert_eq!(output.stop_reason, StopReason::Error);
     assert_eq!(output.error_message.as_deref(), Some(error.as_str()));
     assert_eq!(output.usage.input, 3);
@@ -14846,6 +14854,7 @@ fn calculate_cost_applies_request_wide_pricing_tiers_above_input_threshold() {
         output: 100_000,
         cache_read: 72_000,
         cache_write,
+        cache_write_1h: None,
         reasoning: None,
         total_tokens: 372_000 + cache_write,
         cost: UsageCost::default(),
@@ -19626,7 +19635,7 @@ fn overflow_matches_provider_error_shapes_without_rate_limit_false_positives() {
 
 #[test]
 fn overflow_matches_context_overflow_provider_error_corpus() {
-    assert_eq!(overflow_pattern_count(), 22);
+    assert_eq!(overflow_pattern_count(), 24);
 
     for (provider, error) in [
         (
@@ -19645,6 +19654,18 @@ fn overflow_matches_context_overflow_provider_error_corpus() {
         (
             "openai compatible proxy",
             "Requested token count exceeds the model's maximum context length of 131,072 tokens.",
+        ),
+        (
+            "openai compatible parenthesized",
+            "Input length (265330) exceeds model's maximum context length (262144).",
+        ),
+        (
+            "openrouter poolside",
+            "Input length 300000 exceeds the maximum allowed input length of 262144 tokens.",
+        ),
+        (
+            "ds4 server",
+            "Prompt has 250,000 tokens, but the configured context size is 131,072 tokens",
         ),
         (
             "google gemini",
@@ -25301,4 +25322,168 @@ fn context_estimate_counts_tools_added_after_latest_usage_checkpoint() {
     let without_added = estimate_context_tokens(&context);
     assert!(with_added.tokens > without_added.tokens);
     assert_eq!(with_added.usage_tokens, without_added.usage_tokens);
+}
+
+#[test]
+fn anthropic_refusal_stop_details_explanation_becomes_error_message() {
+    let model = get_model("anthropic", "claude-haiku-4-5").expect("anthropic model");
+    let body = anthropic_sse_body(vec![
+        (
+            "message_start",
+            json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_refusal_details",
+                    "usage": { "input_tokens": 3, "output_tokens": 0 },
+                },
+            })
+            .to_string(),
+        ),
+        (
+            "message_delta",
+            json!({
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "refusal",
+                    "stop_details": { "explanation": "This request conflicts with usage policies." },
+                },
+                "usage": { "output_tokens": 1 },
+            })
+            .to_string(),
+        ),
+        (
+            "message_stop",
+            json!({ "type": "message_stop" }).to_string(),
+        ),
+    ]);
+    let result = process_anthropic_sse_body(&model, &body).expect("parsed");
+    assert_eq!(result.stop_reason, StopReason::Error);
+    assert_eq!(
+        result.error_message.as_deref(),
+        Some("This request conflicts with usage policies.")
+    );
+}
+
+#[test]
+fn anthropic_null_message_delta_usage_preserves_previous_usage() {
+    let model = get_model("anthropic", "claude-haiku-4-5").expect("anthropic model");
+    let mut events = minimal_anthropic_sse_events();
+    let delta_index = events.len() - 2;
+    events[delta_index] = (
+        "message_delta",
+        json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": "end_turn" },
+            "usage": null,
+        })
+        .to_string(),
+    );
+    let result = process_anthropic_sse_body(&model, &anthropic_sse_body(events)).expect("parsed");
+    assert_eq!(result.usage.input, 12);
+}
+
+#[test]
+fn anthropic_replays_signed_empty_thinking_blocks() {
+    let model = get_model("anthropic", "claude-haiku-4-5").expect("anthropic model");
+    let mut assistant = empty_assistant_for_model(&model);
+    assistant.content = vec![
+        AssistantContent::Thinking(ThinkingContent {
+            thinking: String::new(),
+            thinking_signature: Some("sig-1".to_owned()),
+            redacted: false,
+        }),
+        AssistantContent::Thinking(ThinkingContent {
+            thinking: String::new(),
+            thinking_signature: None,
+            redacted: false,
+        }),
+        AssistantContent::Text(TextContent::new("answer")),
+    ];
+    let context = Context {
+        system_prompt: None,
+        messages: vec![Message::Assistant(assistant)],
+        tools: Vec::new(),
+    };
+    let payload = build_anthropic_payload(&model, &context, AnthropicPayloadOptions::default());
+    let content = payload["messages"][0]["content"]
+        .as_array()
+        .expect("content");
+    assert_eq!(content.len(), 2);
+    assert_eq!(content[0]["type"], json!("thinking"));
+    assert_eq!(content[0]["thinking"], json!(""));
+    assert_eq!(content[0]["signature"], json!("sig-1"));
+    assert_eq!(content[1]["type"], json!("text"));
+}
+
+#[test]
+fn anthropic_cache_write_1h_parses_and_prices_at_double_input() {
+    let model = get_model("anthropic", "claude-haiku-4-5").expect("anthropic model");
+    let mut events = minimal_anthropic_sse_events();
+    events[0] = (
+        "message_start",
+        json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg_1h",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 100,
+                    "cache_creation": { "ephemeral_1h_input_tokens": 40 },
+                },
+            },
+        })
+        .to_string(),
+    );
+    let result = process_anthropic_sse_body(&model, &anthropic_sse_body(events)).expect("parsed");
+    // The later message_delta usage omits cache_creation, so the 1h split
+    // carries forward.
+    assert_eq!(result.usage.cache_write_1h, Some(40));
+
+    let mut usage = Usage {
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 100,
+        cache_write_1h: Some(40),
+        reasoning: None,
+        total_tokens: 100,
+        cost: UsageCost::default(),
+    };
+    let cost = calculate_cost(&model, &mut usage);
+    let expected = (model.cost.cache_write * 60.0 + model.cost.input * 2.0 * 40.0) / 1_000_000.0;
+    assert!((cost.cache_write - expected).abs() < 1e-12);
+}
+
+#[test]
+fn anthropic_temperature_and_adaptive_thinking_follow_compat_overrides() {
+    // Opus 4.7 suppresses the deprecated temperature parameter by default.
+    let opus_47 = get_model("anthropic", "claude-opus-4-7").expect("model");
+    let mut options = AnthropicPayloadOptions::default();
+    options.temperature = Some(0.5);
+    let payload = build_anthropic_payload(&opus_47, &user_context("hi"), options.clone());
+    assert!(payload.get("temperature").is_none());
+
+    // Other models still send it.
+    let haiku = get_model("anthropic", "claude-haiku-4-5").expect("model");
+    let payload = build_anthropic_payload(&haiku, &user_context("hi"), options.clone());
+    assert_eq!(payload["temperature"], json!(0.5));
+
+    // An explicit compat flag suppresses it anywhere.
+    let mut flagged = get_model("anthropic", "claude-haiku-4-5").expect("model");
+    flagged.compat = Some(json!({ "supportsTemperature": false }));
+    let payload = build_anthropic_payload(&flagged, &user_context("hi"), options);
+    assert!(payload.get("temperature").is_none());
+
+    // forceAdaptiveThinking on a compatible alias switches the simple path to
+    // adaptive effort instead of budget thinking.
+    let mut alias = get_model("anthropic", "claude-haiku-4-5").expect("model");
+    alias.reasoning = true;
+    alias.compat = Some(json!({ "forceAdaptiveThinking": true }));
+    let mut simple_options = SimpleStreamOptions::default();
+    simple_options.reasoning = Some(ThinkingLevel::High);
+    let payload = build_anthropic_simple_payload(&alias, &user_context("hi"), simple_options);
+    assert_eq!(payload["thinking"]["type"], json!("adaptive"));
+    assert_eq!(payload["output_config"]["effort"], json!("high"));
 }

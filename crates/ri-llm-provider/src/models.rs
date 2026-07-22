@@ -81,10 +81,15 @@ pub fn calculate_cost(model: &Model, usage: &mut Usage) -> UsageCost {
     }
     let (input_rate, output_rate, cache_read_rate, cache_write_rate) = rates;
 
+    // Anthropic charges 2x base input for 1h cache writes.
+    let long_write = usage.cache_write_1h.unwrap_or(0);
+    let short_write = usage.cache_write.saturating_sub(long_write);
     usage.cost.input = (input_rate / 1_000_000.0) * usage.input as f64;
     usage.cost.output = (output_rate / 1_000_000.0) * usage.output as f64;
     usage.cost.cache_read = (cache_read_rate / 1_000_000.0) * usage.cache_read as f64;
-    usage.cost.cache_write = (cache_write_rate / 1_000_000.0) * usage.cache_write as f64;
+    usage.cost.cache_write = (cache_write_rate * short_write as f64
+        + input_rate * 2.0 * long_write as f64)
+        / 1_000_000.0;
     usage.cost.total =
         usage.cost.input + usage.cost.output + usage.cost.cache_read + usage.cost.cache_write;
     usage.cost.clone()

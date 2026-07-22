@@ -1142,6 +1142,7 @@ fn apply_bedrock_stream_metadata(output: &mut AssistantMessage, model: &Model, e
         output: output_tokens,
         cache_read,
         cache_write,
+        cache_write_1h: None,
         reasoning: None,
         total_tokens,
         cost: Default::default(),

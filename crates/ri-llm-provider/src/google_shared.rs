@@ -677,6 +677,7 @@ fn apply_google_chunk_metadata(output: &mut AssistantMessage, model: &Model, chu
         output: output_tokens,
         cache_read,
         cache_write: 0,
+        cache_write_1h: None,
         reasoning: Some(thoughts_tokens),
         total_tokens,
         cost: Default::default(),

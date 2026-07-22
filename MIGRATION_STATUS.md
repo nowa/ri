@@ -1989,6 +1989,23 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Aligned the pi Anthropic and overflow provider-fix batch: overflow
+  detection gains the DS4 "configured context size", parenthesized
+  OpenAI-compatible, and OpenRouter/Poolside "maximum allowed input length"
+  shapes (`21cb3807`, `121f0edb`, `fa1180b6`). Anthropic: `message_delta`
+  usage handling ignores JSON `null` usage (`0e6909f0`); signed thinking
+  blocks replay even with empty thinking text while unsigned empty blocks are
+  dropped (`6731a0ba`); refusal stops surface `stop_details.explanation` (or
+  "The model refused to complete the request") as the error message
+  (`#5666`); `Usage` gains `cache_write_1h` parsed from
+  `cache_creation.ephemeral_1h_input_tokens` and `calculate_cost` prices 1h
+  cache writes at 2x base input (`#5738`), with `combine_usage` summing the
+  split; temperature is suppressed for Claude Opus 4.7/4.8 (or a
+  `supportsTemperature: false` compat override) (`40832d19`); adaptive
+  thinking now honors a `forceAdaptiveThinking` compat flag with the id-based
+  detection kept as the fallback until the catalog refresh lands
+  (`d801d88a`). Verified with
+  `cargo test -p ri-llm-provider --test provider_core` (384 tests).
 - Aligned pi `3d8f7435` "feat(ai): support message-anchored tool loading
   (#6474)" plus `f16b4e0c` Kimi deferred tools for the OpenAI Completions API:
   new `ri-llm-provider::deferred_tools` module ports `splitDeferredTools`

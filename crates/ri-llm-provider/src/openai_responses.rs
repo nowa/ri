@@ -1190,6 +1190,7 @@ pub fn parse_openai_responses_usage(
         output,
         cache_read: cached_tokens,
         cache_write: cache_write_tokens,
+        cache_write_1h: None,
         reasoning: Some(
             value
                 .pointer("/output_tokens_details/reasoning_tokens")

@@ -934,6 +934,7 @@ pub fn parse_openai_completions_chunk_usage(raw_usage: &Value, model: &Model) ->
         output: output_tokens,
         cache_read,
         cache_write,
+        cache_write_1h: None,
         reasoning: Some(
             raw_usage
                 .pointer("/completion_tokens_details/reasoning_tokens")

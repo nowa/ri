@@ -1823,6 +1823,7 @@ async fn agent_harness_session_before_compact_hook_can_supply_summary() {
                     output: 6,
                     cache_read: 7,
                     cache_write: 8,
+                    cache_write_1h: None,
                     reasoning: None,
                     total_tokens: 26,
                     cost: UsageCost::default(),

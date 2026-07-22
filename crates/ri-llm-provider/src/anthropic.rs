@@ -189,18 +189,29 @@ pub fn process_anthropic_sse_body(model: &Model, body: &str) -> Result<Assistant
                 let mapped_stop_reason = if let Some(stop_reason) =
                     event.pointer("/delta/stop_reason").and_then(Value::as_str)
                 {
-                    Some((stop_reason, map_anthropic_stop_reason(stop_reason)?))
+                    Some((
+                        stop_reason,
+                        map_anthropic_stop_reason(
+                            stop_reason,
+                            event.pointer("/delta/stop_details"),
+                        )?,
+                    ))
                 } else {
                     None
                 };
-                if let Some((_, stop_reason)) = mapped_stop_reason {
-                    output.stop_reason = stop_reason;
+                if let Some((_, (stop_reason, _))) = &mapped_stop_reason {
+                    output.stop_reason = *stop_reason;
                 }
-                if let Some(usage) = event.get("usage") {
+                if let Some(usage) = event.get("usage").filter(|usage| !usage.is_null()) {
                     output.usage = parse_anthropic_usage(model, usage, &output.usage);
                 }
-                if let Some((raw_stop_reason, StopReason::Error)) = mapped_stop_reason {
-                    output.error_message = Some(format!("Provider stop_reason: {raw_stop_reason}"));
+                if let Some((raw_stop_reason, (StopReason::Error, refusal_message))) =
+                    mapped_stop_reason
+                {
+                    output.error_message = Some(
+                        refusal_message
+                            .unwrap_or_else(|| format!("Provider stop_reason: {raw_stop_reason}")),
+                    );
                 }
             }
             Some("message_stop") => {
@@ -458,18 +469,27 @@ impl AnthropicStreamProcessor {
                 let mapped_stop_reason = if let Some(stop_reason) =
                     event.pointer("/delta/stop_reason").and_then(Value::as_str)
                 {
-                    Some((stop_reason, map_anthropic_stop_reason(stop_reason)?))
+                    Some((
+                        stop_reason,
+                        map_anthropic_stop_reason(
+                            stop_reason,
+                            event.pointer("/delta/stop_details"),
+                        )?,
+                    ))
                 } else {
                     None
                 };
-                if let Some((_, stop_reason)) = mapped_stop_reason {
-                    output.stop_reason = stop_reason;
+                if let Some((_, (stop_reason, _))) = &mapped_stop_reason {
+                    output.stop_reason = *stop_reason;
                 }
-                if let Some(usage) = event.get("usage") {
+                if let Some(usage) = event.get("usage").filter(|usage| !usage.is_null()) {
                     output.usage = parse_anthropic_usage(model, usage, &output.usage);
                 }
-                if let Some((raw_stop_reason, StopReason::Error)) = mapped_stop_reason {
-                    let message = format!("Provider stop_reason: {raw_stop_reason}");
+                if let Some((raw_stop_reason, (StopReason::Error, refusal_message))) =
+                    mapped_stop_reason
+                {
+                    let message = refusal_message
+                        .unwrap_or_else(|| format!("Provider stop_reason: {raw_stop_reason}"));
                     output.error_message = Some(message.clone());
                     return Err(message);
                 }
@@ -546,11 +566,17 @@ fn parse_anthropic_usage(model: &Model, usage: &Value, previous: &Usage) -> Usag
         .pointer("/output_tokens_details/thinking_tokens")
         .and_then(Value::as_u64)
         .or(previous.reasoning);
+    let cache_write_1h = usage
+        .pointer("/cache_creation/ephemeral_1h_input_tokens")
+        .and_then(Value::as_u64)
+        .map(Some)
+        .unwrap_or(previous.cache_write_1h);
     let mut usage = Usage {
         input,
         output,
         cache_read,
         cache_write,
+        cache_write_1h,
         reasoning,
         total_tokens: input + output + cache_read + cache_write,
         cost: Default::default(),
@@ -559,12 +585,26 @@ fn parse_anthropic_usage(model: &Model, usage: &Value, previous: &Usage) -> Usag
     usage
 }
 
-fn map_anthropic_stop_reason(reason: &str) -> Result<StopReason, String> {
+fn map_anthropic_stop_reason(
+    reason: &str,
+    stop_details: Option<&Value>,
+) -> Result<(StopReason, Option<String>), String> {
     match reason {
-        "end_turn" | "stop_sequence" | "pause_turn" => Ok(StopReason::Stop),
-        "max_tokens" => Ok(StopReason::Length),
-        "tool_use" => Ok(StopReason::ToolUse),
-        "refusal" | "sensitive" => Ok(StopReason::Error),
+        "end_turn" | "stop_sequence" | "pause_turn" => Ok((StopReason::Stop, None)),
+        "max_tokens" => Ok((StopReason::Length, None)),
+        "tool_use" => Ok((StopReason::ToolUse, None)),
+        "refusal" => Ok((
+            StopReason::Error,
+            Some(
+                stop_details
+                    .and_then(|details| details.get("explanation"))
+                    .and_then(Value::as_str)
+                    .filter(|explanation| !explanation.is_empty())
+                    .unwrap_or("The model refused to complete the request")
+                    .to_owned(),
+            ),
+        )),
+        "sensitive" => Ok((StopReason::Error, None)),
         other => Err(format!("Unhandled Anthropic stop_reason: {other}")),
     }
 }
@@ -672,7 +712,7 @@ pub fn build_anthropic_simple_payload_for_client(
             .map(str::to_owned);
     } else if let Some(reasoning) = options.reasoning {
         payload_options.thinking_enabled = Some(true);
-        if supports_anthropic_adaptive_thinking(&model.id) {
+        if anthropic_force_adaptive_thinking(model) {
             payload_options.effort =
                 Some(map_anthropic_thinking_level_to_effort(model, reasoning).to_owned());
         } else {
@@ -795,6 +835,7 @@ pub fn build_anthropic_payload(
 
     if let Some(temperature) = options.temperature
         && options.thinking_enabled != Some(true)
+        && anthropic_supports_temperature(model)
     {
         payload["temperature"] = json!(temperature);
     }
@@ -865,7 +906,7 @@ pub fn build_anthropic_payload(
                 let display = options
                     .thinking_display
                     .unwrap_or_else(|| "summarized".to_owned());
-                if supports_anthropic_adaptive_thinking(&model.id) {
+                if anthropic_force_adaptive_thinking(model) {
                     payload["thinking"] = json!({ "type": "adaptive", "display": display });
                     if let Some(effort) = options.effort {
                         payload["output_config"] = json!({ "effort": effort });
@@ -1005,7 +1046,7 @@ fn anthropic_beta_features(
     if use_fine_grained_tool_streaming_beta {
         beta_features.push("fine-grained-tool-streaming-2025-05-14");
     }
-    if interleaved_thinking && !supports_anthropic_adaptive_thinking(&model.id) {
+    if interleaved_thinking && !anthropic_force_adaptive_thinking(model) {
         beta_features.push("interleaved-thinking-2025-05-14");
     }
     beta_features
@@ -1137,18 +1178,21 @@ fn convert_anthropic_messages_from_transformed(
                             }),
                         AssistantContent::Thinking(thinking) => {
                             let thinking_text = sanitize_surrogates(&thinking.thinking);
-                            if thinking_text.trim().is_empty() {
-                                None
-                            } else if let Some(signature) = thinking
+                            let signature = thinking
                                 .thinking_signature
                                 .as_deref()
-                                .filter(|signature| !signature.trim().is_empty())
-                            {
+                                .filter(|signature| !signature.trim().is_empty());
+                            // Signed thinking blocks replay even when the
+                            // thinking text is empty; unsigned empty blocks
+                            // are dropped.
+                            if let Some(signature) = signature {
                                 Some(json!({
                                     "type": "thinking",
                                     "thinking": thinking_text,
                                     "signature": signature,
                                 }))
+                            } else if thinking_text.trim().is_empty() {
+                                None
                             } else {
                                 Some(json!({
                                     "type": "text",
@@ -1454,6 +1498,33 @@ fn supports_anthropic_cache_control_on_tools(model: &Model) -> bool {
 
 fn should_use_anthropic_fine_grained_tool_streaming_beta(model: &Model, context: &Context) -> bool {
     !context.tools.is_empty() && !supports_anthropic_eager_tool_input_streaming(model)
+}
+
+/// Whether the model uses adaptive thinking. Generated Anthropic-compatible
+/// aliases carry a `forceAdaptiveThinking` compat flag; first-party ids fall
+/// back to the id-based detection until the catalog refresh lands.
+fn anthropic_force_adaptive_thinking(model: &Model) -> bool {
+    model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("forceAdaptiveThinking"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| supports_anthropic_adaptive_thinking(&model.id))
+}
+
+/// Claude Opus 4.7+ deprecates the temperature parameter.
+fn anthropic_supports_temperature(model: &Model) -> bool {
+    model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("supportsTemperature"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            !(model.id.contains("opus-4-7")
+                || model.id.contains("opus-4.7")
+                || model.id.contains("opus-4-8")
+                || model.id.contains("opus-4.8"))
+        })
 }
 
 fn supports_anthropic_adaptive_thinking(model_id: &str) -> bool {
