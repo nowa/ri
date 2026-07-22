@@ -24901,3 +24901,99 @@ fn max_thinking_level_is_opt_in_and_clamps_like_pi() {
         build_openai_responses_payload(&responses_model, &user_context("hello"), payload_options);
     assert_eq!(payload["reasoning"]["effort"], json!("max"));
 }
+
+#[test]
+fn empty_tool_results_use_no_tool_output_placeholder() {
+    let tool_result = Message::ToolResult(ToolResultMessage {
+        tool_call_id: "call-1".to_owned(),
+        tool_name: "noop".to_owned(),
+        content: Vec::new(),
+        details: None,
+        usage: None,
+        is_error: false,
+        added_tool_names: None,
+        timestamp: 0,
+    });
+    let assistant = {
+        let mut message = empty_assistant_for_model(&get_model("openai", "gpt-4o").expect("model"));
+        message.content = vec![AssistantContent::ToolCall(ToolCall {
+            id: "call-1".to_owned(),
+            name: "noop".to_owned(),
+            arguments: Map::new(),
+            thought_signature: None,
+        })];
+        message.stop_reason = StopReason::ToolUse;
+        Message::Assistant(message)
+    };
+    let context = Context {
+        system_prompt: None,
+        messages: vec![assistant, tool_result],
+        tools: Vec::new(),
+    };
+
+    let responses_model = get_model("openai", "gpt-4o").expect("model");
+    let payload = build_openai_responses_payload(
+        &responses_model,
+        &context,
+        OpenAIResponsesPayloadOptions::default(),
+    );
+    let output = payload["input"]
+        .as_array()
+        .expect("input")
+        .iter()
+        .find(|item| item["type"] == "function_call_output")
+        .expect("function call output")["output"]
+        .clone();
+    assert_eq!(output, json!("(no tool output)"));
+
+    let mut completions_model =
+        get_model("openrouter", "google/gemini-2.5-flash").expect("openrouter model");
+    completions_model.api = "openai-completions".to_owned();
+    let payload = build_openai_completions_payload(
+        &completions_model,
+        &context,
+        OpenAICompletionsPayloadOptions::default(),
+    );
+    let tool_message = payload["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| message["role"] == "tool")
+        .expect("tool message");
+    assert_eq!(tool_message["content"], json!("(no tool output)"));
+}
+
+#[test]
+fn null_message_content_normalizes_to_empty_at_deserialization() {
+    let assistant: AssistantMessage = serde_json::from_value(json!({
+        "role": "assistant",
+        "content": null,
+        "api": "openai-responses",
+        "provider": "openai",
+        "model": "gpt-4o",
+        "usage": serde_json::to_value(Usage::zero()).expect("usage"),
+        "stopReason": "stop",
+        "timestamp": 0
+    }))
+    .expect("assistant");
+    assert!(assistant.content.is_empty());
+
+    let tool_result: ToolResultMessage = serde_json::from_value(json!({
+        "role": "toolResult",
+        "toolCallId": "call-1",
+        "toolName": "noop",
+        "content": null,
+        "isError": false,
+        "timestamp": 0
+    }))
+    .expect("tool result");
+    assert!(tool_result.content.is_empty());
+
+    let user: UserMessage = serde_json::from_value(json!({
+        "role": "user",
+        "content": null,
+        "timestamp": 0
+    }))
+    .expect("user");
+    assert_eq!(user.content, UserContentValue::Blocks(Vec::new()));
+}

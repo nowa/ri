@@ -185,6 +185,17 @@ impl TextContent {
     }
 }
 
+/// Normalize `null`/missing message content from untyped callers (custom
+/// tools, hand-built histories, old session files) to the empty default,
+/// mirroring pi's ingestion-boundary normalization.
+fn deserialize_null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 fn deserialize_optional_text_signature<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -261,6 +272,12 @@ pub enum UserContentValue {
     Blocks(Vec<UserContent>),
 }
 
+impl Default for UserContentValue {
+    fn default() -> Self {
+        Self::Blocks(Vec::new())
+    }
+}
+
 impl From<String> for UserContentValue {
     fn from(value: String) -> Self {
         Self::Plain(value)
@@ -308,6 +325,7 @@ impl ToolResultContent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserMessage {
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub content: UserContentValue,
     pub timestamp: i64,
 }
@@ -324,6 +342,7 @@ impl UserMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantMessage {
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub content: Vec<AssistantContent>,
     pub api: Api,
     pub provider: Provider,
@@ -346,6 +365,7 @@ pub struct AssistantMessage {
 pub struct ToolResultMessage {
     pub tool_call_id: String,
     pub tool_name: String,
+    #[serde(default, deserialize_with = "deserialize_null_as_default")]
     pub content: Vec<ToolResultContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,

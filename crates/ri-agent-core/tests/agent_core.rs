@@ -4893,3 +4893,184 @@ fn harness_utilities_cover_utf8_truncation_compaction_and_uuid() {
     assert!(matches!(id.chars().nth(19), Some('8' | '9' | 'a' | 'b')));
     assert_eq!(id.chars().filter(|character| *character == '-').count(), 4);
 }
+
+#[tokio::test]
+async fn agent_loop_fails_tool_calls_from_length_truncated_messages() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call(
+                "echo",
+                json!({ "value": "truncated" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(Map::new),
+                Some("tool-1".to_owned()),
+            ),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::Length),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+
+    let executed = Arc::new(Mutex::new(false));
+    let executed_ref = executed.clone();
+    let tool = AgentTool {
+        definition: Tool {
+            name: "echo".to_owned(),
+            description: "Echo tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Echo".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(RecordingExecutor {
+            executed: executed_ref,
+        }),
+    };
+
+    let mut context = context_with_model(&registration.get_model());
+    context.tools.push(tool);
+    let config = AgentLoopConfig::new(registration.get_model());
+
+    let (messages, events) = agent_loop_prompt(context, "run tool", config)
+        .await
+        .expect("loop");
+
+    // The tool executor never ran; the call failed with a truncation error and
+    // the loop continued to a follow-up turn.
+    assert!(!*executed.lock().expect("executed"));
+    let AgentMessage::ToolResult(tool_result) = &messages[2] else {
+        panic!("expected tool result, got {:?}", messages[2].role());
+    };
+    assert!(tool_result.is_error);
+    let error_text = tool_result
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            ToolResultContent::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert!(error_text.contains("hit the output token limit"));
+    assert!(error_text.contains("Re-issue the tool call"));
+    assert_eq!(text_of(&messages[3]), Some("done"));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::ToolExecutionStart { tool_call_id, .. } if tool_call_id == "tool-1"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::ToolExecutionEnd { tool_call_id, is_error, .. }
+            if tool_call_id == "tool-1" && *is_error
+    )));
+    registration.unregister();
+}
+
+struct RecordingExecutor {
+    executed: Arc<Mutex<bool>>,
+}
+
+#[async_trait]
+impl AgentToolExecutor for RecordingExecutor {
+    async fn execute(
+        &self,
+        _tool_call_id: &str,
+        _params: Value,
+    ) -> Result<AgentToolResult, String> {
+        *self.executed.lock().expect("executed") = true;
+        Ok(AgentToolResult::text("executed"))
+    }
+}
+
+struct CallbackCapturingExecutor {
+    slot: Arc<Mutex<Option<AgentToolUpdateCallback>>>,
+}
+
+#[async_trait]
+impl AgentToolExecutor for CallbackCapturingExecutor {
+    async fn execute(
+        &self,
+        _tool_call_id: &str,
+        _params: Value,
+    ) -> Result<AgentToolResult, String> {
+        Ok(AgentToolResult::text("no updates"))
+    }
+
+    async fn execute_with_updates(
+        &self,
+        _tool_call_id: &str,
+        _params: Value,
+        on_update: AgentToolUpdateCallback,
+    ) -> Result<AgentToolResult, String> {
+        on_update(AgentToolResult::text("during")).await;
+        *self.slot.lock().expect("slot") = Some(on_update);
+        Ok(AgentToolResult::text("finished"))
+    }
+}
+
+#[tokio::test]
+async fn agent_loop_ignores_late_tool_progress_updates() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call(
+                "echo",
+                json!({ "value": "abc" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(Map::new),
+                Some("tool-1".to_owned()),
+            ),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+
+    let slot = Arc::new(Mutex::new(None::<AgentToolUpdateCallback>));
+    let tool = AgentTool {
+        definition: Tool {
+            name: "echo".to_owned(),
+            description: "Echo tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Echo".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(CallbackCapturingExecutor { slot: slot.clone() }),
+    };
+
+    let mut context = context_with_model(&registration.get_model());
+    context.tools.push(tool);
+    let config = AgentLoopConfig::new(registration.get_model());
+
+    let (_messages, events) = agent_loop_prompt(context, "run tool", config)
+        .await
+        .expect("loop");
+
+    let update_count = events
+        .iter()
+        .filter(|event| matches!(event, AgentEvent::ToolExecutionUpdate { .. }))
+        .count();
+    assert_eq!(update_count, 1);
+
+    // Late calls after the execute() invocation settled are ignored.
+    let late_callback = slot.lock().expect("slot").clone().expect("callback");
+    late_callback(AgentToolResult::text("late")).await;
+    registration.unregister();
+}

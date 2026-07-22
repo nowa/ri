@@ -373,6 +373,16 @@ pub struct NavigateTreeResult {
     pub summary_entry: Option<SessionTreeEntry>,
 }
 
+/// Tool registry change notification, mirroring pi `tools_update`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolsUpdateEvent {
+    pub tool_names: Vec<String>,
+    pub previous_tool_names: Vec<String>,
+    pub active_tool_names: Vec<String>,
+    pub previous_active_tool_names: Vec<String>,
+    pub source: String,
+}
+
 /// Which harness operation a retry event belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryOperation {
@@ -402,6 +412,7 @@ pub enum RetryEvent {
 pub enum AgentHarnessEvent {
     Agent(AgentEvent),
     Retry(RetryEvent),
+    ToolsUpdate(ToolsUpdateEvent),
     QueueUpdate(QueueUpdateEvent),
     Abort(AbortResult),
     ResourcesUpdate(ResourcesUpdateEvent),
@@ -655,6 +666,9 @@ enum HarnessSessionWrite {
         target_id: String,
         label: Option<String>,
     },
+    ActiveToolsChange {
+        active_tool_names: Vec<String>,
+    },
     SessionName {
         name: String,
     },
@@ -800,13 +814,18 @@ pub struct AgentHarness {
 
 impl AgentHarness {
     pub fn new(options: AgentHarnessOptions) -> Self {
-        let active_tool_names = options.active_tool_names.unwrap_or_else(|| {
-            options
-                .tools
-                .iter()
-                .map(|tool| tool.definition.name.clone())
-                .collect()
-        });
+        let tool_names = options
+            .tools
+            .iter()
+            .map(|tool| tool.definition.name.clone())
+            .collect::<Vec<_>>();
+        validate_unique_names(&tool_names, "Duplicate tool name(s)")
+            .expect("harness tools must have unique names");
+        let active_tool_names = options
+            .active_tool_names
+            .unwrap_or_else(|| tool_names.clone());
+        validate_tool_names(&active_tool_names, &options.tools)
+            .expect("harness active tools must be unique known tools");
         Self {
             env: options.env,
             session: options.session,
@@ -981,8 +1000,21 @@ impl AgentHarness {
     pub fn set_active_tools(&self, tool_names: Vec<String>) -> Result<(), AgentHarnessError> {
         let tools = self.tools.lock();
         validate_tool_names(&tool_names, &tools)?;
+        let previous_tool_names = tools
+            .iter()
+            .map(|tool| tool.definition.name.clone())
+            .collect::<Vec<_>>();
         drop(tools);
-        *self.active_tool_names.lock() = tool_names;
+        self.persist_active_tools_change(&tool_names)?;
+        let previous_active_tool_names =
+            std::mem::replace(&mut *self.active_tool_names.lock(), tool_names.clone());
+        self.emit(AgentHarnessEvent::ToolsUpdate(ToolsUpdateEvent {
+            tool_names: previous_tool_names.clone(),
+            previous_tool_names,
+            active_tool_names: tool_names,
+            previous_active_tool_names,
+            source: "set".to_owned(),
+        }));
         Ok(())
     }
 
@@ -991,12 +1023,54 @@ impl AgentHarness {
         tools: Vec<AgentTool>,
         active_tool_names: Option<Vec<String>>,
     ) -> Result<(), AgentHarnessError> {
+        let tool_names = tools
+            .iter()
+            .map(|tool| tool.definition.name.clone())
+            .collect::<Vec<_>>();
+        validate_unique_names(&tool_names, "Duplicate tool name(s)")?;
         let next_active_tool_names =
             active_tool_names.unwrap_or_else(|| self.active_tool_names.lock().clone());
         validate_tool_names(&next_active_tool_names, &tools)?;
+        self.persist_active_tools_change(&next_active_tool_names)?;
+        let previous_tool_names = self
+            .tools
+            .lock()
+            .iter()
+            .map(|tool| tool.definition.name.clone())
+            .collect::<Vec<_>>();
         *self.tools.lock() = tools;
-        *self.active_tool_names.lock() = next_active_tool_names;
+        let previous_active_tool_names = std::mem::replace(
+            &mut *self.active_tool_names.lock(),
+            next_active_tool_names.clone(),
+        );
+        self.emit(AgentHarnessEvent::ToolsUpdate(ToolsUpdateEvent {
+            tool_names,
+            previous_tool_names,
+            active_tool_names: next_active_tool_names,
+            previous_active_tool_names,
+            source: "set".to_owned(),
+        }));
         Ok(())
+    }
+
+    fn persist_active_tools_change(
+        &self,
+        active_tool_names: &[String],
+    ) -> Result<(), AgentHarnessError> {
+        if *self.phase.lock() == AgentHarnessPhase::Idle {
+            let mut session = self.session.clone();
+            session
+                .append_active_tools_change(active_tool_names.to_vec())
+                .map(|_| ())
+                .map_err(AgentHarnessError::session)
+        } else {
+            self.pending_session_writes
+                .lock()
+                .push_back(HarnessSessionWrite::ActiveToolsChange {
+                    active_tool_names: active_tool_names.to_vec(),
+                });
+            Ok(())
+        }
     }
 
     pub fn get_steering_mode(&self) -> QueueMode {
@@ -2542,6 +2616,10 @@ fn apply_session_write_for(
             .append_label(target_id, label)
             .map(|_| ())
             .map_err(AgentHarnessError::session),
+        HarnessSessionWrite::ActiveToolsChange { active_tool_names } => session
+            .append_active_tools_change(active_tool_names)
+            .map(|_| ())
+            .map_err(AgentHarnessError::session),
         HarnessSessionWrite::SessionName { name } => session
             .append_session_name(name)
             .map(|_| ())
@@ -2573,10 +2651,33 @@ fn thinking_level_name(level: ThinkingLevel) -> &'static str {
     }
 }
 
+fn find_duplicate_names(names: &[String]) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut duplicates = Vec::new();
+    for name in names {
+        if !seen.insert(name.as_str()) && !duplicates.contains(name) {
+            duplicates.push(name.clone());
+        }
+    }
+    duplicates
+}
+
+fn validate_unique_names(names: &[String], message: &str) -> Result<(), AgentHarnessError> {
+    let duplicates = find_duplicate_names(names);
+    if !duplicates.is_empty() {
+        return Err(AgentHarnessError::new(
+            AgentHarnessErrorCode::InvalidArgument,
+            format!("{message}: {}", duplicates.join(", ")),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_tool_names(
     tool_names: &[String],
     tools: &[AgentTool],
 ) -> Result<(), AgentHarnessError> {
+    validate_unique_names(tool_names, "Duplicate active tool name(s)")?;
     let missing = tool_names
         .iter()
         .filter(|name| {

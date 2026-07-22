@@ -286,10 +286,12 @@ fn convert_openai_completions_messages_with_cache(
                     let mut tool_message = json!({
                         "role": "tool",
                         "tool_call_id": tool_result.tool_call_id,
-                        "content": if text.is_empty() && has_images {
+                        "content": if !text.is_empty() {
+                            text.as_str()
+                        } else if has_images {
                             "(see attached image)"
                         } else {
-                            text.as_str()
+                            "(no tool output)"
                         },
                     });
                     if requires_tool_result_name(model) {

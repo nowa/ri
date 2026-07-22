@@ -354,8 +354,10 @@ pub fn convert_openai_responses_messages(
                 } else {
                     Value::String(if has_text {
                         text_result
-                    } else {
+                    } else if has_images {
                         "(see attached image)".to_owned()
+                    } else {
+                        "(no tool output)".to_owned()
                     })
                 };
 

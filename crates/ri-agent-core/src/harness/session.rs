@@ -298,6 +298,14 @@ pub enum SessionTreeEntry {
         #[serde(rename = "thinkingLevel")]
         thinking_level: String,
     },
+    ActiveToolsChange {
+        id: String,
+        #[serde(rename = "parentId")]
+        parent_id: Option<String>,
+        timestamp: String,
+        #[serde(rename = "activeToolNames")]
+        active_tool_names: Vec<String>,
+    },
     ModelChange {
         id: String,
         #[serde(rename = "parentId")]
@@ -401,6 +409,7 @@ impl SessionTreeEntry {
             | Self::CustomMessage { id, .. }
             | Self::Label { id, .. }
             | Self::SessionInfo { id, .. }
+            | Self::ActiveToolsChange { id, .. }
             | Self::Leaf { id, .. } => id,
         }
     }
@@ -416,6 +425,7 @@ impl SessionTreeEntry {
             | Self::CustomMessage { parent_id, .. }
             | Self::Label { parent_id, .. }
             | Self::SessionInfo { parent_id, .. }
+            | Self::ActiveToolsChange { parent_id, .. }
             | Self::Leaf { parent_id, .. } => parent_id.as_deref(),
         }
     }
@@ -424,6 +434,7 @@ impl SessionTreeEntry {
         match self {
             Self::Message { .. } => "message",
             Self::ThinkingLevelChange { .. } => "thinking_level_change",
+            Self::ActiveToolsChange { .. } => "active_tools_change",
             Self::ModelChange { .. } => "model_change",
             Self::Compaction { .. } => "compaction",
             Self::BranchSummary { .. } => "branch_summary",
@@ -441,6 +452,8 @@ pub struct SessionContext {
     pub messages: Vec<SessionMessage>,
     pub thinking_level: String,
     pub model: Option<SessionModelSelection>,
+    /// The most recent persisted active-tool selection, if any.
+    pub active_tool_names: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1107,6 +1120,20 @@ impl Session {
         })
     }
 
+    pub fn append_active_tools_change(
+        &mut self,
+        active_tool_names: Vec<String>,
+    ) -> Result<String, SessionError> {
+        let id = self.storage.lock().create_entry_id();
+        let parent_id = self.storage.lock().leaf_id()?;
+        self.append_entry(SessionTreeEntry::ActiveToolsChange {
+            id,
+            parent_id,
+            timestamp: now_iso(),
+            active_tool_names,
+        })
+    }
+
     pub fn move_to(
         &mut self,
         entry_id: Option<String>,
@@ -1445,15 +1472,20 @@ pub struct SessionContextBuildOptions {
 
 fn derive_session_context_state(
     path_entries: &[SessionTreeEntry],
-) -> (String, Option<SessionModelSelection>) {
+) -> (String, Option<SessionModelSelection>, Option<Vec<String>>) {
     let mut thinking_level = "off".to_owned();
     let mut model = None;
+    let mut active_tool_names = None;
     for entry in path_entries {
         match entry {
             SessionTreeEntry::ThinkingLevelChange {
                 thinking_level: next,
                 ..
             } => thinking_level = next.clone(),
+            SessionTreeEntry::ActiveToolsChange {
+                active_tool_names: next,
+                ..
+            } => active_tool_names = Some(next.clone()),
             SessionTreeEntry::ModelChange {
                 provider, model_id, ..
             } => {
@@ -1474,7 +1506,7 @@ fn derive_session_context_state(
             _ => {}
         }
     }
-    (thinking_level, model)
+    (thinking_level, model, active_tool_names)
 }
 
 /// Select the entries that survive the latest compaction boundary. The
@@ -1569,7 +1601,7 @@ pub fn build_session_context_with_options(
     path_entries: &[SessionTreeEntry],
     options: &SessionContextBuildOptions,
 ) -> Result<SessionContext, SessionError> {
-    let (thinking_level, model) = derive_session_context_state(path_entries);
+    let (thinking_level, model, active_tool_names) = derive_session_context_state(path_entries);
     let context_entries = build_context_entries(path_entries, options);
     let messages = context_entries
         .iter()
@@ -1583,6 +1615,7 @@ pub fn build_session_context_with_options(
         messages,
         thinking_level,
         model,
+        active_tool_names,
     })
 }
 

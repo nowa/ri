@@ -20,7 +20,7 @@ pub const COMPACTION_SUMMARY_SUFFIX: &str = "\n</summary>";
 pub const BRANCH_SUMMARY_PREFIX: &str =
     "The following is a summary of a branch that this conversation came back from:\n\n<summary>\n";
 pub const BRANCH_SUMMARY_SUFFIX: &str = "</summary>";
-pub const SUMMARIZATION_SYSTEM_PROMPT: &str = "You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.";
+pub const SUMMARIZATION_SYSTEM_PROMPT: &str = "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.";
 
 const SUMMARIZATION_PROMPT: &str = "The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.\n\nUse this EXACT format:\n\n## Goal\n[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]\n\n## Constraints & Preferences\n- [Any constraints, preferences, or requirements mentioned by user]\n- [Or \"(none)\" if none were mentioned]\n\n## Progress\n### Done\n- [x] [Completed tasks/changes]\n\n### In Progress\n- [ ] [Current work]\n\n### Blocked\n- [Issues preventing progress, if any]\n\n## Key Decisions\n- **[Decision]**: [Brief rationale]\n\n## Next Steps\n1. [Ordered list of what should happen next]\n\n## Critical Context\n- [Any data, examples, or references needed to continue]\n- [Or \"(none)\" if not applicable]\n\nKeep each section concise. Preserve exact file paths, function names, and error messages.";
 
@@ -892,15 +892,7 @@ pub async fn generate_branch_summary(
         )),
         _ => {
             let usage = response.usage.clone();
-            let mut summary = response
-                .content
-                .into_iter()
-                .filter_map(|content| match content {
-                    AssistantContent::Text(text) => Some(text.text),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+            let mut summary = ri_llm_provider::assistant_content_text(&response.content, "\n");
             summary = format!("{BRANCH_SUMMARY_PREAMBLE}{summary}");
             let file_lists = compute_file_lists(&preparation.file_ops);
             summary.push_str(&format_file_operations(
@@ -1422,15 +1414,7 @@ async fn generate_summary_with_prompt(
         )),
         _ => {
             let usage = response.usage.clone();
-            let text = response
-                .content
-                .into_iter()
-                .filter_map(|content| match content {
-                    AssistantContent::Text(text) => Some(text.text),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+            let text = ri_llm_provider::assistant_content_text(&response.content, "\n");
             Ok(SummaryOutput { text, usage })
         }
     }

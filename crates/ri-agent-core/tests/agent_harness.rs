@@ -5851,3 +5851,58 @@ async fn agent_harness_abort_and_wait_emits_abort_after_idle_and_waits_for_liste
     );
     registration.unregister();
 }
+
+#[tokio::test]
+async fn agent_harness_tool_registry_validates_duplicates_and_persists_active_tools() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    let session = Session::new(InMemorySessionStorage::new());
+    let mut options =
+        AgentHarnessOptions::new(test_env(), session.clone(), registration.get_model());
+    options.tools = vec![calculate_tool(), clock_tool()];
+    let harness = AgentHarness::new(options);
+    let tools_updates = Arc::new(Mutex::new(Vec::<ToolsUpdateEvent>::new()));
+    let tools_updates_ref = tools_updates.clone();
+    harness.subscribe(move |event| {
+        if let AgentHarnessEvent::ToolsUpdate(update) = event {
+            tools_updates_ref
+                .lock()
+                .expect("events")
+                .push(update.clone());
+        }
+    });
+
+    // Duplicate tool names are rejected.
+    let error = harness
+        .set_tools(vec![calculate_tool(), calculate_tool()], None)
+        .expect_err("duplicate tools");
+    assert_eq!(error.code, AgentHarnessErrorCode::InvalidArgument);
+    assert!(error.to_string().contains("Duplicate tool name(s)"));
+    let error = harness
+        .set_active_tools(vec!["calculate".to_owned(), "calculate".to_owned()])
+        .expect_err("duplicate active tools");
+    assert_eq!(error.code, AgentHarnessErrorCode::InvalidArgument);
+    assert!(error.to_string().contains("Duplicate active tool name(s)"));
+
+    // A successful change persists an active_tools_change entry and emits a
+    // tools_update event.
+    harness
+        .set_active_tools(vec!["clock".to_owned()])
+        .expect("set active");
+    let context = session.build_context().expect("context");
+    assert_eq!(context.active_tool_names, Some(vec!["clock".to_owned()]));
+    let entries = session.entries();
+    assert!(entries.iter().any(|entry| matches!(
+        entry,
+        SessionTreeEntry::ActiveToolsChange { active_tool_names, .. }
+            if active_tool_names == &vec!["clock".to_owned()]
+    )));
+    let updates = tools_updates.lock().expect("events").clone();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].active_tool_names, vec!["clock".to_owned()]);
+    assert_eq!(
+        updates[0].previous_active_tool_names,
+        vec!["calculate".to_owned(), "clock".to_owned()]
+    );
+    assert_eq!(updates[0].source, "set");
+    registration.unregister();
+}

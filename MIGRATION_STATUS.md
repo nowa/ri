@@ -1989,6 +1989,28 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Aligned the pi robustness increment batch: `351efc82` assistant messages
+  that stop with `length` no longer execute their tool calls — each gets an
+  error tool result telling the model to re-issue the call with complete
+  arguments and the loop continues; `daab056a` tool progress callbacks are
+  scoped to the current `execute()` invocation and late updates are ignored;
+  `279f53b0` empty tool results without images use a "(no tool output)"
+  placeholder in OpenAI Completions and Responses payloads instead of
+  "(see attached image)"; `8c0ccd14` null/missing message content normalizes
+  to empty content at the serde ingestion boundary for user, assistant, and
+  tool-result messages; `8c6c8a4e` the compaction summarization system prompt
+  says "AI assistant" instead of "AI coding assistant"; `b63d2633` harness
+  tool registry semantics — duplicate tool/active-tool names are rejected at
+  construction and via `set_tools`/`set_active_tools`, active-tool changes
+  persist as new `active_tools_change` session entries (pending writes while
+  busy), surface as `SessionContext.active_tool_names`, and emit
+  `AgentHarnessEvent::ToolsUpdate`; `94373d81` shared `contentText` becomes
+  `assistant_content_text`/`tool_result_content_text`/`user_content_text` in
+  `ri-llm-provider::text`, adopted by the summarizers. The pi
+  `model_select`→`model_update` event rename is intentionally not mirrored:
+  ri's event enum names are internal, not a serialized wire surface. Verified
+  with the `ri-agent-core` suites and
+  `cargo test -p ri-llm-provider --test provider_core`.
 - Aligned the pi session increment batch: `1dac0990` short session entry ids
   now come from the uuidv7 random tail (the timestamp-derived prefix collides
   within a millisecond and degraded to full-UUID fallbacks); `e8ede14f`

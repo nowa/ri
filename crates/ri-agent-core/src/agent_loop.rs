@@ -572,7 +572,44 @@ async fn run_one_turn(
 
     let mut tool_results = Vec::new();
     let mut terminate = false;
-    if assistant.stop_reason == StopReason::ToolUse {
+    let truncated_tool_calls = assistant.stop_reason == StopReason::Length
+        && assistant_tool_calls(&assistant).next().is_some();
+    if truncated_tool_calls {
+        // A "length" stop means the output was cut off by the token limit, so
+        // every tool call in the message may carry truncated arguments. Fail
+        // them all instead of executing potentially borked calls.
+        let tool_calls = assistant_tool_calls(&assistant)
+            .cloned()
+            .collect::<Vec<_>>();
+        for (index, tool_call) in tool_calls.into_iter().enumerate() {
+            record_event(
+                events,
+                config,
+                AgentEvent::ToolExecutionStart {
+                    tool_call_id: tool_call.id.clone(),
+                    tool_name: tool_call.name.clone(),
+                    args: serde_json::Value::Object(tool_call.arguments.clone()),
+                },
+            )
+            .await;
+            let outcome = error_tool_execution_outcome(
+                index,
+                tool_call.id.clone(),
+                tool_call.name.clone(),
+                format!(
+                    "Tool call \"{}\" was not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.",
+                    tool_call.name
+                ),
+            );
+            record_tool_execution_end(events, config, &outcome).await;
+            let message = tool_result_message_from_outcome(outcome);
+            let tool_result_message = AgentMessage::ToolResult(message.clone());
+            record_tool_result_message_events(events, config, &tool_result_message).await;
+            context.messages.push(tool_result_message.clone());
+            new_messages.push(tool_result_message);
+            tool_results.push(message);
+        }
+    } else if assistant.stop_reason == StopReason::ToolUse {
         let tool_calls = assistant_tool_calls(&assistant)
             .cloned()
             .collect::<Vec<_>>();
@@ -882,7 +919,14 @@ async fn execute_prepared_tool_call(
     let update_tool_name = call.tool_name.clone();
     let update_events = Arc::new(Mutex::new(Vec::new()));
     let update_events_ref = update_events.clone();
+    // The update callback is scoped to the current execute() invocation; late
+    // calls made after the tool settles are ignored.
+    let accepting_updates = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let accepting_updates_ref = accepting_updates.clone();
     let on_update: AgentToolUpdateCallback = Arc::new(move |partial_result: AgentToolResult| {
+        if !accepting_updates_ref.load(std::sync::atomic::Ordering::SeqCst) {
+            return Box::pin(async {});
+        }
         let event_sink = event_sink.clone();
         let update_events = update_events_ref.clone();
         let event = AgentEvent::ToolExecutionUpdate {
@@ -914,6 +958,7 @@ async fn execute_prepared_tool_call(
             error_tool_result(error)
         }
     };
+    accepting_updates.store(false, std::sync::atomic::Ordering::SeqCst);
     let mut hook_context = AgentToolResultHookContext {
         tool_call_id: call.tool_call_id.clone(),
         tool_name: call.tool_name.clone(),
