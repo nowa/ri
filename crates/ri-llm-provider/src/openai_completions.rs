@@ -1341,6 +1341,7 @@ fn thinking_level_wire(model: &Model, level: ThinkingLevel) -> String {
         ThinkingLevel::Medium => "medium",
         ThinkingLevel::High => "high",
         ThinkingLevel::XHigh => "xhigh",
+        ThinkingLevel::Max => "max",
     }
     .to_owned()
 }

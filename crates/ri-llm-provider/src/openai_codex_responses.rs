@@ -1090,6 +1090,7 @@ fn openai_codex_reasoning_effort(model: &Model, level: ThinkingLevel) -> Option<
                 ThinkingLevel::Medium => "medium",
                 ThinkingLevel::High => "high",
                 ThinkingLevel::XHigh => "xhigh",
+                ThinkingLevel::Max => "max",
             }
             .to_owned(),
         ),

@@ -188,6 +188,7 @@ fn openai_responses_reasoning_effort(model: &Model, level: ThinkingLevel) -> Str
         ThinkingLevel::Medium => "medium",
         ThinkingLevel::High => "high",
         ThinkingLevel::XHigh => "xhigh",
+        ThinkingLevel::Max => "max",
     }
     .to_owned()
 }

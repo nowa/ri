@@ -100,7 +100,7 @@ pub fn get_supported_thinking_levels(model: &Model) -> Vec<ThinkingLevel> {
         .filter(|level| match model.thinking_level_map.get(level) {
             Some(None) => false,
             Some(Some(_)) => true,
-            None => *level != ThinkingLevel::XHigh,
+            None => *level != ThinkingLevel::XHigh && *level != ThinkingLevel::Max,
         })
         .collect()
 }

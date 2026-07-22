@@ -235,6 +235,7 @@ pub fn google_thinking_level(model_id: &str, effort: ThinkingLevel) -> &'static 
             ThinkingLevel::Medium
             | ThinkingLevel::High
             | ThinkingLevel::XHigh
+            | ThinkingLevel::Max
             | ThinkingLevel::Off => "HIGH",
         };
     }
@@ -244,6 +245,7 @@ pub fn google_thinking_level(model_id: &str, effort: ThinkingLevel) -> &'static 
             ThinkingLevel::Medium
             | ThinkingLevel::High
             | ThinkingLevel::XHigh
+            | ThinkingLevel::Max
             | ThinkingLevel::Off => "HIGH",
         };
     }
@@ -251,7 +253,9 @@ pub fn google_thinking_level(model_id: &str, effort: ThinkingLevel) -> &'static 
         ThinkingLevel::Minimal => "MINIMAL",
         ThinkingLevel::Low => "LOW",
         ThinkingLevel::Medium => "MEDIUM",
-        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Off => "HIGH",
+        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max | ThinkingLevel::Off => {
+            "HIGH"
+        }
     }
 }
 
@@ -281,7 +285,7 @@ fn google_thinking_budget_for_api(
         ThinkingLevel::Minimal => custom_budgets.and_then(|budgets| budgets.minimal),
         ThinkingLevel::Low => custom_budgets.and_then(|budgets| budgets.low),
         ThinkingLevel::Medium => custom_budgets.and_then(|budgets| budgets.medium),
-        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Off => {
+        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max | ThinkingLevel::Off => {
             custom_budgets.and_then(|budgets| budgets.high)
         }
     };
@@ -294,21 +298,30 @@ fn google_thinking_budget_for_api(
             ThinkingLevel::Minimal => 128,
             ThinkingLevel::Low => 2_048,
             ThinkingLevel::Medium => 8_192,
-            ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Off => 32_768,
+            ThinkingLevel::High
+            | ThinkingLevel::XHigh
+            | ThinkingLevel::Max
+            | ThinkingLevel::Off => 32_768,
         }
     } else if api != "google-vertex" && model_id.contains("2.5-flash-lite") {
         match effort {
             ThinkingLevel::Minimal => 512,
             ThinkingLevel::Low => 2_048,
             ThinkingLevel::Medium => 8_192,
-            ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Off => 24_576,
+            ThinkingLevel::High
+            | ThinkingLevel::XHigh
+            | ThinkingLevel::Max
+            | ThinkingLevel::Off => 24_576,
         }
     } else if model_id.contains("2.5-flash") {
         match effort {
             ThinkingLevel::Minimal => 128,
             ThinkingLevel::Low => 2_048,
             ThinkingLevel::Medium => 8_192,
-            ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Off => 24_576,
+            ThinkingLevel::High
+            | ThinkingLevel::XHigh
+            | ThinkingLevel::Max
+            | ThinkingLevel::Off => 24_576,
         }
     } else {
         -1

@@ -145,6 +145,7 @@ fn azure_openai_reasoning_effort(model: &Model, level: ThinkingLevel) -> String 
         ThinkingLevel::Medium => "medium",
         ThinkingLevel::High => "high",
         ThinkingLevel::XHigh => "xhigh",
+        ThinkingLevel::Max => "max",
     }
     .to_owned()
 }

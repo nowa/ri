@@ -34,7 +34,7 @@ pub fn apply_simple_stream_defaults(
 }
 
 pub fn clamp_reasoning_for_budget(level: ThinkingLevel) -> ThinkingLevel {
-    if level == ThinkingLevel::XHigh {
+    if level == ThinkingLevel::XHigh || level == ThinkingLevel::Max {
         ThinkingLevel::High
     } else {
         level
@@ -60,7 +60,7 @@ pub fn default_thinking_budget(
             .and_then(|budget| budget.high)
             .unwrap_or(16_384),
         ThinkingLevel::Off => 0,
-        ThinkingLevel::XHigh => unreachable!("level was clamped"),
+        ThinkingLevel::XHigh | ThinkingLevel::Max => unreachable!("level was clamped"),
     }
 }
 

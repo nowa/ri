@@ -24834,3 +24834,70 @@ async fn retry_assistant_call_aborts_backoff_and_returns_aborted_message() {
         &[(false, 1, Some("terminated".to_owned()))]
     );
 }
+
+#[test]
+fn max_thinking_level_is_opt_in_and_clamps_like_pi() {
+    let mut ordinary = Model::faux("openai-completions", "test", "ordinary-reasoning");
+    ordinary.reasoning = true;
+    assert_eq!(
+        get_supported_thinking_levels(&ordinary),
+        vec![
+            ThinkingLevel::Off,
+            ThinkingLevel::Minimal,
+            ThinkingLevel::Low,
+            ThinkingLevel::Medium,
+            ThinkingLevel::High,
+        ]
+    );
+    assert_eq!(
+        clamp_thinking_level(&ordinary, ThinkingLevel::Max),
+        ThinkingLevel::High
+    );
+
+    // A model can expose max while leaving a hole at xhigh.
+    let mut high_and_max = Model::faux("openai-completions", "test", "high-and-max");
+    high_and_max.reasoning = true;
+    high_and_max
+        .thinking_level_map
+        .insert(ThinkingLevel::XHigh, None);
+    high_and_max
+        .thinking_level_map
+        .insert(ThinkingLevel::Max, Some("max".to_owned()));
+    assert_eq!(
+        get_supported_thinking_levels(&high_and_max),
+        vec![
+            ThinkingLevel::Off,
+            ThinkingLevel::Minimal,
+            ThinkingLevel::Low,
+            ThinkingLevel::Medium,
+            ThinkingLevel::High,
+            ThinkingLevel::Max,
+        ]
+    );
+    assert_eq!(
+        clamp_thinking_level(&high_and_max, ThinkingLevel::XHigh),
+        ThinkingLevel::Max
+    );
+
+    // The wire shape round-trips as "max".
+    assert_eq!(
+        serde_json::to_value(ThinkingLevel::Max).expect("serialize"),
+        json!("max")
+    );
+    assert_eq!(
+        serde_json::from_value::<ThinkingLevel>(json!("max")).expect("deserialize"),
+        ThinkingLevel::Max
+    );
+
+    // Responses payloads send the mapped max effort.
+    let mut responses_model = Model::faux("openai-responses", "openai", "max-effort-model");
+    responses_model.reasoning = true;
+    responses_model
+        .thinking_level_map
+        .insert(ThinkingLevel::Max, Some("max".to_owned()));
+    let mut payload_options = OpenAIResponsesPayloadOptions::default();
+    payload_options.reasoning_effort = Some(ThinkingLevel::Max);
+    let payload =
+        build_openai_responses_payload(&responses_model, &user_context("hello"), payload_options);
+    assert_eq!(payload["reasoning"]["effort"], json!("max"));
+}

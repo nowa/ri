@@ -1572,7 +1572,9 @@ fn map_bedrock_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> 
     match level {
         ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
         ThinkingLevel::Medium => "medium",
-        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Off => "high",
+        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max | ThinkingLevel::Off => {
+            "high"
+        }
     }
 }
 
@@ -1583,7 +1585,9 @@ fn bedrock_thinking_budget(options: &BedrockPayloadOptions, level: ThinkingLevel
         ThinkingLevel::Low => budgets.and_then(|budget| budget.low).unwrap_or(2_048),
         ThinkingLevel::Medium => budgets.and_then(|budget| budget.medium).unwrap_or(8_192),
         ThinkingLevel::High => budgets.and_then(|budget| budget.high).unwrap_or(16_384),
-        ThinkingLevel::XHigh => budgets.and_then(|budget| budget.high).unwrap_or(16_384),
+        ThinkingLevel::XHigh | ThinkingLevel::Max => {
+            budgets.and_then(|budget| budget.high).unwrap_or(16_384)
+        }
         ThinkingLevel::Off => 16_384,
     }
 }

@@ -1339,6 +1339,8 @@ fn map_anthropic_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -
     match level {
         ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
         ThinkingLevel::Medium => "medium",
-        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Off => "high",
+        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max | ThinkingLevel::Off => {
+            "high"
+        }
     }
 }

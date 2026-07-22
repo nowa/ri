@@ -35,16 +35,18 @@ pub enum ThinkingLevel {
     High,
     #[serde(rename = "xhigh")]
     XHigh,
+    Max,
 }
 
 impl ThinkingLevel {
-    pub const EXTENDED: [Self; 6] = [
+    pub const EXTENDED: [Self; 7] = [
         Self::Off,
         Self::Minimal,
         Self::Low,
         Self::Medium,
         Self::High,
         Self::XHigh,
+        Self::Max,
     ];
 }
 

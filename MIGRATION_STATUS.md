@@ -1989,6 +1989,17 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Aligned pi `fbdd4638` "feat(ai): add max thinking level": `ThinkingLevel`
+  gains a `Max` variant (wire value "max") above `xhigh`. Like `xhigh`, `max`
+  is opt-in per model: `get_supported_thinking_levels` only exposes it with an
+  explicit thinking-level-map entry, and `clamp_thinking_level` can climb from
+  an `xhigh: null` hole up to `max`. Budget-based paths (simple-options
+  thinking budgets, Anthropic non-adaptive thinking, Bedrock budgets, Google
+  levels/budgets) clamp `max` to `high`; OpenAI Responses/Completions, Codex,
+  and Azure pass the mapped or literal "max" effort through. The Fable 5
+  provider catalog entries that use xhigh/max (#6490) are model-catalog scope
+  and intentionally deferred to the catalog refresh. Verified with
+  `cargo test -p ri-llm-provider --test provider_core -- max_thinking_level`.
 - Aligned pi `utils/retry.ts` and its consumers: `243f64be` "report aborted
   retry attempts as unsuccessful", `162179af` "add branch/compact retries to
   agent-harness", `8e53e0e4` "compaction & branch summarization follow retry
