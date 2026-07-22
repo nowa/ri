@@ -21,7 +21,7 @@ use futures::future::BoxFuture;
 use parking_lot::Mutex;
 use ri_llm_provider::{
     AssistantMessage, CacheRetention, ImageContent, Message, Model, ProviderPayloadHook,
-    ProviderResponse, ProviderResponseHook, SimpleStreamOptions, ThinkingLevel, Transport,
+    ProviderResponse, ProviderResponseHook, SimpleStreamOptions, ThinkingLevel, Transport, Usage,
     UserContent, UserContentValue, UserMessage, now_millis,
 };
 use serde_json::{Map, Value, json};
@@ -267,7 +267,7 @@ pub struct SessionBeforeCompactEvent {
     pub custom_instructions: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionBeforeCompactResult {
     pub cancel: bool,
     pub compaction: Option<CompactionResult>,
@@ -290,7 +290,7 @@ pub struct SessionBeforeBranchSummaryEvent {
     pub custom_instructions: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionBeforeBranchSummaryResult {
     pub skip_summary: bool,
     pub summary: Option<BranchSummaryResult>,
@@ -320,6 +320,8 @@ pub struct TreePreparation {
 pub struct TreeSummary {
     pub summary: String,
     pub details: Option<Value>,
+    /// Usage from the LLM call that generated this summary, if available.
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Clone)]
@@ -475,6 +477,8 @@ pub struct ToolResultEvent {
     pub input: Value,
     pub content: Vec<AgentToolResultContent>,
     pub details: Option<Value>,
+    /// Usage from the tool execution itself, if available.
+    pub usage: Option<Usage>,
     pub terminate: bool,
     pub is_error: bool,
 }
@@ -483,6 +487,8 @@ pub struct ToolResultEvent {
 pub struct ToolResultPatch {
     pub content: Option<Vec<AgentToolResultContent>>,
     pub details: Option<Value>,
+    /// If provided, replaces the tool result usage.
+    pub usage: Option<Usage>,
     pub terminate: Option<bool>,
     pub is_error: Option<bool>,
 }
@@ -1345,12 +1351,13 @@ impl AgentHarness {
 
             let mut session = self.session.clone();
             let entry_id = session
-                .append_compaction_with_details(
+                .append_compaction_with_usage(
                     result.summary.clone(),
                     result.first_kept_entry_id.clone(),
                     result.tokens_before,
                     compaction_details_value(&result.details),
                     from_hook.then_some(true),
+                    result.usage.clone(),
                 )
                 .map_err(AgentHarnessError::session)?;
             if let Some(compaction_entry) = session.get_entry(&entry_id) {
@@ -1450,6 +1457,7 @@ impl AgentHarness {
                         summary_for_move = Some(BranchMoveSummary {
                             summary: result.summary.clone(),
                             details: branch_summary_details_value(&result),
+                            usage: result.usage.clone(),
                             from_hook: from_hook.then_some(true),
                         });
                         summary_result = Some(result);
@@ -1548,6 +1556,10 @@ impl AgentHarness {
                 .as_ref()
                 .and_then(|result| result.summary.as_ref())
                 .and_then(|summary| summary.details.clone());
+            let mut summary_usage = hook_result
+                .as_ref()
+                .and_then(|result| result.summary.as_ref())
+                .and_then(|summary| summary.usage.clone());
 
             if summary_text.is_none() && options.summarize && !collected.entries.is_empty() {
                 let model = self.get_model();
@@ -1574,6 +1586,7 @@ impl AgentHarness {
                 .map_err(AgentHarnessError::branch_summary)?;
                 summary_text = Some(result.summary.clone());
                 summary_details = branch_summary_details_value(&result);
+                summary_usage = result.usage.clone();
             }
 
             let (new_leaf_id, editor_text) = navigate_tree_target(&target_entry, &target_id);
@@ -1584,6 +1597,7 @@ impl AgentHarness {
             let summary_for_move = summary_text.map(|summary| BranchMoveSummary {
                 summary,
                 details: summary_details,
+                usage: summary_usage,
                 from_hook: from_hook.then_some(true),
             });
             let mut session = self.session.clone();
@@ -2578,6 +2592,7 @@ impl AgentToolResultHook for HarnessToolResultHook {
                 input: context.input.clone(),
                 content: result.content.clone(),
                 details: result.details.clone(),
+                usage: result.usage.clone(),
                 terminate: result.terminate,
                 is_error,
             })
@@ -2589,6 +2604,10 @@ impl AgentToolResultHook for HarnessToolResultHook {
                 }
                 if let Some(details) = patch.details {
                     result.details = Some(details);
+                    result_patched = true;
+                }
+                if let Some(usage) = patch.usage {
+                    result.usage = Some(usage);
                     result_patched = true;
                 }
                 if let Some(terminate) = patch.terminate {
@@ -2606,6 +2625,7 @@ impl AgentToolResultHook for HarnessToolResultHook {
                 result: result_patched.then_some(result),
                 content: None,
                 details: None,
+                usage: None,
                 terminate: None,
                 is_error: is_error_patched,
             }),

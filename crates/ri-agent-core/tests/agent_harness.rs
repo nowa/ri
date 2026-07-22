@@ -383,6 +383,7 @@ async fn agent_harness_includes_session_summaries_and_custom_messages_in_prompt_
                 summary: "branch context".to_owned(),
                 details: None,
                 from_hook: None,
+                usage: None,
             }),
         )
         .expect("branch summary");
@@ -1347,6 +1348,7 @@ async fn agent_harness_removes_registered_summary_hooks() {
                     read_files: Vec::new(),
                     modified_files: Vec::new(),
                 },
+                usage: None,
             }),
         }))
     });
@@ -1367,6 +1369,7 @@ async fn agent_harness_removes_registered_summary_hooks() {
                     read_files: Vec::new(),
                     modified_files: Vec::new(),
                 },
+                usage: None,
             }),
         }))
     });
@@ -1422,6 +1425,7 @@ async fn agent_harness_removes_registered_summary_hooks() {
                 summary: "Removed branch summary".to_owned(),
                 read_files: Vec::new(),
                 modified_files: Vec::new(),
+                usage: None,
             }),
         }))
     });
@@ -1435,6 +1439,7 @@ async fn agent_harness_removes_registered_summary_hooks() {
                 summary: "Active branch summary".to_owned(),
                 read_files: Vec::new(),
                 modified_files: Vec::new(),
+                usage: None,
             }),
         }))
     });
@@ -1556,14 +1561,18 @@ async fn agent_harness_compacts_session_and_persists_summary() {
                 summary,
                 first_kept_entry_id,
                 tokens_before,
+                usage,
                 ..
-            } => Some((summary, first_kept_entry_id, tokens_before)),
+            } => Some((summary, first_kept_entry_id, tokens_before, usage)),
             _ => None,
         })
         .expect("compaction entry");
     assert!(compaction.0.contains("Harness summary"));
     assert_eq!(compaction.1, &result.first_kept_entry_id);
     assert_eq!(*compaction.2, result.tokens_before);
+    let generated_usage = result.usage.as_ref().expect("generated compaction usage");
+    assert!(generated_usage.total_tokens > 0);
+    assert_eq!(compaction.3.as_ref(), Some(generated_usage));
 
     let context = session.build_context().expect("context");
     assert!(matches!(
@@ -1634,6 +1643,15 @@ async fn agent_harness_session_before_compact_hook_can_supply_summary() {
                     read_files: vec!["src/lib.rs".to_owned()],
                     modified_files: vec!["src/main.rs".to_owned()],
                 },
+                usage: Some(Usage {
+                    input: 5,
+                    output: 6,
+                    cache_read: 7,
+                    cache_write: 8,
+                    reasoning: None,
+                    total_tokens: 26,
+                    cost: UsageCost::default(),
+                }),
             }),
         }))
     });
@@ -1683,13 +1701,19 @@ async fn agent_harness_session_before_compact_hook_can_supply_summary() {
                 summary,
                 details,
                 from_hook,
+                usage,
                 ..
-            } => Some((summary, details, from_hook)),
+            } => Some((summary, details, from_hook, usage)),
             _ => None,
         })
         .expect("compaction entry");
     assert_eq!(compaction.0, "Hook supplied summary");
     assert_eq!(*compaction.2, Some(true));
+    assert_eq!(
+        result.usage.as_ref().map(|usage| usage.total_tokens),
+        Some(26)
+    );
+    assert_eq!(compaction.3.as_ref(), result.usage.as_ref());
     assert_eq!(
         compaction
             .1
@@ -1751,6 +1775,7 @@ async fn agent_harness_summary_hooks_run_all_and_persist_last_result() {
                         read_files: Vec::new(),
                         modified_files: Vec::new(),
                     },
+                    usage: None,
                 }),
             }))
         });
@@ -1809,6 +1834,7 @@ async fn agent_harness_summary_hooks_run_all_and_persist_last_result() {
                     summary: summary.to_owned(),
                     read_files: Vec::new(),
                     modified_files: Vec::new(),
+                    usage: None,
                 }),
             }))
         });
@@ -1883,6 +1909,7 @@ async fn agent_harness_summary_hooks_persist_to_jsonl_storage() {
                     read_files: vec!["src/read.rs".to_owned()],
                     modified_files: vec!["src/write.rs".to_owned()],
                 },
+                usage: None,
             }),
         }))
     });
@@ -1970,6 +1997,7 @@ async fn agent_harness_summary_hooks_persist_to_jsonl_storage() {
                 summary: "JSONL hook branch summary".to_owned(),
                 read_files: vec!["src/branch-read.rs".to_owned()],
                 modified_files: vec!["src/branch-write.rs".to_owned()],
+                usage: None,
             }),
         }))
     });
@@ -2427,6 +2455,7 @@ async fn agent_harness_session_before_compact_hook_flushes_pending_writes_on_suc
                     read_files: Vec::new(),
                     modified_files: Vec::new(),
                 },
+                usage: None,
             }),
         }))
     });
@@ -2860,14 +2889,18 @@ async fn agent_harness_move_session_to_generates_and_persists_branch_summary() {
                 from_id,
                 details,
                 from_hook,
+                usage,
                 ..
-            } => Some((summary, from_id, details, from_hook)),
+            } => Some((summary, from_id, details, from_hook, usage)),
             _ => None,
         })
         .expect("branch summary entry");
     assert!(branch_summary.0.contains("Generated branch summary"));
     assert_eq!(branch_summary.1, &anchor);
     assert_eq!(*branch_summary.3, None);
+    let generated_usage = result.usage.as_ref().expect("generated branch usage");
+    assert!(generated_usage.total_tokens > 0);
+    assert_eq!(branch_summary.4.as_ref(), Some(generated_usage));
     assert_eq!(
         branch_summary
             .2
@@ -2965,6 +2998,7 @@ async fn agent_harness_navigate_tree_emits_pi_tree_event_and_returns_editor_text
             summary: Some(TreeSummary {
                 summary: "Hook tree summary".to_owned(),
                 details: Some(json!({ "source": "hook" })),
+                usage: None,
             }),
             ..Default::default()
         }))
@@ -3173,6 +3207,7 @@ async fn agent_harness_session_before_branch_summary_hook_can_supply_summary() {
                 summary: "Hook branch summary".to_owned(),
                 read_files: vec!["src/read.rs".to_owned()],
                 modified_files: vec!["src/write.rs".to_owned()],
+                usage: None,
             }),
         }))
     });
@@ -3276,6 +3311,7 @@ async fn agent_harness_session_before_branch_summary_hook_flushes_pending_writes
                 summary: "Hook branch summary with queued write".to_owned(),
                 read_files: Vec::new(),
                 modified_files: Vec::new(),
+                usage: None,
             }),
         }))
     });
@@ -4630,6 +4666,7 @@ async fn agent_harness_summary_events_wait_for_async_subscribers_before_idle() {
                     read_files: Vec::new(),
                     modified_files: Vec::new(),
                 },
+                usage: None,
             }),
         }))
     });
@@ -4707,6 +4744,7 @@ async fn agent_harness_summary_events_wait_for_async_subscribers_before_idle() {
                 summary: "Async listener branch summary".to_owned(),
                 read_files: Vec::new(),
                 modified_files: Vec::new(),
+                usage: None,
             }),
         }))
     });
@@ -4804,6 +4842,7 @@ async fn agent_harness_runs_tool_call_and_tool_result_hooks_through_direct_loop(
                 "patched result",
             ))]),
             details: Some(json!({ "patched": true })),
+            usage: None,
             terminate: Some(true),
             is_error: None,
         }))

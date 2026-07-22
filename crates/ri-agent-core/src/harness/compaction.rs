@@ -170,11 +170,13 @@ pub struct CompactionDetails {
     pub modified_files: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompactionResult {
     pub summary: String,
     pub first_kept_entry_id: String,
     pub tokens_before: u64,
+    /// Usage from the LLM call(s) that generated this summary, if available.
+    pub usage: Option<Usage>,
     pub details: CompactionDetails,
 }
 
@@ -191,9 +193,11 @@ pub struct CollectEntriesResult {
     pub common_ancestor_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BranchSummaryResult {
     pub summary: String,
+    /// Usage from the LLM call that generated this summary, if available.
+    pub usage: Option<Usage>,
     pub read_files: Vec<String>,
     pub modified_files: Vec<String>,
 }
@@ -205,6 +209,29 @@ pub fn estimate_tokens(text: &str) -> u64 {
 /// Images are estimated at 4800 characters, mirroring pi's
 /// `ESTIMATED_IMAGE_CHARS` heuristic.
 const ESTIMATED_IMAGE_TOKENS: u64 = 4800 / 4;
+
+/// Combine usage from two LLM calls, mirroring pi `combineUsage`.
+pub fn combine_usage(first: &Usage, second: &Usage) -> Usage {
+    Usage {
+        input: first.input + second.input,
+        output: first.output + second.output,
+        cache_read: first.cache_read + second.cache_read,
+        cache_write: first.cache_write + second.cache_write,
+        reasoning: if first.reasoning.is_some() || second.reasoning.is_some() {
+            Some(first.reasoning.unwrap_or(0) + second.reasoning.unwrap_or(0))
+        } else {
+            None
+        },
+        total_tokens: first.total_tokens + second.total_tokens,
+        cost: ri_llm_provider::UsageCost {
+            input: first.cost.input + second.cost.input,
+            output: first.cost.output + second.cost.output,
+            cache_read: first.cost.cache_read + second.cost.cache_read,
+            cache_write: first.cost.cache_write + second.cost.cache_write,
+            total: first.cost.total + second.cost.total,
+        },
+    }
+}
 
 pub fn calculate_context_tokens(usage: &Usage) -> u64 {
     if usage.total_tokens > 0 {
@@ -527,6 +554,14 @@ pub fn prepare_compaction(
     }))
 }
 
+/// A generated summary plus the usage of the LLM call that produced it,
+/// mirroring pi `generateSummary`'s `{ text, usage }` result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SummaryOutput {
+    pub text: String,
+    pub usage: Usage,
+}
+
 pub async fn generate_summary(
     current_messages: &[SessionMessage],
     model: &Model,
@@ -536,7 +571,7 @@ pub async fn generate_summary(
     custom_instructions: Option<&str>,
     previous_summary: Option<&str>,
     thinking_level: Option<ThinkingLevel>,
-) -> Result<String, CompactionError> {
+) -> Result<SummaryOutput, CompactionError> {
     generate_summary_with_prompt(
         current_messages,
         model,
@@ -567,45 +602,58 @@ pub async fn compact(
     }
 
     let api_key = api_key.into();
-    let summary = if preparation.is_split_turn && !preparation.turn_prefix_messages.is_empty() {
-        let history_summary = if preparation.messages_to_summarize.is_empty() {
-            "No prior history.".to_owned()
+    let (summary, summary_usage) =
+        if preparation.is_split_turn && !preparation.turn_prefix_messages.is_empty() {
+            let (history_text, history_usage) = if preparation.messages_to_summarize.is_empty() {
+                ("No prior history.".to_owned(), None)
+            } else {
+                let history = generate_summary(
+                    &preparation.messages_to_summarize,
+                    model,
+                    preparation.settings.reserve_tokens,
+                    api_key.clone(),
+                    headers.clone(),
+                    custom_instructions,
+                    preparation.previous_summary.as_deref(),
+                    thinking_level,
+                )
+                .await?;
+                (history.text, Some(history.usage))
+            };
+            let prefix = generate_turn_prefix_summary(
+                &preparation.turn_prefix_messages,
+                model,
+                preparation.settings.reserve_tokens,
+                api_key,
+                headers,
+                thinking_level,
+            )
+            .await?;
+            let combined_usage = match history_usage {
+                Some(history_usage) => combine_usage(&history_usage, &prefix.usage),
+                None => prefix.usage,
+            };
+            (
+                format!(
+                    "{history_text}\n\n---\n\n**Turn Context (split turn):**\n\n{}",
+                    prefix.text
+                ),
+                Some(combined_usage),
+            )
         } else {
-            generate_summary(
+            let summary = generate_summary(
                 &preparation.messages_to_summarize,
                 model,
                 preparation.settings.reserve_tokens,
-                api_key.clone(),
-                headers.clone(),
+                api_key,
+                headers,
                 custom_instructions,
                 preparation.previous_summary.as_deref(),
                 thinking_level,
             )
-            .await?
+            .await?;
+            (summary.text, Some(summary.usage))
         };
-        let prefix_summary = generate_turn_prefix_summary(
-            &preparation.turn_prefix_messages,
-            model,
-            preparation.settings.reserve_tokens,
-            api_key,
-            headers,
-            thinking_level,
-        )
-        .await?;
-        format!("{history_summary}\n\n---\n\n**Turn Context (split turn):**\n\n{prefix_summary}")
-    } else {
-        generate_summary(
-            &preparation.messages_to_summarize,
-            model,
-            preparation.settings.reserve_tokens,
-            api_key,
-            headers,
-            custom_instructions,
-            preparation.previous_summary.as_deref(),
-            thinking_level,
-        )
-        .await?
-    };
 
     let file_lists = compute_file_lists(&preparation.file_ops);
     let summary = format!(
@@ -618,6 +666,7 @@ pub async fn compact(
         summary,
         first_kept_entry_id: preparation.first_kept_entry_id.clone(),
         tokens_before: preparation.tokens_before,
+        usage: summary_usage,
         details: CompactionDetails {
             read_files: file_lists.read_files,
             modified_files: file_lists.modified_files,
@@ -740,6 +789,7 @@ pub async fn generate_branch_summary(
     if preparation.messages.is_empty() {
         return Ok(BranchSummaryResult {
             summary: "No content to summarize".to_owned(),
+            usage: None,
             read_files: Vec::new(),
             modified_files: Vec::new(),
         });
@@ -806,6 +856,7 @@ pub async fn generate_branch_summary(
             ),
         )),
         _ => {
+            let usage = response.usage.clone();
             let mut summary = response
                 .content
                 .into_iter()
@@ -828,6 +879,7 @@ pub async fn generate_branch_summary(
                 } else {
                     summary
                 },
+                usage: Some(usage),
                 read_files: file_lists.read_files,
                 modified_files: file_lists.modified_files,
             })
@@ -1213,7 +1265,7 @@ async fn generate_turn_prefix_summary(
     api_key: String,
     headers: Option<BTreeMap<String, String>>,
     thinking_level: Option<ThinkingLevel>,
-) -> Result<String, CompactionError> {
+) -> Result<SummaryOutput, CompactionError> {
     generate_summary_with_prompt(
         messages,
         model,
@@ -1238,7 +1290,7 @@ async fn generate_summary_with_prompt(
     previous_summary: Option<&str>,
     thinking_level: Option<ThinkingLevel>,
     turn_prefix: bool,
-) -> Result<String, CompactionError> {
+) -> Result<SummaryOutput, CompactionError> {
     let max_tokens = if turn_prefix {
         summary_max_tokens(reserve_tokens, model.max_tokens, 5, 10)
     } else {
@@ -1325,15 +1377,19 @@ async fn generate_summary_with_prompt(
                 )
             },
         )),
-        _ => Ok(response
-            .content
-            .into_iter()
-            .filter_map(|content| match content {
-                AssistantContent::Text(text) => Some(text.text),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n")),
+        _ => {
+            let usage = response.usage.clone();
+            let text = response
+                .content
+                .into_iter()
+                .filter_map(|content| match content {
+                    AssistantContent::Text(text) => Some(text.text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(SummaryOutput { text, usage })
+        }
     }
 }
 

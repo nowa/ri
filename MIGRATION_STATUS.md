@@ -1989,6 +1989,22 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Aligned pi `2fd38684` "add usage info to branch summary, compaction and tool
+  result entries (#6671)": `ToolResultMessage` and `AgentToolResult` gain an
+  optional `usage` field for tool-execution usage (not part of main LLM
+  context accounting); tool-result hooks observe it via `ToolResultEvent` and
+  can replace it via `ToolResultPatch`/`AgentToolResultHookResult`, with the
+  patched value persisted on the tool-result message. `generate_summary` and
+  the turn-prefix summarizer now return `SummaryOutput { text, usage }`;
+  `compact` combines split-turn history/prefix usage via the new
+  `combine_usage` helper (Option-aware `reasoning` summing) and reports it on
+  `CompactionResult`; `generate_branch_summary` reports usage on
+  `BranchSummaryResult`. Session `Compaction` and `BranchSummary` tree entries
+  persist an optional `usage` field (JSONL round trip covered), written by the
+  harness for generated and hook-supplied compaction and branch summaries,
+  including `navigate_tree` hook summaries via the new `TreeSummary.usage`.
+  Verified with the `ri-agent-core` suites and
+  `cargo test -p ri-llm-provider --test provider_core`.
 - Aligned pi `09f10595` "fix(ai): clamp streamSimple max tokens", `8973ae28`
   "fix(ai): ignore stale usage after compaction", and `96f0edd0` "Count user
   image tokens in context estimates": new `ri-llm-provider::estimate` module

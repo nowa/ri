@@ -3,7 +3,7 @@ use futures::future::BoxFuture;
 use ri_llm_provider::{
     AssistantMessage, AssistantMessageEvent, AssistantMessageEventStream, Context, ImageContent,
     Message, Model, SimpleStreamOptions, TextContent, ThinkingLevel, Tool, ToolCall,
-    ToolResultMessage, UserMessage,
+    ToolResultMessage, Usage, UserMessage,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -132,6 +132,10 @@ pub struct AgentToolResult {
     pub content: Vec<AgentToolResultContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+    /// Usage from the final tool execution itself, if available. Not used for
+    /// main LLM context accounting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub terminate: bool,
 }
@@ -148,6 +152,7 @@ impl AgentToolResult {
         Self {
             content: vec![AgentToolResultContent::Text(TextContent::new(text))],
             details: None,
+            usage: None,
             terminate: false,
         }
     }
@@ -231,6 +236,9 @@ pub struct AgentToolResultHookResult {
     pub content: Option<Vec<AgentToolResultContent>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+    /// If provided, replaces the tool result usage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminate: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -243,6 +251,7 @@ impl AgentToolResultHookResult {
             result: Some(result),
             content: None,
             details: None,
+            usage: None,
             terminate: None,
             is_error: None,
         }
@@ -253,6 +262,7 @@ impl AgentToolResultHookResult {
             result: None,
             content: None,
             details: None,
+            usage: None,
             terminate: None,
             is_error: Some(is_error),
         }
@@ -263,6 +273,7 @@ impl AgentToolResultHookResult {
             result: None,
             content: None,
             details: None,
+            usage: None,
             terminate: Some(terminate),
             is_error: None,
         }

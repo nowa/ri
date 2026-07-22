@@ -600,6 +600,7 @@ fn run_session_branch_summary_suite(storage: impl Into<SessionStorageKind>) {
                 summary: "summary text".to_owned(),
                 details: None,
                 from_hook: None,
+                usage: None,
             }),
         )
         .expect("move summary")
@@ -695,6 +696,7 @@ fn session_builds_model_thinking_compaction_custom_and_branch_summary_context() 
                 summary: "summary text".to_owned(),
                 details: None,
                 from_hook: None,
+                usage: None,
             }),
         )
         .expect("move summary")
@@ -861,6 +863,73 @@ fn jsonl_session_persists_leaf_entries_and_wire_entry_types() {
     for entry in entries {
         assert_ne!(entry["type"], "entry");
         assert!(entry["id"].is_string());
+    }
+}
+
+#[test]
+fn session_persists_compaction_and_branch_summary_usage() {
+    let usage = ri_llm_provider::Usage {
+        input: 1,
+        output: 2,
+        cache_read: 3,
+        cache_write: 4,
+        reasoning: None,
+        total_tokens: 10,
+        cost: ri_llm_provider::UsageCost {
+            input: 0.1,
+            output: 0.2,
+            cache_read: 0.3,
+            cache_write: 0.4,
+            total: 1.0,
+        },
+    };
+
+    let dir = temp_dir();
+    let path = dir.join("session-usage.jsonl");
+    let storage = JsonlSessionStorage::create(&path, dir.to_string_lossy(), "session-1", None)
+        .expect("jsonl");
+    let mut session = Session::new(storage);
+    let user1 = session
+        .append_message(user_message_text("one"))
+        .expect("user");
+    let compaction_id = session
+        .append_compaction_with_usage(
+            "summary",
+            user1.clone(),
+            1_234,
+            None,
+            Some(false),
+            Some(usage.clone()),
+        )
+        .expect("compaction");
+    let summary_id = session
+        .move_to(
+            Some(user1.clone()),
+            Some(BranchMoveSummary {
+                summary: "summary text".to_owned(),
+                details: None,
+                usage: Some(usage.clone()),
+                from_hook: None,
+            }),
+        )
+        .expect("move")
+        .expect("summary id");
+
+    let reloaded = Session::new(JsonlSessionStorage::open(&path).expect("reload"));
+    match reloaded
+        .get_entry(&compaction_id)
+        .expect("compaction entry")
+    {
+        SessionTreeEntry::Compaction {
+            usage: entry_usage, ..
+        } => assert_eq!(entry_usage, Some(usage.clone())),
+        other => panic!("expected compaction entry, got {other:?}"),
+    }
+    match reloaded.get_entry(&summary_id).expect("summary entry") {
+        SessionTreeEntry::BranchSummary {
+            usage: entry_usage, ..
+        } => assert_eq!(entry_usage, Some(usage)),
+        other => panic!("expected branch summary entry, got {other:?}"),
     }
 }
 

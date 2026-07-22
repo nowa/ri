@@ -1,5 +1,5 @@
 use parking_lot::Mutex;
-use ri_llm_provider::{Message, UserContent, now_millis};
+use ri_llm_provider::{Message, Usage, UserContent, now_millis};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -317,6 +317,8 @@ pub enum SessionTreeEntry {
         tokens_before: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         details: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
         #[serde(rename = "fromHook", skip_serializing_if = "Option::is_none")]
         from_hook: Option<bool>,
     },
@@ -330,6 +332,8 @@ pub enum SessionTreeEntry {
         summary: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         details: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
         #[serde(rename = "fromHook", skip_serializing_if = "Option::is_none")]
         from_hook: Option<bool>,
     },
@@ -932,6 +936,25 @@ impl Session {
         details: Option<Value>,
         from_hook: Option<bool>,
     ) -> Result<String, SessionError> {
+        self.append_compaction_with_usage(
+            summary,
+            first_kept_entry_id,
+            tokens_before,
+            details,
+            from_hook,
+            None,
+        )
+    }
+
+    pub fn append_compaction_with_usage(
+        &mut self,
+        summary: impl Into<String>,
+        first_kept_entry_id: impl Into<String>,
+        tokens_before: u64,
+        details: Option<Value>,
+        from_hook: Option<bool>,
+        usage: Option<Usage>,
+    ) -> Result<String, SessionError> {
         let id = self.storage.lock().create_entry_id();
         let parent_id = self.storage.lock().leaf_id()?;
         self.append_entry(SessionTreeEntry::Compaction {
@@ -942,6 +965,7 @@ impl Session {
             first_kept_entry_id: first_kept_entry_id.into(),
             tokens_before,
             details,
+            usage,
             from_hook,
         })
     }
@@ -1042,6 +1066,7 @@ impl Session {
             from_id,
             summary: summary.summary,
             details: summary.details,
+            usage: summary.usage,
             from_hook: summary.from_hook,
         })
         .map(Some)
@@ -1058,6 +1083,8 @@ impl Session {
 pub struct BranchMoveSummary {
     pub summary: String,
     pub details: Option<Value>,
+    /// Usage from the LLM call that generated this summary, if available.
+    pub usage: Option<Usage>,
     pub from_hook: Option<bool>,
 }
 

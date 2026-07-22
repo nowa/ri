@@ -66,6 +66,7 @@ fn compaction_entry(
         tokens_before: 1234,
         details,
         from_hook: None,
+        usage: None,
     }
 }
 
@@ -78,6 +79,7 @@ fn branch_summary_entry(id: &str, parent_id: Option<&str>) -> SessionTreeEntry {
         summary: "branch summary".to_owned(),
         details: None,
         from_hook: None,
+        usage: None,
     }
 }
 
@@ -94,6 +96,7 @@ fn branch_summary_entry_with_details(
         summary: "branch summary".to_owned(),
         details: Some(details),
         from_hook: None,
+        usage: None,
     }
 }
 
@@ -209,6 +212,7 @@ fn compaction_estimates_tokens_and_uses_latest_valid_assistant_usage() {
             }),
         ],
         details: None,
+        usage: None,
         is_error: false,
         added_tool_names: None,
         timestamp: 0,
@@ -324,6 +328,7 @@ fn compaction_finds_cut_points_and_turn_start_edges() {
             tool_name: "read".to_owned(),
             content: vec![ToolResultContent::text("tool output")],
             details: None,
+            usage: None,
             is_error: false,
             added_tool_names: None,
             timestamp: 0,
@@ -449,6 +454,7 @@ fn compaction_prepares_custom_branch_messages_and_serializes_tool_results() {
         tool_name: "read".to_owned(),
         content: vec![ToolResultContent::text(long_content)],
         details: None,
+        usage: None,
         is_error: false,
         added_tool_names: None,
         timestamp: 0,
@@ -511,7 +517,16 @@ async fn compaction_generate_summary_builds_prompt_and_passes_reasoning_options(
     .await
     .expect("summary");
 
-    assert!(summary.contains("Test summary"));
+    assert!(summary.text.contains("Test summary"));
+    assert!(summary.usage.input > 0);
+    assert!(summary.usage.output > 0);
+    assert_eq!(
+        summary.usage.total_tokens,
+        summary.usage.input
+            + summary.usage.output
+            + summary.usage.cache_read
+            + summary.usage.cache_write
+    );
     let options = seen_options.lock().expect("options");
     assert_eq!(options[0].reasoning, Some(ThinkingLevel::Medium));
     assert_eq!(options[0].stream.max_tokens, Some(1_600));
@@ -686,9 +701,12 @@ async fn compaction_compact_returns_summary_details_and_clamps_max_tokens() {
     assert_eq!(result.tokens_before, 600_000);
     assert_eq!(result.details.read_files, vec!["src/lib.ts"]);
     assert_eq!(result.details.modified_files, vec!["src/index.ts"]);
-    assert_eq!(
-        seen_options.lock().expect("options")[0].stream.max_tokens,
-        Some(128_000)
+    // The requested cap (min(0.8 * reserve, model max) = 128k) is then clamped
+    // to the remaining context by the simple-stream defaults.
+    let seen_max_tokens = seen_options.lock().expect("options")[0].stream.max_tokens;
+    assert!(
+        seen_max_tokens.is_some_and(|value| value > 100_000 && value < 128_000),
+        "expected context-clamped summary cap below 128k, got {seen_max_tokens:?}"
     );
     registration.unregister();
 }
@@ -796,6 +814,8 @@ async fn compaction_compact_summarizes_split_turn_and_maps_prefix_errors() {
     assert!(result.summary.contains("No prior history."));
     assert!(result.summary.contains("**Turn Context (split turn):**"));
     assert!(result.summary.contains("Prefix summary"));
+    let split_usage = result.usage.as_ref().expect("split turn usage");
+    assert!(split_usage.total_tokens > 0);
     let options = seen_options.lock().expect("options");
     assert_eq!(options[0].reasoning, Some(ThinkingLevel::High));
     assert_eq!(options[0].stream.max_tokens, Some(1_000));
@@ -974,6 +994,7 @@ fn branch_summary_prepares_messages_budget_and_file_ops() {
             tool_name: "read".to_owned(),
             content: vec![ToolResultContent::text("tool output")],
             details: None,
+            usage: None,
             is_error: false,
             added_tool_names: None,
             timestamp: 0,
@@ -1178,4 +1199,41 @@ async fn branch_summary_generate_replaces_prompt_and_maps_errors() {
     assert_eq!(aborted.code, BranchSummaryErrorCode::Aborted);
     assert_eq!(aborted.message, "branch stopped");
     aborted_registration.unregister();
+}
+
+#[test]
+fn combine_usage_sums_components_and_preserves_reasoning_presence() {
+    let mut first = usage(1, 2, 3, 4);
+    first.cost = UsageCost {
+        input: 0.1,
+        output: 0.2,
+        cache_read: 0.3,
+        cache_write: 0.4,
+        total: 1.0,
+    };
+    let mut second = usage(5, 6, 7, 8);
+    second.cost = UsageCost {
+        input: 0.5,
+        output: 0.6,
+        cache_read: 0.7,
+        cache_write: 0.8,
+        total: 2.6,
+    };
+
+    let combined = combine_usage(&first, &second);
+    assert_eq!(combined.input, 6);
+    assert_eq!(combined.output, 8);
+    assert_eq!(combined.cache_read, 10);
+    assert_eq!(combined.cache_write, 12);
+    assert_eq!(combined.total_tokens, 36);
+    assert_eq!(combined.reasoning, None);
+    assert!((combined.cost.total - 3.6).abs() < 1e-9);
+    assert!((combined.cost.input - 0.6).abs() < 1e-9);
+
+    second.reasoning = Some(5);
+    let combined = combine_usage(&first, &second);
+    assert_eq!(combined.reasoning, Some(5));
+    first.reasoning = Some(2);
+    let combined = combine_usage(&first, &second);
+    assert_eq!(combined.reasoning, Some(7));
 }

@@ -347,6 +347,10 @@ pub struct ToolResultMessage {
     pub content: Vec<ToolResultContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+    /// Usage from the tool execution itself, if available. Not part of main
+    /// LLM context accounting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
     pub is_error: bool,
     /// Names of tools whose definitions were anchored to this tool result by
     /// message-anchored (deferred) tool loading.

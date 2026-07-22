@@ -252,6 +252,7 @@ impl AgentToolExecutor for ConditionalTerminateExecutor {
             )))],
             details: Some(json!({ "value": value })),
             terminate,
+            usage: None,
         })
     }
 }
@@ -502,6 +503,7 @@ impl AgentToolResultHook for ReplacingToolResultHook {
                 ))],
                 details: Some(json!({ "patched": true })),
                 terminate: true,
+                usage: None,
             },
         )))
     }
@@ -559,6 +561,7 @@ impl AgentToolResultHook for ClearingToolErrorHook {
             details: None,
             terminate: None,
             is_error: Some(false),
+            usage: None,
         }))
     }
 }
@@ -3175,6 +3178,122 @@ async fn agent_loop_tool_result_hook_can_override_error_flag() {
     registration.unregister();
 }
 
+fn tool_usage(input: u64, output: u64, cache_read: u64, cache_write: u64) -> Usage {
+    Usage {
+        input,
+        output,
+        cache_read,
+        cache_write,
+        reasoning: None,
+        total_tokens: input + output + cache_read + cache_write,
+        cost: UsageCost::default(),
+    }
+}
+
+struct UsageEchoExecutor {
+    usage: Usage,
+}
+
+#[async_trait]
+impl AgentToolExecutor for UsageEchoExecutor {
+    async fn execute(
+        &self,
+        _tool_call_id: &str,
+        _params: Value,
+    ) -> Result<AgentToolResult, String> {
+        Ok(AgentToolResult {
+            content: vec![AgentToolResultContent::Text(TextContent::new("echoed"))],
+            details: None,
+            usage: Some(self.usage.clone()),
+            terminate: false,
+        })
+    }
+}
+
+struct UsagePatchingHook {
+    expected: Usage,
+    patched: Usage,
+}
+
+#[async_trait]
+impl AgentToolResultHook for UsagePatchingHook {
+    async fn on_tool_result(
+        &self,
+        context: AgentToolResultHookContext,
+    ) -> Result<Option<AgentToolResultHookResult>, String> {
+        assert_eq!(context.result.usage.as_ref(), Some(&self.expected));
+        Ok(Some(AgentToolResultHookResult {
+            result: None,
+            content: None,
+            details: None,
+            usage: Some(self.patched.clone()),
+            terminate: None,
+            is_error: None,
+        }))
+    }
+}
+
+#[tokio::test]
+async fn agent_loop_tool_result_hook_observes_and_patches_tool_usage() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message(
+            faux_tool_call(
+                "echo",
+                json!({ "value": "abc" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_else(Map::new),
+                Some("tool-1".to_owned()),
+            ),
+            FauxAssistantOptions {
+                stop_reason: Some(StopReason::ToolUse),
+                ..Default::default()
+            },
+        )
+        .into(),
+        faux_assistant_message("done", Default::default()).into(),
+    ]);
+
+    let tool_usage_value = tool_usage(1, 2, 3, 4);
+    let patched_usage = tool_usage(5, 6, 7, 8);
+    let tool = AgentTool {
+        definition: Tool {
+            name: "echo".to_owned(),
+            description: "Echo tool".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"]
+            }),
+        },
+        label: "Echo".to_owned(),
+        execution_mode: None,
+        argument_preparer: None,
+        executor: Arc::new(UsageEchoExecutor {
+            usage: tool_usage_value.clone(),
+        }),
+    };
+
+    let mut context = context_with_model(&registration.get_model());
+    context.tools.push(tool);
+    let mut config = AgentLoopConfig::new(registration.get_model());
+    config.tool_result_hooks.push(Arc::new(UsagePatchingHook {
+        expected: tool_usage_value,
+        patched: patched_usage.clone(),
+    }));
+
+    let (messages, _events) = agent_loop_prompt(context, "run tool", config)
+        .await
+        .expect("loop");
+
+    let AgentMessage::ToolResult(tool_result) = &messages[2] else {
+        panic!("expected tool result");
+    };
+    assert_eq!(tool_result.usage.as_ref(), Some(&patched_usage));
+    registration.unregister();
+}
+
 #[tokio::test]
 async fn agent_loop_tool_result_hook_can_terminate_tool_batch() {
     let registration = register_faux_provider(RegisterFauxProviderOptions::default());
@@ -4622,6 +4741,7 @@ async fn agent_continue_from_tool_result_tail_gets_assistant_response() {
             tool_name: "calculate".to_owned(),
             content: vec![ToolResultContent::text("5 + 3 = 8")],
             details: None,
+            usage: None,
             is_error: false,
             added_tool_names: None,
             timestamp: now_millis(),

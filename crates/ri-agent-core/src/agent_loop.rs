@@ -939,6 +939,10 @@ async fn execute_prepared_tool_call(
                     result.details = Some(replacement_details);
                     hook_context.result = result.clone();
                 }
+                if let Some(replacement_usage) = replacement.usage {
+                    result.usage = Some(replacement_usage);
+                    hook_context.result = result.clone();
+                }
                 if let Some(replacement_terminate) = replacement.terminate {
                     result.terminate = replacement_terminate;
                     hook_context.result = result.clone();
@@ -988,6 +992,7 @@ fn error_tool_result(error: impl Into<String>) -> crate::types::AgentToolResult 
             ri_llm_provider::TextContent::new(error),
         )],
         details: Some(serde_json::Value::Object(Default::default())),
+        usage: None,
         terminate: false,
     }
 }
@@ -1025,6 +1030,7 @@ fn tool_result_message_from_outcome(outcome: ToolExecutionOutcome) -> ToolResult
             })
             .collect(),
         details: outcome.result.details,
+        usage: outcome.result.usage,
         is_error: outcome.is_error,
         added_tool_names: None,
         timestamp: ri_llm_provider::now_millis(),
