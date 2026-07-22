@@ -26124,3 +26124,92 @@ mod device_code_polling {
         assert!(sleeps.is_empty());
     }
 }
+
+#[test]
+fn openai_responses_replay_generates_unique_valid_fallback_message_ids() {
+    let model = get_model("openai", "gpt-5-mini").expect("openai model");
+    let context = Context {
+        messages: vec![
+            Message::User(UserMessage {
+                content: UserContentValue::Plain("hi".to_owned()),
+                timestamp: 1,
+            }),
+            Message::Assistant(AssistantMessage {
+                content: vec![
+                    AssistantContent::Text(TextContent {
+                        text: "first".to_owned(),
+                        text_signature: None,
+                    }),
+                    AssistantContent::Text(TextContent {
+                        text: "second".to_owned(),
+                        text_signature: None,
+                    }),
+                ],
+                ..empty_assistant_for_model(&model)
+            }),
+        ],
+        ..Default::default()
+    };
+
+    let input = convert_openai_responses_messages(&model, &context, &["openai"], true);
+    let ids: Vec<_> = input
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .collect();
+    assert_eq!(ids, vec!["msg_pi_1", "msg_pi_1_1"]);
+}
+
+#[tokio::test]
+async fn openai_completions_stream_holds_early_reasoning_details_for_late_tool_calls() {
+    let mut model = get_model("openai", "gpt-4o-mini").expect("model");
+    model.api = "openai-completions".to_owned();
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, stream) = assistant_message_event_stream();
+    let reasoning_detail = json!({
+        "type": "reasoning.encrypted",
+        "id": "call_early",
+        "data": "encrypted",
+    });
+
+    process_openai_completions_chunks(
+        [
+            json!({
+                "id": "chatcmpl-early-reasoning",
+                "choices": [{
+                    "delta": { "reasoning_details": [reasoning_detail] },
+                    "finish_reason": null,
+                }],
+            }),
+            json!({
+                "id": "chatcmpl-early-reasoning",
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_early",
+                            "type": "function",
+                            "function": { "name": "read", "arguments": "{}" },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+            }),
+        ],
+        &mut output,
+        &sender,
+        &model,
+    )
+    .expect("process chunks");
+    drop(sender);
+    let _events = collect_events(stream).await;
+
+    let AssistantContent::ToolCall(tool_call) = &output.content[0] else {
+        panic!("tool call");
+    };
+    assert_eq!(tool_call.id, "call_early");
+    assert_eq!(
+        tool_call.thought_signature.as_deref(),
+        Some(reasoning_detail.to_string().as_str())
+    );
+}

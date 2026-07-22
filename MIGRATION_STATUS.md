@@ -2017,6 +2017,13 @@ not part of this pass.
   from the terminal response payload so Azure `store: false` replay stays
   stateless. Dropped the pre-refactor `content_part.added` gating and
   raw-item bookkeeping to match pi HEAD semantics.
+- Completed the remaining reasoning-replay increments: Responses replay
+  fallback message ids are now valid and unique (`msg_pi_<n>` /
+  `msg_pi_<n>_<block>` per text block, pi #5148), and openai-completions
+  holds `reasoning.encrypted` details that arrive before their tool-call
+  block, applying them once the block registers (pi #5114); detail
+  validation now requires non-empty string id/data and resolves tool calls
+  through the streaming id map.
 - Models runtime harness integration (pi phase 6, transitional):
   `AgentHarnessOptions.models` accepts a `Models` collection. When present it
   is the harness's stream path (the agent loop's stream provider dispatches
@@ -2291,8 +2298,6 @@ Alignment; the following upstream increments remain open:
   on generated entries).
 - SQLite session storage (`packages/storage`, #6594) — scope decision
   pending.
-- Deeper OpenAI Responses reasoning-replay increments still open: synthetic
-  message ids (#5148) and early reasoning-details preservation (#5114).
 - Codex transport increments: zstd SSE compression, WebSocket
   connection-limit reconnect and stale-session rotation, SSE header-timeout
   tuning, device-code login (#4911).

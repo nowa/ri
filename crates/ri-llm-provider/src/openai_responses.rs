@@ -345,6 +345,7 @@ pub fn convert_openai_responses_messages_with_deferred(
                     && assistant.provider == model.provider
                     && assistant.api == model.api;
                 let mut output = Vec::new();
+                let mut text_block_index = 0usize;
                 for block in assistant.content {
                     match block {
                         AssistantContent::Thinking(thinking) => {
@@ -355,6 +356,15 @@ pub fn convert_openai_responses_messages_with_deferred(
                             }
                         }
                         AssistantContent::Text(text) => {
+                            // Fallback ids must be valid Responses message ids
+                            // (`msg_` prefix) and unique per text block within
+                            // one assistant message (pi #5148).
+                            let fallback_message_id = if text_block_index == 0 {
+                                format!("msg_pi_{message_index}")
+                            } else {
+                                format!("msg_pi_{message_index}_{text_block_index}")
+                            };
+                            text_block_index += 1;
                             if text.text.trim().is_empty() {
                                 continue;
                             }
@@ -362,7 +372,7 @@ pub fn convert_openai_responses_messages_with_deferred(
                             let mut message_id = signature
                                 .as_ref()
                                 .map(|signature| signature.id.clone())
-                                .unwrap_or_else(|| format!("msg_{message_index}"));
+                                .unwrap_or(fallback_message_id);
                             if message_id.len() > 64 {
                                 message_id = format!("msg_{}", short_hash(&message_id));
                             }

@@ -529,6 +529,9 @@ pub struct OpenAICompletionsStreamProcessor {
     tool_calls_by_index: BTreeMap<i64, usize>,
     tool_calls_by_id: BTreeMap<String, usize>,
     tool_call_partial_args: BTreeMap<usize, String>,
+    /// Encrypted reasoning details that arrived before their tool-call block
+    /// (pi #5114), keyed by tool-call id and applied once the block exists.
+    pending_reasoning_details_by_tool_call_id: BTreeMap<String, String>,
 }
 
 impl OpenAICompletionsStreamProcessor {
@@ -611,6 +614,7 @@ impl OpenAICompletionsStreamProcessor {
                     &mut self.tool_calls_by_index,
                     &mut self.tool_calls_by_id,
                     &mut self.tool_call_partial_args,
+                    &mut self.pending_reasoning_details_by_tool_call_id,
                 );
                 let argument_delta = tool_call
                     .get("function")
@@ -639,7 +643,12 @@ impl OpenAICompletionsStreamProcessor {
         }
 
         if let Some(details) = delta.get("reasoning_details").and_then(Value::as_array) {
-            apply_openai_completions_reasoning_details(output, details);
+            apply_openai_completions_reasoning_details(
+                output,
+                details,
+                &self.tool_calls_by_id,
+                &mut self.pending_reasoning_details_by_tool_call_id,
+            );
         }
         Ok(())
     }
@@ -742,6 +751,7 @@ fn ensure_openai_completions_tool_call_block(
     tool_calls_by_index: &mut BTreeMap<i64, usize>,
     tool_calls_by_id: &mut BTreeMap<String, usize>,
     tool_call_partial_args: &mut BTreeMap<usize, String>,
+    pending_reasoning_details_by_tool_call_id: &mut BTreeMap<String, String>,
 ) -> usize {
     let stream_index = tool_call.get("index").and_then(|index| {
         index
@@ -795,6 +805,12 @@ fn ensure_openai_completions_tool_call_block(
             && let Some(name) = name
         {
             block.name = name.to_owned();
+        }
+        if !block.id.is_empty()
+            && let Some(pending_detail) =
+                pending_reasoning_details_by_tool_call_id.remove(&block.id)
+        {
+            block.thought_signature = Some(pending_detail);
         }
     }
 
@@ -860,24 +876,40 @@ fn openai_completions_reasoning_delta<'a>(
     None
 }
 
-fn apply_openai_completions_reasoning_details(output: &mut AssistantMessage, details: &[Value]) {
+fn apply_openai_completions_reasoning_details(
+    output: &mut AssistantMessage,
+    details: &[Value],
+    tool_calls_by_id: &BTreeMap<String, usize>,
+    pending_reasoning_details_by_tool_call_id: &mut BTreeMap<String, String>,
+) {
     for detail in details {
         if detail.get("type").and_then(Value::as_str) != Some("reasoning.encrypted") {
             continue;
         }
-        let Some(id) = detail.get("id").and_then(Value::as_str) else {
+        let Some(id) = detail
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        else {
             continue;
         };
-        if detail.get("data").is_none() {
+        if detail
+            .get("data")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
             continue;
         }
-        if let Some(AssistantContent::ToolCall(tool_call)) =
-            output.content.iter_mut().find(|content| match content {
-                AssistantContent::ToolCall(tool_call) => tool_call.id == id,
-                _ => false,
-            })
+        let serialized_detail = detail.to_string();
+        if let Some(AssistantContent::ToolCall(tool_call)) = tool_calls_by_id
+            .get(id)
+            .and_then(|content_index| output.content.get_mut(*content_index))
         {
-            tool_call.thought_signature = Some(detail.to_string());
+            tool_call.thought_signature = Some(serialized_detail);
+        } else {
+            // The detail can arrive before its tool-call block; hold it until
+            // the block is registered (pi #5114).
+            pending_reasoning_details_by_tool_call_id.insert(id.to_owned(), serialized_detail);
         }
     }
 }
