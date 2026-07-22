@@ -2052,6 +2052,20 @@ not part of this pass.
   the GPT-5.6 `max` thinking level, and native `supportsToolSearch` compat
   on gpt-5.4/5.4-mini/5.4-pro/5.5/5.6-* for openai and openai-codex.
   Catalog baselines re-baselined to pi HEAD accordingly.
+- SQLite session storage (pi `@earendil-works/pi-storage-sqlite-node`,
+  #6594, scoped port): new `harness::sqlite_session` module with
+  `SqliteSessionRepo` (create/open/list/delete over one database file,
+  WAL/synchronous=FULL/busy_timeout pragmas, pi's `001_initial.sql` schema
+  applied through a recorded `migrations` table) and
+  `SqliteSessionStorage` as a third `SessionStorageKind` variant. Entries
+  persist with pi's column/payload split (`session_entries` +
+  `session_sequences`, `sessions.active_leaf_id` as the durable leaf
+  pointer) with JSONL-style permissive decode on resume; storage keeps the
+  in-memory mirror surface (`entries`/`path_to_root`/`labels`) shared with
+  the JSONL backend. Uses `rusqlite` (bundled). Out of scope for this
+  round: pi's materialized-state caches (`session_materialized`,
+  `entry_materialized`), `branch_entries` acceleration + branch-cursor
+  paging, and repo-level fork; the schema already includes those tables.
 - Models runtime harness integration (pi phase 6, transitional):
   `AgentHarnessOptions.models` accepts a `Models` collection. When present it
   is the harness's stream path (the agent loop's stream provider dispatches
@@ -2327,8 +2341,10 @@ Alignment; the following upstream increments remain open:
   azure/copilot gpt-5.6), Kimi K3, and GLM-5.2. pi's full model data now
   lives outside its git tree (fetched at build since pi a9f6a315), so a
   complete refresh needs the generator pipeline or a network fetch.
-- SQLite session storage (`packages/storage`, #6594) — scope decision
-  pending.
+- SQLite storage follow-ups: materialized-state caches
+  (`session_materialized`/`entry_materialized`), `branch_entries`
+  acceleration and cursor paging, and repo-level fork (schema already in
+  place).
 - Codex zstd SSE request compression (deferred: requires the C-binding
   `zstd` crate; uncompressed bodies remain accepted) and SSE header-timeout
   tuning.

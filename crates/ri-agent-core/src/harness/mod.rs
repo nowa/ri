@@ -5,6 +5,7 @@ pub mod prompt_templates;
 pub mod session;
 pub mod shell_output;
 pub mod skills;
+pub mod sqlite_session;
 pub mod system_prompt;
 pub mod truncate;
 
@@ -15,5 +16,6 @@ pub use prompt_templates::*;
 pub use session::*;
 pub use shell_output::*;
 pub use skills::*;
+pub use sqlite_session::*;
 pub use system_prompt::*;
 pub use truncate::*;

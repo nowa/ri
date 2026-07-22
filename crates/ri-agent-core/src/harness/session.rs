@@ -727,6 +727,7 @@ impl JsonlSessionStorage {
 pub enum SessionStorageKind {
     InMemory(InMemorySessionStorage),
     Jsonl(JsonlSessionStorage),
+    Sqlite(super::sqlite_session::SqliteSessionStorage),
 }
 
 impl SessionStorageKind {
@@ -734,6 +735,7 @@ impl SessionStorageKind {
         match self {
             Self::InMemory(storage) => storage.leaf_id(),
             Self::Jsonl(storage) => storage.leaf_id(),
+            Self::Sqlite(storage) => storage.leaf_id(),
         }
     }
 
@@ -741,6 +743,7 @@ impl SessionStorageKind {
         match self {
             Self::InMemory(storage) => storage.set_leaf_id(leaf_id),
             Self::Jsonl(storage) => storage.set_leaf_id(leaf_id),
+            Self::Sqlite(storage) => storage.set_leaf_id(leaf_id),
         }
     }
 
@@ -748,6 +751,7 @@ impl SessionStorageKind {
         match self {
             Self::InMemory(storage) => storage.create_entry_id(),
             Self::Jsonl(storage) => storage.create_entry_id(),
+            Self::Sqlite(storage) => storage.create_entry_id(),
         }
     }
 
@@ -758,6 +762,7 @@ impl SessionStorageKind {
                 Ok(())
             }
             Self::Jsonl(storage) => storage.append_entry(entry),
+            Self::Sqlite(storage) => storage.append_entry(entry),
         }
     }
 
@@ -765,6 +770,7 @@ impl SessionStorageKind {
         match self {
             Self::InMemory(storage) => storage.get_entry(id),
             Self::Jsonl(storage) => storage.get_entry(id),
+            Self::Sqlite(storage) => storage.get_entry(id),
         }
     }
 
@@ -772,6 +778,7 @@ impl SessionStorageKind {
         match self {
             Self::InMemory(storage) => storage.find_entries(entry_type),
             Self::Jsonl(storage) => storage.find_entries(entry_type),
+            Self::Sqlite(storage) => storage.find_entries(entry_type),
         }
     }
 
@@ -779,6 +786,7 @@ impl SessionStorageKind {
         match self {
             Self::InMemory(storage) => storage.label(id),
             Self::Jsonl(storage) => storage.label(id),
+            Self::Sqlite(storage) => storage.label(id),
         }
     }
 
@@ -789,6 +797,7 @@ impl SessionStorageKind {
         match self {
             Self::InMemory(storage) => storage.path_to_root(leaf_id),
             Self::Jsonl(storage) => storage.path_to_root(leaf_id),
+            Self::Sqlite(storage) => storage.path_to_root(leaf_id),
         }
     }
 
@@ -796,6 +805,7 @@ impl SessionStorageKind {
         match self {
             Self::InMemory(storage) => storage.entries(),
             Self::Jsonl(storage) => storage.entries(),
+            Self::Sqlite(storage) => storage.entries(),
         }
     }
 }
@@ -809,6 +819,12 @@ impl From<InMemorySessionStorage> for SessionStorageKind {
 impl From<JsonlSessionStorage> for SessionStorageKind {
     fn from(value: JsonlSessionStorage) -> Self {
         Self::Jsonl(value)
+    }
+}
+
+impl From<super::sqlite_session::SqliteSessionStorage> for SessionStorageKind {
+    fn from(value: super::sqlite_session::SqliteSessionStorage) -> Self {
+        Self::Sqlite(value)
     }
 }
 
@@ -864,20 +880,28 @@ impl Session {
         match &*self.storage.lock() {
             SessionStorageKind::InMemory(storage) => storage.metadata().id.clone(),
             SessionStorageKind::Jsonl(storage) => storage.metadata().id.clone(),
+            SessionStorageKind::Sqlite(storage) => storage.metadata().id.clone(),
         }
     }
 
     pub fn in_memory_metadata(&self) -> Option<SessionMetadata> {
         match &*self.storage.lock() {
             SessionStorageKind::InMemory(storage) => Some(storage.metadata().clone()),
-            SessionStorageKind::Jsonl(_) => None,
+            _ => None,
         }
     }
 
     pub fn jsonl_metadata(&self) -> Option<JsonlSessionMetadata> {
         match &*self.storage.lock() {
-            SessionStorageKind::InMemory(_) => None,
             SessionStorageKind::Jsonl(storage) => Some(storage.metadata().clone()),
+            _ => None,
+        }
+    }
+
+    pub fn sqlite_metadata(&self) -> Option<super::sqlite_session::SqliteSessionMetadata> {
+        match &*self.storage.lock() {
+            SessionStorageKind::Sqlite(storage) => Some(storage.metadata().clone()),
+            _ => None,
         }
     }
 
@@ -1738,14 +1762,17 @@ fn append_context_message(messages: &mut Vec<SessionMessage>, entry: &SessionTre
     }
 }
 
-fn leaf_id_after_entry(entry: &SessionTreeEntry) -> Option<String> {
+pub(crate) fn leaf_id_after_entry(entry: &SessionTreeEntry) -> Option<String> {
     match entry {
         SessionTreeEntry::Leaf { target_id, .. } => target_id.clone(),
         _ => Some(entry.id().to_owned()),
     }
 }
 
-fn update_label_cache(labels_by_id: &mut BTreeMap<String, String>, entry: &SessionTreeEntry) {
+pub(crate) fn update_label_cache(
+    labels_by_id: &mut BTreeMap<String, String>,
+    entry: &SessionTreeEntry,
+) {
     let SessionTreeEntry::Label {
         target_id, label, ..
     } = entry
@@ -1763,7 +1790,7 @@ fn update_label_cache(labels_by_id: &mut BTreeMap<String, String>, entry: &Sessi
     }
 }
 
-fn build_labels_by_id(entries: &[SessionTreeEntry]) -> BTreeMap<String, String> {
+pub(crate) fn build_labels_by_id(entries: &[SessionTreeEntry]) -> BTreeMap<String, String> {
     let mut labels = BTreeMap::new();
     for entry in entries {
         update_label_cache(&mut labels, entry);
@@ -1790,7 +1817,7 @@ fn normalize_session_name(name: &str) -> String {
     result.trim().to_owned()
 }
 
-fn generate_entry_id(by_id: &BTreeMap<String, SessionTreeEntry>) -> String {
+pub(crate) fn generate_entry_id(by_id: &BTreeMap<String, SessionTreeEntry>) -> String {
     for _ in 0..100 {
         // The uuidv7 prefix is timestamp-derived and nearly constant between
         // calls, so short ids must come from the random tail.
@@ -1803,7 +1830,7 @@ fn generate_entry_id(by_id: &BTreeMap<String, SessionTreeEntry>) -> String {
     uuidv7()
 }
 
-fn validate_leaf(
+pub(crate) fn validate_leaf(
     by_id: &BTreeMap<String, SessionTreeEntry>,
     leaf_id: Option<&str>,
 ) -> Result<(), SessionError> {
@@ -1818,7 +1845,7 @@ fn validate_leaf(
     Ok(())
 }
 
-fn validate_existing_leaf(
+pub(crate) fn validate_existing_leaf(
     by_id: &BTreeMap<String, SessionTreeEntry>,
     leaf_id: Option<&str>,
 ) -> Result<(), SessionError> {
@@ -1833,7 +1860,7 @@ fn validate_existing_leaf(
     Ok(())
 }
 
-fn get_path_to_root(
+pub(crate) fn get_path_to_root(
     by_id: &BTreeMap<String, SessionTreeEntry>,
     leaf_id: Option<&str>,
 ) -> Result<Vec<SessionTreeEntry>, SessionError> {
@@ -2064,11 +2091,11 @@ impl WithCause for SessionError {
     }
 }
 
-fn storage_error(error: impl Display) -> SessionError {
+pub(crate) fn storage_error(error: impl Display) -> SessionError {
     SessionError::new(SessionErrorCode::Storage, error.to_string())
 }
 
-fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
