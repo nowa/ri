@@ -206,3 +206,22 @@ pub fn compat_models() -> Models {
         .get_or_init(|| builtin_models(CreateModelsOptions::default()))
         .clone()
 }
+
+/// All built-in image-generation providers, freshly constructed.
+pub fn builtin_images_providers() -> Vec<Arc<dyn crate::images_models::ImagesProvider>> {
+    let mut options = crate::images_models::CreateImagesProviderOptions::new(
+        "openrouter",
+        builtin_provider_auth("openrouter"),
+    );
+    options.models = crate::image_models::get_image_models("openrouter");
+    vec![crate::images_models::create_images_provider(options)]
+}
+
+/// An `ImagesModels` collection with every built-in image provider registered.
+pub fn builtin_images_models(options: CreateModelsOptions) -> crate::images_models::ImagesModels {
+    let models = crate::images_models::create_images_models(options);
+    for provider in builtin_images_providers() {
+        models.set_provider(provider);
+    }
+    models
+}

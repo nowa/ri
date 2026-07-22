@@ -26960,3 +26960,333 @@ async fn compat_stream_routes_builtin_models_through_runtime_and_respects_overri
     unregister_api_providers("compat-routing-test");
     ensure_builtin_api_providers();
 }
+
+mod images_models_runtime {
+    use async_trait::async_trait;
+    use ri_llm_provider::auth::{
+        ApiKeyAuth, ApiKeyCredential, AuthContext, AuthResolutionOverrides, AuthResult, ModelAuth,
+        ModelsErrorCode, ProviderAuth,
+    };
+    use ri_llm_provider::{
+        AssistantImages, CreateImagesProviderOptions, CreateModelsOptions, ImagesApiProvider,
+        ImagesContent, ImagesContext, ImagesModel, ImagesOptions, ImagesStopReason, InputKind,
+        ModelCost, OutputKind, ProviderError, builtin_images_models, create_images_models,
+        create_images_provider, now_millis,
+    };
+    use std::collections::BTreeMap;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct FakeAuthContext {
+        env: BTreeMap<String, String>,
+    }
+
+    #[async_trait]
+    impl AuthContext for FakeAuthContext {
+        async fn env(&self, name: &str) -> Option<String> {
+            self.env.get(name).cloned()
+        }
+        async fn file_exists(&self, _path: &str) -> bool {
+            false
+        }
+    }
+
+    struct EnvKeyAuth {
+        env_var: Option<String>,
+    }
+
+    #[async_trait]
+    impl ApiKeyAuth for EnvKeyAuth {
+        fn name(&self) -> &str {
+            "Test key"
+        }
+        async fn resolve(
+            &self,
+            ctx: &dyn AuthContext,
+            credential: Option<&ApiKeyCredential>,
+        ) -> Result<Option<AuthResult>, String> {
+            let Some(env_var) = &self.env_var else {
+                return Ok(Some(AuthResult::default()));
+            };
+            let stored = credential.and_then(|credential| credential.key.clone());
+            let key = match stored {
+                Some(key) => Some(key),
+                None => ctx.env(env_var).await,
+            };
+            Ok(key.map(|key| AuthResult {
+                auth: ModelAuth {
+                    api_key: Some(key),
+                    ..Default::default()
+                },
+                env: BTreeMap::from([("IMAGES_SCOPED".to_owned(), "from-auth".to_owned())]),
+                source: Some(env_var.clone()),
+            }))
+        }
+    }
+
+    fn test_image_model(provider: &str, id: &str) -> ImagesModel {
+        ImagesModel {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            api: "test-images".to_owned(),
+            provider: provider.to_owned(),
+            base_url: "https://example.test/v1".to_owned(),
+            input: vec![InputKind::Text],
+            output: vec![OutputKind::Image],
+            cost: ModelCost::default(),
+            headers: BTreeMap::new(),
+        }
+    }
+
+    fn ok_result(model: &ImagesModel) -> AssistantImages {
+        AssistantImages {
+            api: model.api.clone(),
+            provider: model.provider.clone(),
+            model: model.id.clone(),
+            output: vec![ImagesContent::Image(ri_llm_provider::ImageContent {
+                data: "aGk=".to_owned(),
+                mime_type: "image/png".to_owned(),
+            })],
+            response_id: None,
+            usage: None,
+            stop_reason: ImagesStopReason::Stop,
+            error_message: None,
+            timestamp: now_millis(),
+        }
+    }
+
+    struct RecordingApi {
+        calls: Arc<Mutex<Vec<(ImagesModel, ImagesOptions)>>>,
+    }
+
+    #[async_trait]
+    impl ImagesApiProvider for RecordingApi {
+        fn api(&self) -> &str {
+            "test-images"
+        }
+        async fn generate_images(
+            &self,
+            model: &ImagesModel,
+            _context: ImagesContext,
+            options: ImagesOptions,
+        ) -> Result<AssistantImages, ProviderError> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push((model.clone(), options));
+            Ok(ok_result(model))
+        }
+    }
+
+    fn test_context() -> ImagesContext {
+        ImagesContext {
+            input: vec![ImagesContent::text("a red circle")],
+        }
+    }
+
+    fn provider_with(
+        id: &str,
+        env_var: Option<&str>,
+        calls: Arc<Mutex<Vec<(ImagesModel, ImagesOptions)>>>,
+    ) -> Arc<dyn ri_llm_provider::ImagesProvider> {
+        let mut options = CreateImagesProviderOptions::new(
+            id,
+            ProviderAuth {
+                api_key: Some(Arc::new(EnvKeyAuth {
+                    env_var: env_var.map(ToOwned::to_owned),
+                })),
+                oauth: None,
+            },
+        );
+        options.models = vec![test_image_model(id, "model-a")];
+        options.api = Some(Arc::new(RecordingApi { calls }));
+        create_images_provider(options)
+    }
+
+    fn models_with_env(env: &[(&str, &str)]) -> ri_llm_provider::ImagesModels {
+        create_images_models(CreateModelsOptions {
+            auth_context: Some(Arc::new(FakeAuthContext {
+                env: env
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                    .collect(),
+            })),
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn registers_providers_and_reads_models_synchronously() {
+        let models = models_with_env(&[]);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        models.set_provider(provider_with("one", None, calls.clone()));
+        models.set_provider(provider_with("two", None, calls));
+
+        assert_eq!(models.get_providers().len(), 2);
+        assert_eq!(models.get_models(None).len(), 2);
+        assert_eq!(models.get_models(Some("one")).len(), 1);
+        assert!(models.get_model("one", "model-a").is_some());
+        assert!(models.get_model("one", "missing").is_none());
+        models.delete_provider("one");
+        assert_eq!(models.get_providers().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn resolves_auth_and_merges_into_requests_with_explicit_options_winning() {
+        let models = models_with_env(&[("IMAGES_TEST_KEY", "env-key")]);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        models.set_provider(provider_with("img", Some("IMAGES_TEST_KEY"), calls.clone()));
+
+        let model = test_image_model("img", "model-a");
+        let auth = models
+            .get_auth("img", &AuthResolutionOverrides::default())
+            .await
+            .expect("auth")
+            .expect("configured");
+        assert_eq!(auth.auth.api_key.as_deref(), Some("env-key"));
+
+        let result = models
+            .generate_images(&model, test_context(), ImagesOptions::default())
+            .await;
+        assert_eq!(result.stop_reason, ImagesStopReason::Stop);
+        {
+            let calls = calls.lock().expect("calls");
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].1.api_key.as_deref(), Some("env-key"));
+            assert_eq!(
+                calls[0].1.env.get("IMAGES_SCOPED").map(String::as_str),
+                Some("from-auth")
+            );
+        }
+
+        // Explicit options win per field; request env overrides merged env.
+        let explicit = ImagesOptions {
+            api_key: Some("explicit".to_owned()),
+            env: BTreeMap::from([("IMAGES_SCOPED".to_owned(), "explicit".to_owned())]),
+            ..Default::default()
+        };
+        let _ = models
+            .generate_images(&model, test_context(), explicit)
+            .await;
+        let calls = calls.lock().expect("calls");
+        assert_eq!(calls[1].1.api_key.as_deref(), Some("explicit"));
+        assert_eq!(
+            calls[1].1.env.get("IMAGES_SCOPED").map(String::as_str),
+            Some("explicit")
+        );
+    }
+
+    #[tokio::test]
+    async fn returns_error_results_for_unknown_and_unconfigured_providers() {
+        let models = models_with_env(&[]);
+        let model = test_image_model("missing", "model-a");
+        let result = models
+            .generate_images(&model, test_context(), ImagesOptions::default())
+            .await;
+        assert_eq!(result.stop_reason, ImagesStopReason::Error);
+        assert_eq!(
+            result.error_message.as_deref(),
+            Some("Unknown provider: missing")
+        );
+
+        // Unconfigured auth (resolve -> None) still generates: the provider
+        // is invoked without merged auth, mirroring pi.
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        models.set_provider(provider_with("img", Some("UNSET_VAR"), calls.clone()));
+        let model = test_image_model("img", "model-a");
+        let result = models
+            .generate_images(&model, test_context(), ImagesOptions::default())
+            .await;
+        assert_eq!(result.stop_reason, ImagesStopReason::Stop);
+        assert_eq!(calls.lock().expect("calls")[0].1.api_key, None);
+    }
+
+    #[tokio::test]
+    async fn supports_dynamic_providers_via_refresh_with_inflight_dedupe() {
+        let fetch_count = Arc::new(AtomicUsize::new(0));
+        let fetch_count_ref = fetch_count.clone();
+        let mut options = CreateImagesProviderOptions::new(
+            "dynamic",
+            ProviderAuth {
+                api_key: Some(Arc::new(EnvKeyAuth { env_var: None })),
+                oauth: None,
+            },
+        );
+        options.fetch_models = Some(Arc::new(move || {
+            let fetch_count = fetch_count_ref.clone();
+            Box::pin(async move {
+                fetch_count.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                Ok(vec![test_image_model("dynamic", "fetched-model")])
+            })
+        }));
+        let provider = create_images_provider(options);
+        let models = models_with_env(&[]);
+        models.set_provider(provider);
+
+        assert!(models.get_models(Some("dynamic")).is_empty());
+        let (first, second) = tokio::join!(
+            models.refresh(Some("dynamic")),
+            models.refresh(Some("dynamic"))
+        );
+        first.expect("first refresh");
+        second.expect("second refresh");
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1, "in-flight dedupe");
+        assert_eq!(
+            models
+                .get_models(Some("dynamic"))
+                .first()
+                .map(|model| model.id.clone()),
+            Some("fetched-model".to_owned())
+        );
+
+        // A later refresh fetches again.
+        models.refresh(Some("dynamic")).await.expect("re-refresh");
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn wraps_single_provider_refresh_failures_and_keeps_refresh_all_best_effort() {
+        let mut options = CreateImagesProviderOptions::new(
+            "failing",
+            ProviderAuth {
+                api_key: Some(Arc::new(EnvKeyAuth { env_var: None })),
+                oauth: None,
+            },
+        );
+        options.fetch_models = Some(Arc::new(|| Box::pin(async { Err("boom".to_owned()) })));
+        let models = models_with_env(&[]);
+        models.set_provider(create_images_provider(options));
+
+        let error = models
+            .refresh(Some("failing"))
+            .await
+            .expect_err("refresh failure");
+        assert_eq!(error.code, ModelsErrorCode::ModelSource);
+        assert!(
+            error
+                .to_string()
+                .contains("Model refresh failed for failing")
+        );
+
+        models.refresh(None).await.expect("refresh all best-effort");
+        models
+            .refresh(Some("unknown"))
+            .await
+            .expect("unknown is a no-op");
+    }
+
+    #[tokio::test]
+    async fn builtin_images_models_registers_the_openrouter_provider_with_its_catalog() {
+        let models = builtin_images_models(CreateModelsOptions::default());
+        let provider = models.get_provider("openrouter").expect("openrouter");
+        assert!(!provider.get_models().is_empty());
+        assert_eq!(
+            models.get_models(Some("openrouter")).len(),
+            ri_llm_provider::get_image_models("openrouter").len()
+        );
+        assert!(models.get_model("openrouter", "missing-model").is_none());
+    }
+}

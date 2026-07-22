@@ -9,7 +9,7 @@ use std::{
 pub type Api = String;
 pub type ProviderId = String;
 pub type ImagesApi = String;
-pub type ImagesProvider = String;
+pub type ImagesProviderId = String;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -620,6 +620,10 @@ pub struct ImagesOptions {
     pub api_key: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
+    /// Provider-scoped environment values, consulted before the process
+    /// environment for provider configuration.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -642,6 +646,7 @@ impl PartialEq for ImagesOptions {
     fn eq(&self, other: &Self) -> bool {
         self.api_key == other.api_key
             && self.headers == other.headers
+            && self.env == other.env
             && self.timeout_ms == other.timeout_ms
             && self.max_retries == other.max_retries
             && self.max_retry_delay_ms == other.max_retry_delay_ms
@@ -678,7 +683,7 @@ impl ImagesOptions {
 #[serde(rename_all = "camelCase")]
 pub struct AssistantImages {
     pub api: ImagesApi,
-    pub provider: ImagesProvider,
+    pub provider: ImagesProviderId,
     pub model: String,
     #[serde(default)]
     pub output: Vec<ImagesContent>,
@@ -759,7 +764,7 @@ pub struct ImagesModel {
     pub id: String,
     pub name: String,
     pub api: ImagesApi,
-    pub provider: ImagesProvider,
+    pub provider: ImagesProviderId,
     pub base_url: String,
     #[serde(default)]
     pub input: Vec<InputKind>,

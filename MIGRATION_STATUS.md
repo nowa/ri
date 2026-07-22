@@ -2076,6 +2076,19 @@ not part of this pass.
   policy enabling. `BuiltInOAuthAdapter::login` now delegates here, so
   `Models::login` performs real interactive logins for the built-in OAuth
   providers.
+- ImagesModels runtime (pi `images-models.ts`): new `images_models` module
+  with the `ImagesProvider` trait (id/name/auth/model listing/generation),
+  `create_images_provider` (parts provider with shared in-flight refresh
+  dedupe and optional direct api injection, registry dispatch by default)
+  and the `ImagesModels` collection — auth resolved through the shared
+  `auth` substrate and merged into requests (explicit options win per
+  field, headers/env merge per key, auth base URLs override the model);
+  generation never rejects, failures return an error `AssistantImages`.
+  `builtin_images_providers`/`builtin_images_models` register the
+  openrouter catalog provider. `ImagesOptions` gains the provider-scoped
+  `env` map and the `ImagesProvider` string alias was renamed
+  `ImagesProviderId` (matching the earlier `Provider` -> `ProviderId`
+  rename). pi's `images-models` test contracts are ported.
 - Compat stream surface rebuilt over the Models runtime (pi phase 7,
   `compat.ts`): the global `stream`/`stream_simple` now route built-in
   catalog models through the runtime `Provider` from a process-wide
