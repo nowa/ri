@@ -840,7 +840,12 @@ impl ApiProvider for BedrockConverseStreamHttpProvider {
             },
         );
         let mut headers = model.headers.clone();
-        headers.extend(options.stream.headers.clone());
+        // `host` and `x-amz-*` participate in the SigV4 canonical request and
+        // must never be overwritten by caller-supplied headers.
+        headers.extend(options.stream.headers.iter().filter_map(|(name, value)| {
+            let lower = name.to_ascii_lowercase();
+            (!lower.starts_with("x-amz-") && lower != "host").then(|| (name.clone(), value.clone()))
+        }));
         headers
             .entry("accept".to_owned())
             .or_insert_with(|| "application/vnd.amazon.eventstream".to_owned());

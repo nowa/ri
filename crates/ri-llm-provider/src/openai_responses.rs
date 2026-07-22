@@ -189,10 +189,14 @@ pub fn build_openai_responses_default_headers_with_context(
     if let Some(session_id) = session_id.filter(|value| !value.is_empty())
         && cache_retention != CacheRetention::None
     {
-        if send_openai_responses_session_id_header(model) {
-            headers.insert("session_id".to_owned(), session_id.to_owned());
+        if openai_responses_session_affinity_format(model) == "openrouter" {
+            headers.insert("x-session-id".to_owned(), session_id.to_owned());
+        } else {
+            if send_openai_responses_session_id_header(model) {
+                headers.insert("session_id".to_owned(), session_id.to_owned());
+            }
+            headers.insert("x-client-request-id".to_owned(), session_id.to_owned());
         }
-        headers.insert("x-client-request-id".to_owned(), session_id.to_owned());
     }
     headers.extend(option_headers.clone());
     headers
@@ -205,6 +209,22 @@ fn supports_openai_responses_long_cache_retention(model: &Model) -> bool {
         .and_then(|compat| compat.get("supportsLongCacheRetention"))
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+fn openai_responses_session_affinity_format(model: &Model) -> String {
+    model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("sessionAffinityFormat"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            if model.provider == "openrouter" || model.base_url.contains("openrouter.ai") {
+                "openrouter".to_owned()
+            } else {
+                "openai".to_owned()
+            }
+        })
 }
 
 fn send_openai_responses_session_id_header(model: &Model) -> bool {

@@ -1989,6 +1989,21 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Aligned the pi OpenRouter and Bedrock fix batch: session affinity gains a
+  `sessionAffinityFormat` compat (detected from the openrouter provider/base
+  URL) so OpenRouter routes use a single `x-session-id` header while other
+  providers keep the OpenAI-style `session_id`/`x-client-request-id`/
+  `x-session-affinity` triple, in both Completions and Responses header
+  builders (`#6496`). Bedrock: unhandled Converse stop reasons pass through
+  as the assistant error message (`#6598`); blank text blocks are dropped
+  with a `<empty>` placeholder inserted when user or tool-result content
+  would otherwise be empty, and all-blank user messages are no longer skipped
+  (`34719d3f`); inference-profile ARN model ids resolve their region from the
+  ARN ahead of options/env (`8cef3c8d`); caller-supplied headers reach the
+  Converse request but can no longer override `host` or `x-amz-*` SigV4
+  canonical headers (`7619aaef` — ri intentionally keeps its
+  Authorization-header auth path). Verified with
+  `cargo test -p ri-llm-provider --test provider_core` (391 tests).
 - Aligned the pi OpenAI Responses/Codex fix batch: SSE streams that end
   before a terminal response event now fail with "OpenAI Responses stream
   ended before a terminal response event" instead of settling silently, and

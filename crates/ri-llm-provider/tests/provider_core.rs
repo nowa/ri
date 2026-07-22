@@ -13985,16 +13985,18 @@ fn empty_message_conversion_skips_empty_user_blocks_and_empty_assistant_turns() 
         "amazon-bedrock",
         "anthropic.claude-test-v1:0",
     );
-    assert!(
-        build_bedrock_payload(
-            &bedrock_model,
-            &empty_blocks_context,
-            BedrockPayloadOptions::default(),
-        )["messages"]
-            .as_array()
-            .expect("bedrock messages")
-            .is_empty()
-    );
+    // Bedrock rejects blank text blocks, so an all-blank user message becomes
+    // a single "<empty>" placeholder instead of being dropped.
+    let bedrock_messages = build_bedrock_payload(
+        &bedrock_model,
+        &empty_blocks_context,
+        BedrockPayloadOptions::default(),
+    )["messages"]
+        .as_array()
+        .expect("bedrock messages")
+        .clone();
+    assert_eq!(bedrock_messages.len(), 1);
+    assert_eq!(bedrock_messages[0]["content"][0]["text"], json!("<empty>"));
 
     let mistral_model = get_model("mistral", "devstral-medium-latest").expect("mistral model");
     assert!(
@@ -25567,4 +25569,134 @@ async fn builtin_openai_responses_provider_fails_streams_without_terminal_event(
         message.error_message.as_deref(),
         Some("OpenAI Responses stream ended before a terminal response event")
     );
+}
+
+#[test]
+fn openrouter_session_affinity_uses_x_session_id_header() {
+    let mut openrouter = get_model("openrouter", "google/gemini-2.5-flash").expect("model");
+    let mut compat = openrouter
+        .compat
+        .clone()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    compat.insert("sendSessionAffinityHeaders".to_owned(), json!(true));
+    openrouter.compat = Some(Value::Object(compat));
+    let headers = build_openai_completions_default_headers(
+        &openrouter,
+        Some("session-42"),
+        CacheRetention::Short,
+        &BTreeMap::new(),
+    );
+    assert_eq!(
+        headers.get("x-session-id").map(String::as_str),
+        Some("session-42")
+    );
+    assert!(headers.get("session_id").is_none());
+    assert!(headers.get("x-session-affinity").is_none());
+
+    // Non-OpenRouter completions providers keep the OpenAI-style triple when
+    // affinity headers are enabled.
+    let mut plain = Model::faux("openai-completions", "deepseek", "affinity-model");
+    plain.compat = Some(json!({ "sendSessionAffinityHeaders": true }));
+    let headers = build_openai_completions_default_headers(
+        &plain,
+        Some("session-42"),
+        CacheRetention::Short,
+        &BTreeMap::new(),
+    );
+    assert_eq!(
+        headers.get("session_id").map(String::as_str),
+        Some("session-42")
+    );
+    assert_eq!(
+        headers.get("x-session-affinity").map(String::as_str),
+        Some("session-42")
+    );
+}
+
+#[test]
+fn bedrock_arn_model_ids_resolve_region_from_the_arn() {
+    let mut model = Model::faux(
+        "bedrock-converse-stream",
+        "amazon-bedrock",
+        "arn:aws:bedrock:eu-west-3:123456789012:application-inference-profile/example",
+    );
+    model.base_url = "https://bedrock-runtime.us-east-1.amazonaws.com".to_owned();
+    let config = resolve_bedrock_client_config(&model, BedrockClientOptions::default());
+    assert_eq!(config.region.as_deref(), Some("eu-west-3"));
+
+    // Gov-cloud style partitions also match.
+    let mut gov_model = Model::faux(
+        "bedrock-converse-stream",
+        "amazon-bedrock",
+        "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:application-inference-profile/example",
+    );
+    gov_model.base_url = "https://bedrock-runtime.us-east-1.amazonaws.com".to_owned();
+    let config = resolve_bedrock_client_config(&gov_model, BedrockClientOptions::default());
+    assert_eq!(config.region.as_deref(), Some("us-gov-west-1"));
+}
+
+#[test]
+fn bedrock_unhandled_stop_reasons_surface_as_error_messages() {
+    let model = Model::faux(
+        "bedrock-converse-stream",
+        "amazon-bedrock",
+        "anthropic.claude-test-v1:0",
+    );
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, _stream) = assistant_message_event_stream();
+    let mut processor = BedrockConverseStreamProcessor::new();
+    processor
+        .process_event(
+            json!({ "messageStop": { "stopReason": "guardrail_intervened" } }),
+            &mut output,
+            &sender,
+            &model,
+        )
+        .expect("processed");
+    assert_eq!(output.stop_reason, StopReason::Error);
+    assert_eq!(
+        output.error_message.as_deref(),
+        Some("guardrail_intervened")
+    );
+}
+
+#[test]
+fn bedrock_blank_tool_result_text_uses_empty_placeholder() {
+    let model = Model::faux(
+        "bedrock-converse-stream",
+        "amazon-bedrock",
+        "anthropic.claude-test-v1:0",
+    );
+    let mut assistant = empty_assistant_for_model(&model);
+    assistant.content = vec![AssistantContent::ToolCall(ToolCall {
+        id: "call_1".to_owned(),
+        name: "noop".to_owned(),
+        arguments: Map::new(),
+        thought_signature: None,
+    })];
+    assistant.stop_reason = StopReason::ToolUse;
+    let context = Context {
+        system_prompt: None,
+        messages: vec![
+            Message::Assistant(assistant),
+            Message::ToolResult(ToolResultMessage {
+                tool_call_id: "call_1".to_owned(),
+                tool_name: "noop".to_owned(),
+                content: vec![ToolResultContent::text("   ")],
+                details: None,
+                usage: None,
+                is_error: false,
+                added_tool_names: None,
+                timestamp: 0,
+            }),
+        ],
+        tools: Vec::new(),
+    };
+    let payload = build_bedrock_payload(&model, &context, BedrockPayloadOptions::default());
+    let tool_result_content = payload["messages"][1]["content"][0]["toolResult"]["content"]
+        .as_array()
+        .expect("tool result content")
+        .clone();
+    assert_eq!(tool_result_content, vec![json!({ "text": "<empty>" })]);
 }

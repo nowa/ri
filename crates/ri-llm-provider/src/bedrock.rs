@@ -37,7 +37,11 @@ pub fn resolve_bedrock_client_config(
     model: &Model,
     options: BedrockClientOptions,
 ) -> BedrockClientConfig {
-    let configured_region = configured_bedrock_region(&options);
+    // Region resolution: ARN-embedded > explicit option > env vars > default
+    // chain. Inference-profile ARNs embed their region, which avoids
+    // conflicts with AWS_REGION set for other services.
+    let arn_region = bedrock_arn_region(&model.id);
+    let configured_region = arn_region.or_else(|| configured_bedrock_region(&options));
     let has_configured_profile = std::env::var_os("AWS_PROFILE").is_some();
     let endpoint_region = standard_bedrock_endpoint_region(&model.base_url);
     let use_explicit_endpoint = should_use_explicit_bedrock_endpoint(
@@ -100,6 +104,17 @@ pub fn should_use_explicit_bedrock_endpoint(
         return true;
     }
     configured_region.is_none() && !has_configured_profile
+}
+
+fn bedrock_arn_region(model_id: &str) -> Option<String> {
+    static ARN_REGION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^arn:aws(?:-[a-z0-9-]+)?:bedrock:([a-z0-9-]+):")
+            .expect("valid bedrock arn pattern")
+    });
+    ARN_REGION
+        .captures(model_id)
+        .and_then(|captures| captures.get(1))
+        .map(|region| region.as_str().to_owned())
 }
 
 fn configured_bedrock_region(options: &BedrockClientOptions) -> Option<String> {
@@ -867,12 +882,16 @@ impl BedrockConverseStreamProcessor {
         }
 
         if let Some(message_stop) = event.get("messageStop") {
-            output.stop_reason = map_bedrock_stop_reason(
+            let (stop_reason, error_message) = map_bedrock_stop_reason(
                 message_stop
                     .get("stopReason")
                     .and_then(Value::as_str)
                     .unwrap_or_default(),
             );
+            output.stop_reason = stop_reason;
+            if let Some(error_message) = error_message {
+                output.error_message = Some(error_message);
+            }
             return Ok(());
         }
 
@@ -1150,12 +1169,14 @@ fn apply_bedrock_stream_metadata(output: &mut AssistantMessage, model: &Model, e
     calculate_cost(model, &mut output.usage);
 }
 
-fn map_bedrock_stop_reason(reason: &str) -> StopReason {
+fn map_bedrock_stop_reason(reason: &str) -> (StopReason, Option<String>) {
     match reason {
-        "end_turn" | "stop_sequence" => StopReason::Stop,
-        "max_tokens" | "model_context_window_exceeded" => StopReason::Length,
-        "tool_use" => StopReason::ToolUse,
-        _ => StopReason::Error,
+        "end_turn" | "stop_sequence" => (StopReason::Stop, None),
+        "max_tokens" | "model_context_window_exceeded" => (StopReason::Length, None),
+        "tool_use" => (StopReason::ToolUse, None),
+        // Pass unhandled stop reasons through as the error message.
+        "" => (StopReason::Error, None),
+        other => (StopReason::Error, Some(other.to_owned())),
     }
 }
 
@@ -1204,6 +1225,17 @@ fn bedrock_stream_exception_message(event: &Value) -> Option<String> {
     None
 }
 
+const BEDROCK_EMPTY_TEXT_PLACEHOLDER: &str = "<empty>";
+
+fn bedrock_non_blank_text_block(text: &str) -> Option<Value> {
+    (!text.trim().is_empty()).then(|| json!({ "text": text }))
+}
+
+fn bedrock_required_text_block(text: &str) -> Value {
+    bedrock_non_blank_text_block(text)
+        .unwrap_or_else(|| json!({ "text": BEDROCK_EMPTY_TEXT_PLACEHOLDER }))
+}
+
 pub fn convert_bedrock_messages(
     context: &Context,
     model: &Model,
@@ -1219,21 +1251,24 @@ pub fn convert_bedrock_messages(
     while index < transformed_messages.len() {
         match &transformed_messages[index] {
             Message::User(user) => {
-                let content = match &user.content {
-                    UserContentValue::Plain(text) => vec![json!({ "text": text })],
+                // Bedrock rejects blank text blocks; drop them and fall back
+                // to a placeholder when nothing remains.
+                let mut content = match &user.content {
+                    UserContentValue::Plain(text) => vec![bedrock_required_text_block(text)],
                     UserContentValue::Blocks(blocks) => blocks
                         .iter()
-                        .map(|block| match block {
-                            UserContent::Text(text) => json!({ "text": text.text }),
+                        .filter_map(|block| match block {
+                            UserContent::Text(text) => bedrock_non_blank_text_block(&text.text),
                             UserContent::Image(image) => {
-                                json!({ "image": bedrock_image_block(image) })
+                                Some(json!({ "image": bedrock_image_block(image) }))
                             }
                         })
                         .collect(),
                 };
-                if !content.is_empty() {
-                    result.push(json!({ "role": "user", "content": content }));
+                if content.is_empty() {
+                    content.push(json!({ "text": BEDROCK_EMPTY_TEXT_PLACEHOLDER }));
                 }
+                result.push(json!({ "role": "user", "content": content }));
             }
             Message::Assistant(assistant) => {
                 let content = assistant
@@ -1292,16 +1327,21 @@ pub fn convert_bedrock_messages(
                     let Message::ToolResult(tool_result) = &transformed_messages[next] else {
                         break;
                     };
-                    let content = tool_result
+                    let mut content = tool_result
                         .content
                         .iter()
-                        .map(|content| match content {
-                            ToolResultContent::Text(text) => json!({ "text": text.text }),
+                        .filter_map(|content| match content {
+                            ToolResultContent::Text(text) => {
+                                bedrock_non_blank_text_block(&text.text)
+                            }
                             ToolResultContent::Image(image) => {
-                                json!({ "image": bedrock_image_block(image) })
+                                Some(json!({ "image": bedrock_image_block(image) }))
                             }
                         })
                         .collect::<Vec<_>>();
+                    if content.is_empty() {
+                        content.push(json!({ "text": BEDROCK_EMPTY_TEXT_PLACEHOLDER }));
+                    }
                     tool_results.push(json!({
                         "toolResult": {
                             "toolUseId": tool_result.tool_call_id,

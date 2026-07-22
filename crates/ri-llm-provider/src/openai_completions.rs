@@ -460,9 +460,15 @@ pub fn build_openai_completions_default_headers_with_context(
         && cache_retention != CacheRetention::None
         && send_session_affinity_headers(model)
     {
-        headers.insert("session_id".to_owned(), session_id.to_owned());
-        headers.insert("x-client-request-id".to_owned(), session_id.to_owned());
-        headers.insert("x-session-affinity".to_owned(), session_id.to_owned());
+        // OpenRouter routes session affinity through its own x-session-id
+        // header; other providers use the OpenAI-style triple.
+        if session_affinity_format(model) == "openrouter" {
+            headers.insert("x-session-id".to_owned(), session_id.to_owned());
+        } else {
+            headers.insert("session_id".to_owned(), session_id.to_owned());
+            headers.insert("x-client-request-id".to_owned(), session_id.to_owned());
+            headers.insert("x-session-affinity".to_owned(), session_id.to_owned());
+        }
     }
     headers.extend(option_headers.clone());
     headers
@@ -1221,6 +1227,22 @@ fn requires_reasoning_content_on_assistant_messages(model: &Model) -> bool {
 
 fn send_session_affinity_headers(model: &Model) -> bool {
     compat_bool(model, "sendSessionAffinityHeaders")
+}
+
+fn session_affinity_format(model: &Model) -> String {
+    model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("sessionAffinityFormat"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            if model.provider == "openrouter" || model.base_url.contains("openrouter.ai") {
+                "openrouter".to_owned()
+            } else {
+                "openai".to_owned()
+            }
+        })
 }
 
 fn max_tokens_field(model: &Model) -> &'static str {
