@@ -1258,6 +1258,7 @@ fn cerebras_model_metadata_matches_generated_catalog() {
             .map(|model| model.id.as_str())
             .collect::<Vec<_>>(),
         vec![
+            "gemma-4-31b",
             "gpt-oss-120b",
             "llama3.1-8b",
             "qwen-3-235b-a22b-instruct-2507",
@@ -1348,7 +1349,7 @@ fn minimax_model_metadata_matches_generated_catalog() {
                 .iter()
                 .map(|model| model.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["MiniMax-M2.7", "MiniMax-M2.7-highspeed"],
+            vec!["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M3",],
             "{provider} catalog"
         );
 
@@ -1413,6 +1414,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
         vec![
             "codestral-latest",
             "devstral-2512",
+            "devstral-latest",
             "devstral-medium-2507",
             "devstral-medium-latest",
             "devstral-small-2505",
@@ -1435,6 +1437,7 @@ fn mistral_model_metadata_matches_generated_catalog() {
             "mistral-small-2603",
             "mistral-small-latest",
             "open-mistral-7b",
+            "open-mistral-nemo",
             "open-mixtral-8x22b",
             "open-mixtral-8x7b",
             "pixtral-12b",
@@ -2197,7 +2200,9 @@ fn xai_model_metadata_matches_generated_catalog() {
             "grok-4.20-0309-non-reasoning",
             "grok-4.20-0309-reasoning",
             "grok-4.3",
+            "grok-4.5",
             "grok-beta",
+            "grok-build-0.1",
             "grok-code-fast-1",
             "grok-vision-beta",
         ]
@@ -2429,15 +2434,20 @@ fn github_copilot_model_metadata_matches_generated_catalog() {
             .map(|model| model.id.as_str())
             .collect::<Vec<_>>(),
         vec![
+            "claude-fable-5",
             "claude-haiku-4.5",
             "claude-opus-4.5",
             "claude-opus-4.6",
             "claude-opus-4.7",
+            "claude-opus-4.8",
+            "claude-sonnet-4",
             "claude-sonnet-4.5",
             "claude-sonnet-4.6",
+            "claude-sonnet-5",
             "gemini-2.5-pro",
             "gemini-3-flash-preview",
             "gemini-3.1-pro-preview",
+            "gemini-3.5-flash",
             "gpt-4.1",
             "gpt-4o",
             "gpt-5-mini",
@@ -2446,8 +2456,14 @@ fn github_copilot_model_metadata_matches_generated_catalog() {
             "gpt-5.3-codex",
             "gpt-5.4",
             "gpt-5.4-mini",
+            "gpt-5.4-nano",
             "gpt-5.5",
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
             "grok-code-fast-1",
+            "kimi-k2.7-code",
+            "mai-code-1-flash-picker",
         ]
     );
 
@@ -2744,6 +2760,9 @@ fn google_model_metadata_matches_generated_catalog() {
             "gemini-3.1-flash-lite-preview",
             "gemini-3.1-pro-preview",
             "gemini-3.1-pro-preview-customtools",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.6-flash",
             "gemini-flash-latest",
             "gemini-flash-lite-latest",
             "gemini-live-2.5-flash",
@@ -3217,8 +3236,14 @@ fn google_vertex_model_metadata_matches_generated_catalog() {
             "gemini-2.5-pro",
             "gemini-3-flash-preview",
             "gemini-3-pro-preview",
+            "gemini-3.1-flash-lite",
             "gemini-3.1-pro-preview",
             "gemini-3.1-pro-preview-customtools",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.6-flash",
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
         ]
     );
 
@@ -4782,13 +4807,19 @@ fn cloudflare_workers_ai_model_metadata_matches_generated_catalog() {
             .collect::<Vec<_>>(),
         vec![
             "@cf/google/gemma-4-26b-a4b-it",
+            "@cf/ibm-granite/granite-4.0-h-micro",
+            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
             "@cf/meta/llama-4-scout-17b-16e-instruct",
+            "@cf/mistralai/mistral-small-3.1-24b-instruct",
             "@cf/moonshotai/kimi-k2.5",
             "@cf/moonshotai/kimi-k2.6",
+            "@cf/moonshotai/kimi-k2.7-code",
             "@cf/nvidia/nemotron-3-120b-a12b",
             "@cf/openai/gpt-oss-120b",
             "@cf/openai/gpt-oss-20b",
+            "@cf/qwen/qwen3-30b-a3b-fp8",
             "@cf/zai-org/glm-4.7-flash",
+            "@cf/zai-org/glm-5.2",
         ]
     );
 
@@ -5354,7 +5385,12 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
         .collect::<Vec<_>>();
     assert_eq!(
         kimi_model_ids,
-        vec!["kimi-for-coding".to_owned(), "kimi-k2-thinking".to_owned()]
+        vec![
+            "k3".to_owned(),
+            "kimi-for-coding".to_owned(),
+            "kimi-for-coding-highspeed".to_owned(),
+            "kimi-k2-thinking".to_owned(),
+        ]
     );
 
     let kimi_for_coding = get_model("kimi-coding", "kimi-for-coding").expect("kimi for coding");
@@ -27289,4 +27325,37 @@ mod images_models_runtime {
         );
         assert!(models.get_model("openrouter", "missing-model").is_none());
     }
+}
+
+#[test]
+fn generated_catalog_overlay_adds_new_providers_and_models() {
+    // Every provider in the embedded generator output is exposed.
+    for provider in ri_llm_provider::generated_catalog_provider_ids() {
+        assert!(
+            !get_models(&provider).is_empty(),
+            "provider {provider} missing from catalog"
+        );
+    }
+
+    // New providers arrive fully formed from the generated data.
+    let qwen = get_model("qwen-token-plan", "qwen3.5-coder-plus")
+        .or_else(|| get_models("qwen-token-plan").into_iter().next());
+    let qwen = qwen.expect("qwen-token-plan models");
+    assert!(!qwen.base_url.is_empty());
+    assert!(qwen.cost.input >= 0.0);
+
+    // Post-baseline models on existing providers are present with metadata.
+    let k3 = get_model("kimi-coding", "k3").expect("kimi k3");
+    assert!(k3.reasoning);
+    let glm52 = get_model("zai", "glm-5.2").or_else(|| get_model("zai-coding-cn", "glm-5.2"));
+    assert!(glm52.is_some(), "glm-5.2 in catalog");
+
+    // Gateway aliases for the newest Claude models resolve.
+    assert!(get_model("github-copilot", "claude-sonnet-5").is_some());
+    assert!(get_model("github-copilot", "claude-opus-4.8").is_some());
+
+    // The overlay never replaces hand-written entries: the anthropic
+    // opus-4-8 entry keeps ri's asserted metadata.
+    let opus = get_model("anthropic", "claude-opus-4-8").expect("opus 4.8");
+    assert_eq!(opus.context_window, 1_000_000);
 }

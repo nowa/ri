@@ -2076,6 +2076,19 @@ not part of this pass.
   policy enabling. `BuiltInOAuthAdapter::login` now delegates here, so
   `Models::login` performs real interactive logins for the built-in OAuth
   providers.
+- Full catalog refresh via pi's generator pipeline: ran
+  `npm run generate-models` in the pi checkout (models.dev + pi overrides,
+  regenerated 2026-07-23) and embedded the 37 per-provider data JSONs
+  (1108 models) as `models_generated/`. `seed_models()` overlays them under
+  the hand-written seeds — hand-written entries win so existing baselines
+  stay authoritative; everything else (new providers such as
+  qwen-token-plan(-cn), nvidia, ant-ling, moonshotai-cn, minimax-cn,
+  zai-coding-cn; post-baseline models such as Kimi K3, GLM-5.2,
+  MiniMax-M3, grok-4.5/grok-build-0.1, gemini-3.5/3.6, devstral-latest;
+  and gateway aliases including copilot Claude Sonnet 5/Opus 4.8 and the
+  gpt-5.6 family) arrives fully formed from the generated data. Added the
+  pi env-api-key mappings for the new providers and re-baselined the nine
+  per-provider catalog id-list tests to pi-HEAD content.
 - SQLite repo-level fork (pi `SqliteSessionRepo.fork`): forks copy the
   branch selected by `SessionForkOptions` (at/before semantics shared with
   the in-memory and JSONL repos via `entries_to_fork`) into a new session
@@ -2374,14 +2387,10 @@ Alignment; the following upstream increments remain open:
   provider factories, provider-owned auth/`CredentialStore`, `/compat`
   entrypoint, per-provider generated catalogs) — deferred by decision; ri
   still mirrors the pre-0.80 global registry surface.
-- Remaining catalog refresh beyond the targeted overlay (which added
-  Opus 4.8/Sonnet 5/Fable 5, GPT-5.6, adaptive-thinking merges, and
-  `supportsToolSearch`): new providers (Qwen Token Plan, NVIDIA NIM, Ant
-  Ling, Radius/pi-messages, Moonshot CN), gateway aliases for the new
-  models (bedrock/cloudflare/vercel/opencode/copilot Claude aliases,
-  azure/copilot gpt-5.6), Kimi K3, and GLM-5.2. pi's full model data now
-  lives outside its git tree (fetched at build since pi a9f6a315), so a
-  complete refresh needs the generator pipeline or a network fetch.
+- Catalog refresh residue: Radius/pi-messages is the one generated-catalog
+  provider family still absent (its `pi-messages` api has no ri
+  implementation). Regenerating the embedded `models_generated/` data
+  requires re-running pi's generator (network).
 - SQLite storage follow-ups: materialized-state caches
   (`session_materialized`/`entry_materialized`) and `branch_entries`
   acceleration with cursor paging. Deferred deliberately: ri's SQLite

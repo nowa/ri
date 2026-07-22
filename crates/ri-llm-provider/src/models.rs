@@ -200,6 +200,19 @@ fn seed_models() -> BTreeMap<String, BTreeMap<String, Model>> {
             .or_insert_with(BTreeMap::new)
             .insert((*id).to_owned(), model);
     }
+    // Overlay the embedded generator output: models the hand-written seeds do
+    // not cover arrive fully formed from pi's generated catalog (new
+    // providers, gateway aliases, and post-baseline model additions).
+    for (provider, models) in crate::models_generated::generated_catalog() {
+        let entry = registry
+            .entry(provider.clone())
+            .or_insert_with(BTreeMap::new);
+        for model in models {
+            entry
+                .entry(model.id.clone())
+                .or_insert_with(|| model.clone());
+        }
+    }
     registry
 }
 
