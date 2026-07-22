@@ -1438,7 +1438,7 @@ pub struct JsonlSessionForkOptions {
     pub fork: SessionForkOptions,
 }
 
-fn entries_to_fork(
+pub(crate) fn entries_to_fork(
     storage: &SessionStorageKind,
     options: &SessionForkOptions,
 ) -> Result<Vec<SessionTreeEntry>, SessionError> {

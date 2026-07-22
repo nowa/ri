@@ -2076,6 +2076,11 @@ not part of this pass.
   policy enabling. `BuiltInOAuthAdapter::login` now delegates here, so
   `Models::login` performs real interactive logins for the built-in OAuth
   providers.
+- SQLite repo-level fork (pi `SqliteSessionRepo.fork`): forks copy the
+  branch selected by `SessionForkOptions` (at/before semantics shared with
+  the in-memory and JSONL repos via `entries_to_fork`) into a new session
+  row, defaulting `parent_session_id` to the source id and inheriting the
+  source metadata; invalid fork targets are rejected.
 - ImagesModels runtime (pi `images-models.ts`): new `images_models` module
   with the `ImagesProvider` trait (id/name/auth/model listing/generation),
   `create_images_provider` (parts provider with shared in-flight refresh
@@ -2378,9 +2383,11 @@ Alignment; the following upstream increments remain open:
   lives outside its git tree (fetched at build since pi a9f6a315), so a
   complete refresh needs the generator pipeline or a network fetch.
 - SQLite storage follow-ups: materialized-state caches
-  (`session_materialized`/`entry_materialized`), `branch_entries`
-  acceleration and cursor paging, and repo-level fork (schema already in
-  place).
+  (`session_materialized`/`entry_materialized`) and `branch_entries`
+  acceleration with cursor paging. Deferred deliberately: ri's SQLite
+  storage keeps the full entry set in an in-memory mirror (like the JSONL
+  backend), so the caches only pay off once ri adopts pi's lazy
+  cursor-based reads; the schema tables are already in place.
 - Codex zstd SSE request compression (deferred: requires the C-binding
   `zstd` crate; uncompressed bodies remain accepted) and SSE header-timeout
   tuning.

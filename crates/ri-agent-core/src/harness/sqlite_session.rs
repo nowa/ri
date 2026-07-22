@@ -14,9 +14,9 @@
 //! but are not yet populated; reads derive everything from `session_entries`.
 
 use super::session::{
-    SessionError, SessionErrorCode, SessionTreeEntry, build_labels_by_id, generate_entry_id,
-    get_path_to_root, leaf_id_after_entry, now_iso, storage_error, update_label_cache,
-    validate_existing_leaf, validate_leaf,
+    SessionError, SessionErrorCode, SessionForkOptions, SessionStorageKind, SessionTreeEntry,
+    build_labels_by_id, entries_to_fork, generate_entry_id, get_path_to_root, leaf_id_after_entry,
+    now_iso, storage_error, update_label_cache, validate_existing_leaf, validate_leaf,
 };
 use rusqlite::Connection;
 use serde_json::Value;
@@ -55,6 +55,16 @@ pub struct SqliteSessionCreateOptions {
 #[derive(Debug, Clone, Default)]
 pub struct SqliteSessionListOptions {
     pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SqliteSessionForkOptions {
+    pub cwd: String,
+    /// Defaults to the source session id.
+    pub parent_session_id: Option<String>,
+    /// Defaults to the source session's metadata.
+    pub metadata: Option<serde_json::Map<String, Value>>,
+    pub fork: SessionForkOptions,
 }
 
 /// Repository over one SQLite database file containing many sessions.
@@ -193,6 +203,32 @@ impl SqliteSessionRepo {
         rows.into_iter()
             .map(|row| session_row_to_metadata(row, &self.database_path))
             .collect()
+    }
+
+    /// Fork a session: copy the branch selected by `options.fork` into a new
+    /// session row (pi `SqliteSessionRepo.fork`).
+    pub fn fork(
+        &self,
+        source_session_id: &str,
+        options: SqliteSessionForkOptions,
+    ) -> Result<SqliteSessionStorage, SessionError> {
+        let source = self.open(source_session_id)?;
+        let source_metadata = source.metadata().clone();
+        let source_storage = SessionStorageKind::Sqlite(source);
+        let entries = entries_to_fork(&source_storage, &options.fork)?;
+        drop(source_storage);
+        let mut storage = self.create(SqliteSessionCreateOptions {
+            id: options.fork.id.clone(),
+            cwd: options.cwd,
+            parent_session_id: options
+                .parent_session_id
+                .or_else(|| Some(source_metadata.id.clone())),
+            metadata: options.metadata.or(source_metadata.metadata),
+        })?;
+        for entry in entries {
+            storage.append_entry(entry)?;
+        }
+        Ok(storage)
     }
 
     pub fn delete(&self, session_id: &str) -> Result<(), SessionError> {

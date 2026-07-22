@@ -1,6 +1,6 @@
 use ri_agent_core::harness::{
     Session, SessionEntryMessage, SessionTreeEntry, SqliteSessionCreateOptions,
-    SqliteSessionListOptions, SqliteSessionRepo, apply_sqlite_migrations,
+    SqliteSessionForkOptions, SqliteSessionListOptions, SqliteSessionRepo, apply_sqlite_migrations,
     sqlite_applied_migration_ids,
 };
 use ri_llm_provider::{Message, UserContentValue, UserMessage};
@@ -294,5 +294,95 @@ fn sqlite_storage_backs_session_context_builds() {
     // The same session is visible through a fresh repo handle.
     let reopened = repo.open("session-context").expect("reopen");
     assert_eq!(reopened.entries().len(), 1);
+    cleanup(&path);
+}
+
+#[test]
+fn sqlite_fork_copies_branch_and_inherits_metadata() {
+    let path = temp_database_path("fork");
+    let repo = SqliteSessionRepo::new(&path);
+    let mut source = repo
+        .create(SqliteSessionCreateOptions {
+            id: Some("session-source".to_owned()),
+            cwd: "/tmp/project".to_owned(),
+            metadata: Some(
+                serde_json::json!({ "name": "origin" })
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            ),
+            ..Default::default()
+        })
+        .expect("create source");
+    source
+        .append_entry(message_entry("aaaa", None, "hello"))
+        .expect("append root");
+    source
+        .append_entry(message_entry("bbbb", Some("aaaa"), "world"))
+        .expect("append child");
+    source
+        .append_entry(message_entry("cccc", Some("bbbb"), "tail"))
+        .expect("append tail");
+    drop(source);
+
+    // Fork at an entry keeps the path up to and including it.
+    let fork = repo
+        .fork(
+            "session-source",
+            SqliteSessionForkOptions {
+                cwd: "/tmp/project".to_owned(),
+                parent_session_id: None,
+                metadata: None,
+                fork: ri_agent_core::harness::SessionForkOptions {
+                    entry_id: Some("bbbb".to_owned()),
+                    position: ri_agent_core::harness::ForkPosition::At,
+                    id: Some("session-fork".to_owned()),
+                },
+            },
+        )
+        .expect("fork");
+    assert_eq!(fork.metadata().id, "session-fork");
+    assert_eq!(
+        fork.metadata().parent_session_id.as_deref(),
+        Some("session-source")
+    );
+    assert_eq!(
+        fork.metadata()
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get("name")),
+        Some(&serde_json::json!("origin"))
+    );
+    assert_eq!(
+        fork.entries()
+            .iter()
+            .map(SessionTreeEntry::id)
+            .collect::<Vec<_>>(),
+        vec!["aaaa", "bbbb"]
+    );
+    drop(fork);
+
+    // The fork persists independently of the source.
+    let reopened = repo.open("session-fork").expect("reopen fork");
+    assert_eq!(reopened.entries().len(), 2);
+    assert_eq!(reopened.leaf_id().expect("leaf"), Some("bbbb".to_owned()));
+
+    // Unknown fork targets are rejected.
+    let err = repo
+        .fork(
+            "session-source",
+            SqliteSessionForkOptions {
+                cwd: "/tmp/project".to_owned(),
+                parent_session_id: None,
+                metadata: None,
+                fork: ri_agent_core::harness::SessionForkOptions {
+                    entry_id: Some("missing".to_owned()),
+                    position: ri_agent_core::harness::ForkPosition::At,
+                    id: None,
+                },
+            },
+        )
+        .expect_err("invalid fork target");
+    assert!(err.to_string().contains("Entry missing not found"));
     cleanup(&path);
 }
