@@ -516,6 +516,7 @@ async fn compaction_generate_summary_builds_prompt_and_passes_reasoning_options(
         Some(ThinkingLevel::Medium),
         None,
         None,
+        None,
     )
     .await
     .expect("summary");
@@ -561,6 +562,7 @@ async fn compaction_generate_summary_builds_prompt_and_passes_reasoning_options(
         Some(ThinkingLevel::Off),
         None,
         None,
+        None,
     )
     .await
     .expect("off");
@@ -586,6 +588,7 @@ async fn compaction_generate_summary_builds_prompt_and_passes_reasoning_options(
         None,
         None,
         Some(ThinkingLevel::High),
+        None,
         None,
         None,
     )
@@ -620,6 +623,7 @@ async fn compaction_generate_summary_maps_error_and_aborted_results() {
         None,
         None,
         None,
+        None,
     )
     .await
     .expect_err("error");
@@ -644,6 +648,7 @@ async fn compaction_generate_summary_maps_error_and_aborted_results() {
         &aborted_registration.get_model(),
         2_000,
         "test-key",
+        None,
         None,
         None,
         None,
@@ -690,6 +695,7 @@ async fn compaction_compact_returns_summary_details_and_clamps_max_tokens() {
         &preparation,
         &registration.get_model(),
         "test-key",
+        None,
         None,
         None,
         None,
@@ -762,6 +768,7 @@ async fn compaction_compact_maps_history_summary_errors_without_throwing() {
         None,
         None,
         None,
+        None,
     )
     .await
     .expect_err("history summary error");
@@ -779,6 +786,7 @@ async fn compaction_compact_maps_history_summary_errors_without_throwing() {
         },
         &invalid_registration.get_model(),
         "test-key",
+        None,
         None,
         None,
         None,
@@ -827,6 +835,7 @@ async fn compaction_compact_summarizes_split_turn_and_maps_prefix_errors() {
         Some(ThinkingLevel::High),
         None,
         None,
+        None,
     )
     .await
     .expect("split compact");
@@ -861,6 +870,7 @@ async fn compaction_compact_summarizes_split_turn_and_maps_prefix_errors() {
         None,
         None,
         None,
+        None,
     )
     .await
     .expect_err("prefix error");
@@ -879,6 +889,7 @@ async fn compaction_compact_summarizes_split_turn_and_maps_prefix_errors() {
         },
         &invalid_registration.get_model(),
         "test-key",
+        None,
         None,
         None,
         None,
@@ -924,6 +935,7 @@ async fn compaction_compact_maps_aborted_turn_prefix_summary() {
         &preparation,
         &registration.get_model(),
         "test-key",
+        None,
         None,
         None,
         None,
@@ -1086,6 +1098,7 @@ async fn branch_summary_generate_builds_prompt_options_and_file_details() {
         Some(16_384),
         None,
         None,
+        None,
     )
     .await
     .expect("branch summary");
@@ -1131,6 +1144,7 @@ async fn branch_summary_generate_builds_prompt_options_and_file_details() {
         None,
         None,
         None,
+        None,
     )
     .await
     .expect("no content");
@@ -1158,6 +1172,7 @@ async fn branch_summary_generate_replaces_prompt_and_maps_errors() {
         None,
         Some("Use this exact prompt"),
         true,
+        None,
         None,
         None,
         None,
@@ -1195,6 +1210,7 @@ async fn branch_summary_generate_replaces_prompt_and_maps_errors() {
         None,
         None,
         None,
+        None,
     )
     .await
     .expect_err("error");
@@ -1225,6 +1241,7 @@ async fn branch_summary_generate_replaces_prompt_and_maps_errors() {
         None,
         None,
         false,
+        None,
         None,
         None,
         None,

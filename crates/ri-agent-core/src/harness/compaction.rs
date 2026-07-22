@@ -565,12 +565,20 @@ pub async fn complete_simple_with_retries(
     model: &Model,
     context: &Context,
     options: &SimpleStreamOptions,
+    models: Option<&ri_llm_provider::Models>,
     retry: Option<&RetryPolicy>,
     callbacks: Option<&RetryCallbacks>,
 ) -> Result<AssistantMessage, ProviderError> {
     let abort_flag = options.stream.abort_flag.clone();
     retry_assistant_call(
-        || complete_simple(model, context.clone(), options.clone()),
+        || async {
+            match models {
+                Some(models) => Ok(models
+                    .complete_simple(model, context.clone(), options.clone())
+                    .await),
+                None => complete_simple(model, context.clone(), options.clone()).await,
+            }
+        },
         retry,
         abort_flag.as_ref(),
         callbacks,
@@ -595,6 +603,7 @@ pub async fn generate_summary(
     custom_instructions: Option<&str>,
     previous_summary: Option<&str>,
     thinking_level: Option<ThinkingLevel>,
+    models: Option<&ri_llm_provider::Models>,
     retry: Option<&RetryPolicy>,
     callbacks: Option<&RetryCallbacks>,
 ) -> Result<SummaryOutput, CompactionError> {
@@ -608,6 +617,7 @@ pub async fn generate_summary(
         previous_summary,
         thinking_level,
         false,
+        models,
         retry,
         callbacks,
     )
@@ -621,6 +631,7 @@ pub async fn compact(
     headers: Option<BTreeMap<String, String>>,
     custom_instructions: Option<&str>,
     thinking_level: Option<ThinkingLevel>,
+    models: Option<&ri_llm_provider::Models>,
     retry: Option<&RetryPolicy>,
     callbacks: Option<&RetryCallbacks>,
 ) -> Result<CompactionResult, CompactionError> {
@@ -646,6 +657,7 @@ pub async fn compact(
                     custom_instructions,
                     preparation.previous_summary.as_deref(),
                     thinking_level,
+                    models,
                     retry,
                     callbacks,
                 )
@@ -659,6 +671,7 @@ pub async fn compact(
                 api_key,
                 headers,
                 thinking_level,
+                models,
                 retry,
                 callbacks,
             )
@@ -684,6 +697,7 @@ pub async fn compact(
                 custom_instructions,
                 preparation.previous_summary.as_deref(),
                 thinking_level,
+                models,
                 retry,
                 callbacks,
             )
@@ -817,6 +831,7 @@ pub async fn generate_branch_summary(
     custom_instructions: Option<&str>,
     replace_instructions: bool,
     reserve_tokens: Option<u64>,
+    models: Option<&ri_llm_provider::Models>,
     retry: Option<&RetryPolicy>,
     callbacks: Option<&RetryCallbacks>,
 ) -> Result<BranchSummaryResult, BranchSummaryError> {
@@ -868,6 +883,7 @@ pub async fn generate_branch_summary(
             },
             ..Default::default()
         },
+        models,
         retry,
         callbacks,
     )
@@ -1297,6 +1313,7 @@ async fn generate_turn_prefix_summary(
     api_key: String,
     headers: Option<BTreeMap<String, String>>,
     thinking_level: Option<ThinkingLevel>,
+    models: Option<&ri_llm_provider::Models>,
     retry: Option<&RetryPolicy>,
     callbacks: Option<&RetryCallbacks>,
 ) -> Result<SummaryOutput, CompactionError> {
@@ -1310,6 +1327,7 @@ async fn generate_turn_prefix_summary(
         None,
         thinking_level,
         true,
+        models,
         retry,
         callbacks,
     )
@@ -1326,6 +1344,7 @@ async fn generate_summary_with_prompt(
     previous_summary: Option<&str>,
     thinking_level: Option<ThinkingLevel>,
     turn_prefix: bool,
+    models: Option<&ri_llm_provider::Models>,
     retry: Option<&RetryPolicy>,
     callbacks: Option<&RetryCallbacks>,
 ) -> Result<SummaryOutput, CompactionError> {
@@ -1373,6 +1392,7 @@ async fn generate_summary_with_prompt(
         model,
         &context,
         &summary_options(model, max_tokens, api_key, headers, thinking_level),
+        models,
         retry,
         callbacks,
     )

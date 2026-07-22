@@ -1989,6 +1989,21 @@ alignments ported from that window, item by item, newest first. The pi Models
 runtime refactor (v0.80.0) and new provider/model catalogs are intentionally
 not part of this pass.
 
+- Models runtime harness integration (pi phase 6, transitional):
+  `AgentHarnessOptions.models` accepts a `Models` collection. When present it
+  is the harness's stream path (the agent loop's stream provider dispatches
+  through `Models::stream_simple`, so provider auth resolution and API
+  dispatch are runtime-owned) and its auth path (`resolve_summary_auth`
+  resolves compaction/branch-summary credentials through
+  `Models::get_auth_for_model` when no explicit auth provider is
+  configured); compaction and branch summarization complete through
+  `Models::complete_simple` under the same retry policy. When absent the
+  harness falls back to the compat globals — pi made Models required in one
+  step; ri stages the flip to keep the existing suites meaningful until the
+  compat surface is rebuilt over the runtime. Verified by
+  `agent_harness_streams_and_resolves_auth_through_models_runtime`, which
+  runs a prompt and a compaction through an explicit collection whose faux
+  provider is not globally registered.
 - Started the pi v0.80.0 Models runtime refactor (A): the `Provider` string
   alias is renamed `ProviderId`; new `auth` module ports pi `src/auth/*`
   (`Credential`/`ModelAuth`/`AuthResult` data model, `ApiKeyAuth`/`OAuthAuth`

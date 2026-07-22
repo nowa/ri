@@ -5907,3 +5907,47 @@ async fn agent_harness_tool_registry_validates_duplicates_and_persists_active_to
     assert_eq!(updates[0].source, "set");
     registration.unregister();
 }
+
+#[tokio::test]
+async fn agent_harness_streams_and_resolves_auth_through_models_runtime() {
+    // Nothing is registered globally: the faux handle only lives inside the
+    // explicit Models collection, so a successful run proves the harness
+    // streamed and resolved auth through the runtime.
+    let handle = faux_provider(RegisterFauxProviderOptions::default());
+    handle.set_responses(vec![
+        faux_assistant_message("runtime reply", Default::default()).into(),
+        faux_response_factory(|_, _, _, _| {
+            faux_assistant_message("## Goal\nRuntime summary", Default::default())
+        }),
+    ]);
+    let models = create_models(CreateModelsOptions::default());
+    models.set_provider(handle.provider.clone());
+
+    let session = Session::new(InMemorySessionStorage::new());
+    let mut options = AgentHarnessOptions::new(test_env(), session.clone(), handle.get_model());
+    options.models = Some(models);
+    let harness = AgentHarness::new(options);
+
+    let reply = harness.prompt("hello runtime").await.expect("prompt");
+    assert!(reply.content.iter().any(|content| matches!(
+        content,
+        AssistantContent::Text(text) if text.text == "runtime reply"
+    )));
+
+    // Compaction auth also resolves through the Models runtime (no explicit
+    // get_api_key_and_headers provider is configured).
+    let result = harness
+        .compact_session(AgentHarnessCompactionOptions {
+            settings: CompactionThresholdSettings {
+                enabled: true,
+                reserve_tokens: 128,
+                keep_recent_tokens: 1,
+            },
+            custom_instructions: None,
+        })
+        .await
+        .expect("compact")
+        .expect("compaction result");
+    assert!(result.summary.contains("Runtime summary"));
+    assert_eq!(handle.state().call_count(), 2);
+}

@@ -549,6 +549,11 @@ pub struct AgentHarnessOptions {
     pub max_turns: usize,
     /// Retry policy for transient compaction/branch-summary failures.
     pub retry: Option<RetryPolicy>,
+    /// Models runtime used for provider auth resolution and streaming. When
+    /// present it is the harness's stream and auth path; when absent the
+    /// harness falls back to the compat globals (transitional, matching the
+    /// staged pi v0.80.0 migration).
+    pub models: Option<ri_llm_provider::Models>,
 }
 
 impl AgentHarnessOptions {
@@ -570,6 +575,7 @@ impl AgentHarnessOptions {
             tool_execution: ToolExecutionMode::Parallel,
             max_turns: 16,
             retry: None,
+            models: None,
         }
     }
 }
@@ -810,6 +816,7 @@ pub struct AgentHarness {
     tool_execution: Mutex<ToolExecutionMode>,
     max_turns: Mutex<usize>,
     retry: Option<RetryPolicy>,
+    models: Option<ri_llm_provider::Models>,
 }
 
 impl AgentHarness {
@@ -861,6 +868,7 @@ impl AgentHarness {
             tool_execution: Mutex::new(options.tool_execution),
             max_turns: Mutex::new(options.max_turns),
             retry: options.retry,
+            models: options.models,
         }
     }
 
@@ -1430,7 +1438,7 @@ impl AgentHarness {
                 None => {
                     let model = self.get_model();
                     let thinking_level = self.get_thinking_level();
-                    let auth = self.resolve_summary_auth(&model, "compaction")?;
+                    let auth = self.resolve_summary_auth(&model, "compaction").await?;
                     let headers = (!auth.headers.is_empty()).then_some(auth.headers);
                     match compact_prepared_session(
                         &preparation,
@@ -1439,6 +1447,7 @@ impl AgentHarness {
                         headers,
                         options.custom_instructions.as_deref(),
                         (thinking_level != ThinkingLevel::Off).then_some(thinking_level),
+                        self.models.as_ref(),
                         self.retry.as_ref(),
                         Some(&self.retry_callbacks(RetryOperation::Compaction)),
                     )
@@ -1537,7 +1546,8 @@ impl AgentHarness {
                             Some(result) => result,
                             None => {
                                 let model = self.get_model();
-                                let auth = self.resolve_summary_auth(&model, "branch summary")?;
+                                let auth =
+                                    self.resolve_summary_auth(&model, "branch summary").await?;
                                 let headers = (!auth.headers.is_empty()).then_some(auth.headers);
                                 match generate_branch_summary(
                                     &collected.entries,
@@ -1547,6 +1557,7 @@ impl AgentHarness {
                                     summary_options.custom_instructions.as_deref(),
                                     summary_options.replace_instructions,
                                     summary_options.reserve_tokens,
+                                    self.models.as_ref(),
                                     self.retry.as_ref(),
                                     Some(&self.retry_callbacks(RetryOperation::BranchSummary)),
                                 )
@@ -1672,7 +1683,7 @@ impl AgentHarness {
 
             if summary_text.is_none() && options.summarize && !collected.entries.is_empty() {
                 let model = self.get_model();
-                let auth = self.resolve_summary_auth(&model, "branch summary")?;
+                let auth = self.resolve_summary_auth(&model, "branch summary").await?;
                 let headers = (!auth.headers.is_empty()).then_some(auth.headers);
                 let custom_instructions = hook_result
                     .as_ref()
@@ -1690,6 +1701,7 @@ impl AgentHarness {
                     custom_instructions,
                     replace_instructions,
                     options.reserve_tokens,
+                    self.models.as_ref(),
                     self.retry.as_ref(),
                     Some(&self.retry_callbacks(RetryOperation::BranchSummary)),
                 )
@@ -1888,7 +1900,10 @@ impl AgentHarness {
                 hooks: self.context_hooks.clone(),
             })),
             convert_to_llm: None,
-            stream_provider: None,
+            stream_provider: self.models.clone().map(|models| {
+                Arc::new(HarnessModelsStreamProvider { models })
+                    as Arc<dyn crate::types::AgentStreamProvider>
+            }),
             api_key_provider: None,
             prepare_next_turn: Some(Arc::new(HarnessNextTurnPreparer {
                 env: self.env.clone(),
@@ -2036,17 +2051,38 @@ impl AgentHarness {
         Ok(())
     }
 
-    fn resolve_summary_auth(
+    async fn resolve_summary_auth(
         &self,
         model: &Model,
         operation: &'static str,
     ) -> Result<ProviderAuth, AgentHarnessError> {
-        self.get_api_key_and_headers.as_ref().ok_or_else(|| {
-            AgentHarnessError::new(
-                AgentHarnessErrorCode::Auth,
-                format!("No auth available for {operation}"),
-            )
-        })?(model)
+        // An explicit auth provider wins; otherwise the Models runtime is the
+        // auth path.
+        if let Some(get_api_key_and_headers) = self.get_api_key_and_headers.as_ref() {
+            return get_api_key_and_headers(model);
+        }
+        if let Some(models) = &self.models {
+            let resolution = models
+                .get_auth_for_model(model, &Default::default())
+                .await
+                .map_err(|error| {
+                    AgentHarnessError::new(AgentHarnessErrorCode::Auth, error.to_string())
+                })?
+                .ok_or_else(|| {
+                    AgentHarnessError::new(
+                        AgentHarnessErrorCode::Auth,
+                        format!("Provider is not configured: {}", model.provider),
+                    )
+                })?;
+            return Ok(ProviderAuth {
+                api_key: resolution.auth.api_key,
+                headers: resolution.auth.headers,
+            });
+        }
+        Err(AgentHarnessError::new(
+            AgentHarnessErrorCode::Auth,
+            format!("No auth available for {operation}"),
+        ))
     }
 
     fn emit_before_agent_start(
@@ -2803,6 +2839,23 @@ impl AgentToolResultHook for HarnessToolResultHook {
                 is_error: is_error_patched,
             }),
         )
+    }
+}
+
+/// Streams agent-loop requests through a `Models` collection so provider
+/// auth resolution and dispatch are owned by the runtime.
+struct HarnessModelsStreamProvider {
+    models: ri_llm_provider::Models,
+}
+
+impl crate::types::AgentStreamProvider for HarnessModelsStreamProvider {
+    fn stream(
+        &self,
+        model: &Model,
+        context: ri_llm_provider::Context,
+        options: SimpleStreamOptions,
+    ) -> Result<ri_llm_provider::AssistantMessageEventStream, String> {
+        Ok(self.models.stream_simple(model, context, options))
     }
 }
 
