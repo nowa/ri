@@ -26,11 +26,12 @@ The workspace contains the Rust implementation and local test coverage for the
 core pi-ai and pi-agent-core behavior that is practical to verify without live
 provider credentials.
 
-As of the latest local verification, `cargo test --workspace -- --list`
-enumerates 1208 Rust tests: 1001 under `ri-llm-provider` and 207 under
-`ri-agent-core`. Those numbers are tracked in detail in
-[MIGRATION_STATUS.md](MIGRATION_STATUS.md), including why the Rust count is not
-a one-to-one completion proof against the 871 direct source test-case baseline.
+As of the latest local verification, `cargo test --workspace` passes 1469
+Rust tests with 0 failures. Those numbers are tracked in detail in
+[MIGRATION_STATUS.md](MIGRATION_STATUS.md), and a case-by-case parity audit
+against pi HEAD (1179 pi test cases, each classified as covered, gated-live,
+or not-applicable with reasons) lives in
+[docs/TEST_PARITY_AUDIT.md](docs/TEST_PARITY_AUDIT.md).
 
 The test suite covers provider metadata, payload generation, streaming parsers,
 SSE and eventstream behavior, abort handling, response IDs, usage accounting,
@@ -48,14 +49,13 @@ event tests.
 ## Migration Test Accounting
 
 The migration target is pi's LLM provider and agent-core behavior, not every
-test in the pi monorepo. The active source baseline is the direct simple
-`it/test` cases under:
-
-- `packages/ai/test`: 721 cases.
-- `packages/agent/test`: 150 cases.
-
-That 871-case baseline intentionally excludes `packages/coding-agent`, skipped
-source cases, and statically unexpanded `it.each` / `test.each` declarations.
+test in the pi monorepo. The active source baseline is the full
+`packages/ai/test` + `packages/agent/test` case list from pi HEAD — 1179
+cases, enumerated one-by-one in
+[docs/TEST_PARITY_AUDIT.md](docs/TEST_PARITY_AUDIT.md) with a per-case
+verdict (covered, gated live-credential smoke, Node-specific, or out of
+scope with reasons). The baseline intentionally excludes
+`packages/coding-agent`.
 
 Rust test totals must not be used as a one-to-one completion signal. The Rust
 suite currently includes both:
