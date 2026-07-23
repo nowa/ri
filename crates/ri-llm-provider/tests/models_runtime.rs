@@ -1008,3 +1008,45 @@ fn user_context(text: &str) -> Context {
         tools: Vec::new(),
     }
 }
+
+#[tokio::test]
+async fn resolves_stored_copilot_oauth_credentials_including_per_credential_base_url() {
+    let store = Arc::new(InMemoryCredentialStore::new());
+    let access = "tid=test;exp=9999999999;proxy-ep=proxy.enterprise.ghe.com;";
+    store
+        .modify(
+            "github-copilot",
+            Box::new(move |_| {
+                Box::pin(async move {
+                    Ok(Some(Credential::OAuth(OAuthCredential {
+                        refresh: "ghu_refresh".to_owned(),
+                        access: access.to_owned(),
+                        expires: i64::MAX,
+                        extra: serde_json::json!({ "enterpriseUrl": "ghe.example.com" })
+                            .as_object()
+                            .cloned()
+                            .expect("extra"),
+                    })))
+                })
+            }),
+        )
+        .await
+        .expect("store credential");
+    let models = create_models(CreateModelsOptions {
+        credentials: Some(store),
+        ..Default::default()
+    });
+    models.set_provider(builtin_provider("github-copilot").expect("copilot provider"));
+
+    let resolution = models
+        .get_auth("github-copilot", &Default::default())
+        .await
+        .expect("resolve")
+        .expect("configured");
+    assert_eq!(resolution.auth.api_key.as_deref(), Some(access));
+    // The per-credential base URL derives from the token's proxy endpoint.
+    assert_eq!(
+        resolution.auth.base_url.as_deref(),
+        Some("https://api.enterprise.ghe.com")
+    );
+}

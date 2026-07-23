@@ -195,3 +195,20 @@ fn truncate_line_and_format_size_match_harness_helpers() {
     assert_eq!(long.text, "abc... [truncated]");
     assert!(long.was_truncated);
 }
+
+#[test]
+fn truncates_an_oversized_single_line_with_a_trailing_newline() {
+    let input = format!("{}\n", "X".repeat(300_000));
+    let result = truncate_tail(
+        &input,
+        TruncationOptions {
+            max_bytes: 1024,
+            max_lines: 100,
+        },
+    );
+    assert_eq!(result.content, "X".repeat(1024));
+    assert_eq!(result.output_bytes, 1024);
+    assert_eq!(result.output_lines, 1);
+    assert!(result.last_line_partial);
+    assert_eq!(result.truncated_by, Some(TruncatedBy::Bytes));
+}

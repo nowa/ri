@@ -1433,3 +1433,190 @@ fn jsonl_session_header_supports_custom_metadata() {
     let error = JsonlSessionStorage::open(&invalid_path).expect_err("invalid metadata");
     assert!(error.to_string().contains("metadata must be an object"));
 }
+
+fn usage_for_stats(
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+    total: u64,
+    cost_total: f64,
+) -> ri_llm_provider::Usage {
+    ri_llm_provider::Usage {
+        input,
+        output,
+        cache_read,
+        cache_write,
+        cache_write_1h: None,
+        reasoning: None,
+        total_tokens: total,
+        cost: ri_llm_provider::UsageCost {
+            input: 0.0,
+            output: 0.0,
+            cache_read: 0.0,
+            cache_write: 0.0,
+            total: cost_total,
+        },
+    }
+}
+
+fn stats_fixture_entries() -> Vec<SessionTreeEntry> {
+    let assistant = ri_llm_provider::AssistantMessage {
+        content: vec![ri_llm_provider::AssistantContent::Text(
+            ri_llm_provider::TextContent::new("reply"),
+        )],
+        api: "anthropic-messages".to_owned(),
+        provider: "anthropic".to_owned(),
+        model: "claude-sonnet-4-5".to_owned(),
+        response_model: None,
+        response_id: None,
+        diagnostics: Vec::new(),
+        usage: usage_for_stats(10, 20, 30, 40, 100, 1.0),
+        stop_reason: ri_llm_provider::StopReason::Stop,
+        error_message: None,
+        timestamp: 0,
+    };
+    vec![
+        SessionTreeEntry::Message {
+            id: "assistant".to_owned(),
+            parent_id: None,
+            timestamp: "2026-01-01T00:00:00.000Z".to_owned(),
+            message: SessionEntryMessage::Llm(Message::Assistant(assistant)),
+        },
+        SessionTreeEntry::Compaction {
+            id: "compaction".to_owned(),
+            parent_id: Some("assistant".to_owned()),
+            timestamp: "2026-01-01T00:00:01.000Z".to_owned(),
+            summary: "summary".to_owned(),
+            first_kept_entry_id: "assistant".to_owned(),
+            tokens_before: 1234,
+            details: None,
+            usage: Some(usage_for_stats(1, 2, 3, 4, 10, 0.1)),
+            from_hook: None,
+        },
+        SessionTreeEntry::BranchSummary {
+            id: "branch-summary".to_owned(),
+            parent_id: Some("compaction".to_owned()),
+            timestamp: "2026-01-01T00:00:02.000Z".to_owned(),
+            from_id: "assistant".to_owned(),
+            summary: "branch".to_owned(),
+            details: None,
+            usage: Some(usage_for_stats(5, 6, 7, 8, 26, 0.26)),
+            from_hook: None,
+        },
+    ]
+}
+
+#[test]
+fn session_stats_include_summary_entry_usage_across_backends() {
+    let expected = ri_agent_core::harness::SessionStats {
+        message_count: 1,
+        cached_tokens: 40,
+        uncached_tokens: 68,
+        total_tokens: 136,
+        cost_total: 1.36,
+    };
+
+    // In-memory backend.
+    let storage = InMemorySessionStorage::with_options(Some(stats_fixture_entries()), None)
+        .expect("in-memory storage");
+    let kind = SessionStorageKind::InMemory(storage);
+    assert_eq!(kind.session_stats(), expected);
+
+    // JSONL backend.
+    let dir = temp_dir();
+    let file_path = dir.join("session.jsonl");
+    let mut jsonl =
+        JsonlSessionStorage::create(&file_path, dir.to_string_lossy(), "session-1", None)
+            .expect("jsonl storage");
+    for entry in stats_fixture_entries() {
+        jsonl.append_entry(entry).expect("append");
+    }
+    let kind = SessionStorageKind::Jsonl(jsonl);
+    assert_eq!(kind.session_stats(), expected);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn jsonl_header_omits_metadata_when_not_provided() {
+    let dir = temp_dir();
+    let file_path = dir.join("session.jsonl");
+    let storage = JsonlSessionStorage::create(&file_path, dir.to_string_lossy(), "session-1", None)
+        .expect("jsonl storage");
+    drop(storage);
+
+    let header_line = fs::read_to_string(&file_path)
+        .expect("session file")
+        .lines()
+        .next()
+        .expect("header line")
+        .to_owned();
+    let header: serde_json::Value = serde_json::from_str(&header_line).expect("header json");
+    assert!(
+        header.get("metadata").is_none(),
+        "header must omit the metadata key: {header}"
+    );
+    let reopened = JsonlSessionStorage::open(&file_path).expect("reopen");
+    assert_eq!(reopened.metadata().metadata, None);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn jsonl_repo_persists_header_metadata_through_create_list_and_fork() {
+    let dir = temp_dir();
+    let repo = JsonlSessionRepo::new(&dir);
+    let metadata = json!({ "topic": "storage" })
+        .as_object()
+        .cloned()
+        .expect("object");
+    let session = repo
+        .create_with_metadata(
+            "/tmp/project",
+            Some("session-1".to_owned()),
+            None,
+            Some(metadata.clone()),
+        )
+        .expect("create");
+    session.clone();
+
+    let listed = repo.list(Some("/tmp/project")).expect("list");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].metadata.as_ref(), Some(&metadata));
+
+    // Fork inherits the source metadata by default and honors overrides.
+    let inherited = repo
+        .fork(
+            &listed[0],
+            JsonlSessionForkOptions {
+                cwd: "/tmp/project".to_owned(),
+                parent_session_path: None,
+                metadata: None,
+                fork: SessionForkOptions::default(),
+            },
+        )
+        .expect("fork inherit");
+    assert_eq!(
+        inherited.jsonl_metadata().expect("fork metadata").metadata,
+        Some(metadata.clone())
+    );
+    let overridden_metadata = json!({ "topic": "override" })
+        .as_object()
+        .cloned()
+        .expect("object");
+    let overridden = repo
+        .fork(
+            &listed[0],
+            JsonlSessionForkOptions {
+                cwd: "/tmp/project".to_owned(),
+                parent_session_path: None,
+                metadata: Some(overridden_metadata.clone()),
+                fork: SessionForkOptions::default(),
+            },
+        )
+        .expect("fork override");
+    assert_eq!(
+        overridden.jsonl_metadata().expect("fork metadata").metadata,
+        Some(overridden_metadata)
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

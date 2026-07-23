@@ -733,3 +733,38 @@ fn sqlite_open_requires_the_materialized_row() {
         .expect_err("open without materialized row");
     assert!(err.to_string().contains("missing materialized row"));
 }
+
+#[test]
+fn sqlite_append_failure_restores_in_memory_state() {
+    let path = temp_database_path("rollback");
+    let repo = SqliteSessionRepo::new(&path);
+    let mut storage = repo
+        .create(SqliteSessionCreateOptions {
+            id: Some("session-rollback".to_owned()),
+            cwd: "/tmp/project".to_owned(),
+            ..Default::default()
+        })
+        .expect("create");
+    storage
+        .append_entry(message_entry("aaaa", None, "hello"))
+        .expect("append");
+    let stats_before = storage.session_stats();
+    let leaf_before = storage.leaf_id().expect("leaf");
+
+    // A duplicate entry id violates the primary key inside the transaction;
+    // the append must fail and the in-memory state must roll back.
+    let err = storage
+        .append_entry(message_entry("aaaa", Some("aaaa"), "duplicate"))
+        .expect_err("duplicate append");
+    assert!(!err.to_string().is_empty());
+    assert_eq!(storage.leaf_id().expect("leaf"), leaf_before);
+    assert_eq!(storage.session_stats(), stats_before);
+    assert_eq!(storage.entries().len(), 1);
+
+    // The storage still accepts appends afterwards.
+    storage
+        .append_entry(message_entry("bbbb", Some("aaaa"), "world"))
+        .expect("append after rollback");
+    assert_eq!(storage.entries().len(), 2);
+    cleanup(&path);
+}

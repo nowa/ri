@@ -180,6 +180,15 @@ pub fn apply_entry_to_materialized_state(
     }
 }
 
+/// Reduce a full entry list into session statistics (in-memory backends).
+pub fn session_stats_from_entries(entries: &[SessionTreeEntry]) -> SessionStats {
+    let mut state = SessionMaterializedState::default();
+    for entry in entries {
+        apply_entry_to_materialized_state(&mut state, entry);
+    }
+    session_stats_from_materialized_state(&state)
+}
+
 pub fn session_stats_from_materialized_state(state: &SessionMaterializedState) -> SessionStats {
     SessionStats {
         message_count: state.message_count,

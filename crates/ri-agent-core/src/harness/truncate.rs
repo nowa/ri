@@ -142,7 +142,12 @@ pub fn truncate_tail(content: &str, options: TruncationOptions) -> TruncationRes
     let max_lines = options.max_lines;
     let max_bytes = options.max_bytes;
     let total_bytes = utf8_byte_len(content);
-    let lines = content.split('\n').collect::<Vec<_>>();
+    let mut lines = content.split('\n').collect::<Vec<_>>();
+    // A trailing newline produces an empty final segment; it is not a line
+    // (pi pops it before truncating the tail).
+    if lines.len() > 1 && lines.last() == Some(&"") {
+        lines.pop();
+    }
     let total_lines = lines.len();
 
     if total_lines <= max_lines && total_bytes <= max_bytes {

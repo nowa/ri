@@ -28035,3 +28035,47 @@ mod catalog_generator {
         assert_eq!(parsed["claude-known"], models[0]);
     }
 }
+
+#[test]
+fn content_text_helpers_extract_and_join_text_blocks() {
+    let content = vec![
+        AssistantContent::Thinking(ThinkingContent::new("reasoning")),
+        AssistantContent::Text(TextContent::new("first")),
+        AssistantContent::ToolCall(ToolCall {
+            id: "1".to_owned(),
+            name: "read".to_owned(),
+            arguments: Map::new(),
+            thought_signature: None,
+        }),
+        AssistantContent::Text(TextContent::new("second")),
+    ];
+    // Extracts assistant text blocks with the default newline separator.
+    assert_eq!(assistant_content_text(&content, "\n"), "first\nsecond");
+    // Supports custom separators.
+    assert_eq!(assistant_content_text(&content, ""), "firstsecond");
+
+    // Extracts text from tool-result content, skipping images.
+    let tool_result_blocks = vec![
+        ToolResultContent::Text(TextContent::new("first")),
+        ToolResultContent::Image(ImageContent {
+            data: "...".to_owned(),
+            mime_type: "image/png".to_owned(),
+        }),
+        ToolResultContent::Text(TextContent::new("second")),
+    ];
+    assert_eq!(
+        tool_result_content_text(&tool_result_blocks, ""),
+        "firstsecond"
+    );
+
+    // User content blocks follow the same contract.
+    let user_blocks = vec![
+        UserContent::Text(TextContent::new("first")),
+        UserContent::Image(ImageContent {
+            data: "...".to_owned(),
+            mime_type: "image/png".to_owned(),
+        }),
+        UserContent::Text(TextContent::new("second")),
+    ];
+    assert_eq!(user_content_text(&user_blocks, "\n"), "first\nsecond");
+}

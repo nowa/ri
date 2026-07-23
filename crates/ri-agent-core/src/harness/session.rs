@@ -823,6 +823,21 @@ impl SessionStorageKind {
         }
     }
 
+    /// Aggregated session statistics (pi `getSessionStats`): the SQLite
+    /// backend answers from its materialized state; the in-memory backends
+    /// reduce their entries on demand.
+    pub fn session_stats(&self) -> super::sqlite_session::SessionStats {
+        match self {
+            Self::InMemory(storage) => {
+                super::sqlite_session::session_stats_from_entries(&storage.entries())
+            }
+            Self::Jsonl(storage) => {
+                super::sqlite_session::session_stats_from_entries(&storage.entries())
+            }
+            Self::Sqlite(storage) => storage.session_stats(),
+        }
+    }
+
     /// The path from the root to `leaf_id`, stopping at compaction
     /// boundaries and excluding leaf navigation markers (pi
     /// `getPathToRootOrCompaction`). The SQLite backend answers the active

@@ -5951,3 +5951,166 @@ async fn agent_harness_streams_and_resolves_auth_through_models_runtime() {
     assert!(result.summary.contains("Runtime summary"));
     assert_eq!(handle.state().call_count(), 2);
 }
+
+#[tokio::test]
+async fn agent_harness_retries_transient_branch_summary_errors_and_emits_retry_events() {
+    let mut definition = FauxModelDefinition::new("retry-branch-model");
+    definition.max_tokens = 8_192;
+    let registration = register_faux_provider(RegisterFauxProviderOptions {
+        models: vec![definition],
+        ..Default::default()
+    });
+    registration.set_responses(vec![
+        faux_response_factory(|_, _, _, _| {
+            faux_assistant_message(
+                "",
+                FauxAssistantOptions {
+                    stop_reason: Some(StopReason::Error),
+                    error_message: Some("terminated".to_owned()),
+                    ..Default::default()
+                },
+            )
+        }),
+        faux_response_factory(|_, _, _, _| {
+            faux_assistant_message("Recovered branch summary", Default::default())
+        }),
+    ]);
+
+    let mut session = Session::new(InMemorySessionStorage::new());
+    let anchor = session
+        .append_message(Message::User(UserMessage::text("main path")))
+        .expect("append anchor");
+    session
+        .append_message(Message::User(UserMessage::text("branch work")))
+        .expect("append branch");
+
+    let mut options =
+        AgentHarnessOptions::new(test_env(), session.clone(), registration.get_model());
+    options.get_api_key_and_headers = Some(Arc::new(|_| {
+        Ok(ProviderAuth {
+            api_key: Some("retry-key".to_owned()),
+            headers: BTreeMap::new(),
+        })
+    }));
+    options.retry = Some(RetryPolicy {
+        enabled: true,
+        max_retries: 1,
+        base_delay_ms: 0,
+    });
+    let harness = AgentHarness::new(options);
+    let retry_events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let retry_events_ref = retry_events.clone();
+    harness.subscribe(move |event| {
+        if let AgentHarnessEvent::Retry(retry_event) = event {
+            retry_events_ref
+                .lock()
+                .expect("events")
+                .push(match retry_event {
+                    RetryEvent::Scheduled { operation, .. } => {
+                        format!("retry_scheduled:{operation:?}")
+                    }
+                    RetryEvent::AttemptStart { operation } => {
+                        format!("retry_attempt:{operation:?}")
+                    }
+                    RetryEvent::Finished { operation } => format!("retry_finished:{operation:?}"),
+                });
+        }
+    });
+
+    let result = harness
+        .move_session_to(
+            Some(anchor),
+            AgentHarnessMoveSessionOptions {
+                branch_summary: Some(AgentHarnessBranchSummaryOptions::default()),
+            },
+        )
+        .await
+        .expect("move")
+        .expect("branch summary");
+    // The persisted branch summary carries the standard exploration preamble.
+    assert!(result.summary.ends_with("Recovered branch summary"));
+    let events = retry_events.lock().expect("events").clone();
+    assert!(
+        events
+            .iter()
+            .any(|event| event == "retry_scheduled:BranchSummary"),
+        "expected BranchSummary retry schedule, got {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event == "retry_finished:BranchSummary"),
+        "expected BranchSummary retry finish, got {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn agent_harness_persists_hook_provided_branch_summary_usage() {
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    let mut session = Session::new(InMemorySessionStorage::new());
+    let anchor = session
+        .append_message(Message::User(UserMessage::text("main path")))
+        .expect("append anchor");
+    session
+        .append_message(Message::User(UserMessage::text("branch work")))
+        .expect("append branch");
+
+    let harness = AgentHarness::new(AgentHarnessOptions::new(
+        test_env(),
+        session.clone(),
+        registration.get_model(),
+    ));
+    let hook_usage = Usage {
+        input: 11,
+        output: 22,
+        cache_read: 33,
+        cache_write: 44,
+        cache_write_1h: None,
+        reasoning: None,
+        total_tokens: 110,
+        cost: UsageCost {
+            input: 0.1,
+            output: 0.2,
+            cache_read: 0.3,
+            cache_write: 0.4,
+            total: 1.0,
+        },
+    };
+    let hook_usage_for_hook = hook_usage.clone();
+    harness.on_session_before_branch_summary(move |_| {
+        Ok(Some(SessionBeforeBranchSummaryResult {
+            skip_summary: false,
+            summary: Some(BranchSummaryResult {
+                summary: "Hook branch summary".to_owned(),
+                read_files: Vec::new(),
+                modified_files: Vec::new(),
+                usage: Some(hook_usage_for_hook.clone()),
+            }),
+        }))
+    });
+
+    let result = harness
+        .move_session_to(
+            Some(anchor),
+            AgentHarnessMoveSessionOptions {
+                branch_summary: Some(AgentHarnessBranchSummaryOptions::default()),
+            },
+        )
+        .await
+        .expect("move")
+        .expect("branch summary");
+    assert_eq!(result.summary, "Hook branch summary");
+    let persisted = session
+        .entries()
+        .into_iter()
+        .find_map(|entry| match entry {
+            SessionTreeEntry::BranchSummary { usage, summary, .. }
+                if summary == "Hook branch summary" =>
+            {
+                Some(usage)
+            }
+            _ => None,
+        })
+        .expect("branch summary entry");
+    assert_eq!(persisted, Some(hook_usage));
+}
