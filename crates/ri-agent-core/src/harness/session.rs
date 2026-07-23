@@ -537,8 +537,8 @@ impl InMemorySessionStorage {
         self.entries.push(entry);
     }
 
-    pub fn get_entry(&self, id: &str) -> Option<&SessionTreeEntry> {
-        self.by_id.get(id)
+    pub fn get_entry(&self, id: &str) -> Option<SessionTreeEntry> {
+        self.by_id.get(id).cloned()
     }
 
     pub fn find_entries(&self, entry_type: &str) -> Vec<SessionTreeEntry> {
@@ -549,8 +549,8 @@ impl InMemorySessionStorage {
             .collect()
     }
 
-    pub fn label(&self, id: &str) -> Option<&str> {
-        self.labels_by_id.get(id).map(String::as_str)
+    pub fn label(&self, id: &str) -> Option<String> {
+        self.labels_by_id.get(id).cloned()
     }
 
     pub fn path_to_root(
@@ -695,8 +695,8 @@ impl JsonlSessionStorage {
         Ok(())
     }
 
-    pub fn get_entry(&self, id: &str) -> Option<&SessionTreeEntry> {
-        self.by_id.get(id)
+    pub fn get_entry(&self, id: &str) -> Option<SessionTreeEntry> {
+        self.by_id.get(id).cloned()
     }
 
     pub fn find_entries(&self, entry_type: &str) -> Vec<SessionTreeEntry> {
@@ -707,8 +707,8 @@ impl JsonlSessionStorage {
             .collect()
     }
 
-    pub fn label(&self, id: &str) -> Option<&str> {
-        self.labels_by_id.get(id).map(String::as_str)
+    pub fn label(&self, id: &str) -> Option<String> {
+        self.labels_by_id.get(id).cloned()
     }
 
     pub fn path_to_root(
@@ -766,7 +766,7 @@ impl SessionStorageKind {
         }
     }
 
-    pub fn get_entry(&self, id: &str) -> Option<&SessionTreeEntry> {
+    pub fn get_entry(&self, id: &str) -> Option<SessionTreeEntry> {
         match self {
             Self::InMemory(storage) => storage.get_entry(id),
             Self::Jsonl(storage) => storage.get_entry(id),
@@ -782,7 +782,7 @@ impl SessionStorageKind {
         }
     }
 
-    pub fn label(&self, id: &str) -> Option<&str> {
+    pub fn label(&self, id: &str) -> Option<String> {
         match self {
             Self::InMemory(storage) => storage.label(id),
             Self::Jsonl(storage) => storage.label(id),
@@ -808,6 +808,108 @@ impl SessionStorageKind {
             Self::Sqlite(storage) => storage.entries(),
         }
     }
+
+    /// Cursor-paged entry listing (pi `SessionEntryCursorOptions`): up to
+    /// `limit` entries whose 1-based sequence number is at or before
+    /// `after_entry_seq` (default: the latest entry), in ascending order.
+    pub fn entries_page(
+        &self,
+        options: &SessionEntryCursorOptions,
+    ) -> Result<Vec<SessionTreeEntry>, SessionError> {
+        match self {
+            Self::InMemory(storage) => Ok(page_in_memory_entries(&storage.entries(), options)),
+            Self::Jsonl(storage) => Ok(page_in_memory_entries(&storage.entries(), options)),
+            Self::Sqlite(storage) => storage.entries_page(options),
+        }
+    }
+
+    /// The path from the root to `leaf_id`, stopping at compaction
+    /// boundaries and excluding leaf navigation markers (pi
+    /// `getPathToRootOrCompaction`). The SQLite backend answers the active
+    /// leaf from the materialized branch table.
+    pub fn path_to_root_or_compaction(
+        &self,
+        leaf_id: Option<&str>,
+    ) -> Result<Vec<SessionTreeEntry>, SessionError> {
+        match self {
+            Self::InMemory(storage) => {
+                get_path_to_root_or_compaction(|id| storage.get_entry(id), leaf_id)
+            }
+            Self::Jsonl(storage) => {
+                get_path_to_root_or_compaction(|id| storage.get_entry(id), leaf_id)
+            }
+            Self::Sqlite(storage) => storage.path_to_root_or_compaction(leaf_id),
+        }
+    }
+}
+
+/// Cursor options for paged entry reads.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionEntryCursorOptions {
+    pub limit: Option<usize>,
+    /// Inclusive upper-bound sequence anchor; `None` starts from the latest
+    /// entry.
+    pub after_entry_seq: Option<u64>,
+}
+
+pub(crate) fn page_in_memory_entries(
+    entries: &[SessionTreeEntry],
+    options: &SessionEntryCursorOptions,
+) -> Vec<SessionTreeEntry> {
+    let Some(limit) = options.limit else {
+        return entries.to_vec();
+    };
+    let upper = options
+        .after_entry_seq
+        .map(|seq| (seq as usize).min(entries.len()))
+        .unwrap_or(entries.len());
+    let lower = upper.saturating_sub(limit);
+    entries[lower..upper].to_vec()
+}
+
+/// Walk from `leaf_id` to the root, stopping after a compaction entry's
+/// `first_kept_entry_id` (the kept entry is included) and skipping leaf
+/// navigation markers, mirroring pi's SQLite path semantics.
+pub(crate) fn get_path_to_root_or_compaction(
+    lookup: impl Fn(&str) -> Option<SessionTreeEntry>,
+    leaf_id: Option<&str>,
+) -> Result<Vec<SessionTreeEntry>, SessionError> {
+    let Some(leaf_id) = leaf_id else {
+        return Ok(Vec::new());
+    };
+    let mut path = Vec::new();
+    let mut stop_at_entry_id: Option<String> = None;
+    let mut current = lookup(leaf_id).ok_or_else(|| {
+        SessionError::new(
+            SessionErrorCode::NotFound,
+            format!("Entry {leaf_id} not found"),
+        )
+    })?;
+    loop {
+        path.push(current.clone());
+        if stop_at_entry_id.as_deref() == Some(current.id()) {
+            break;
+        }
+        if let SessionTreeEntry::Compaction {
+            first_kept_entry_id,
+            ..
+        } = &current
+        {
+            stop_at_entry_id = Some(first_kept_entry_id.clone());
+        }
+        let Some(parent_id) = current.parent_id().map(str::to_owned) else {
+            break;
+        };
+        current = lookup(&parent_id).ok_or_else(|| {
+            SessionError::new(
+                SessionErrorCode::InvalidSession,
+                format!("Entry {parent_id} not found"),
+            )
+        })?;
+    }
+    path.reverse();
+    path.retain(|entry| !matches!(entry, SessionTreeEntry::Leaf { .. }));
+    Ok(path)
 }
 
 impl From<InMemorySessionStorage> for SessionStorageKind {
@@ -906,7 +1008,7 @@ impl Session {
     }
 
     pub fn get_entry(&self, id: &str) -> Option<SessionTreeEntry> {
-        self.storage.lock().get_entry(id).cloned()
+        self.storage.lock().get_entry(id)
     }
 
     pub fn entries(&self) -> Vec<SessionTreeEntry> {
@@ -950,7 +1052,7 @@ impl Session {
     }
 
     pub fn label(&self, id: &str) -> Option<String> {
-        self.storage.lock().label(id).map(str::to_owned)
+        self.storage.lock().label(id)
     }
 
     pub fn session_name(&self) -> Option<String> {

@@ -138,7 +138,7 @@ fn in_memory_storage_matches_core_storage_behaviour() {
         target_id: "entry-1".to_owned(),
         label: Some(" checkpoint ".to_owned()),
     });
-    assert_eq!(storage.label("entry-1"), Some("checkpoint"));
+    assert_eq!(storage.label("entry-1").as_deref(), Some("checkpoint"));
     storage.append_entry(SessionTreeEntry::Label {
         id: "label-2".to_owned(),
         parent_id: Some("label-1".to_owned()),
@@ -270,7 +270,7 @@ fn jsonl_storage_writes_loads_metadata_entries_leaf_and_labels() {
 
     let loaded = JsonlSessionStorage::open(&path).expect("open");
     assert_eq!(loaded.leaf_id().expect("leaf"), Some("label-1".to_owned()));
-    assert_eq!(loaded.label("root"), Some("checkpoint"));
+    assert_eq!(loaded.label("root").as_deref(), Some("checkpoint"));
     assert_eq!(
         loaded
             .path_to_root(Some("child"))
@@ -378,7 +378,7 @@ fn jsonl_storage_label_lookup_can_be_cleared_and_reloaded() {
             label: Some("checkpoint".to_owned()),
         })
         .expect("label");
-    assert_eq!(storage.label("entry-1"), Some("checkpoint"));
+    assert_eq!(storage.label("entry-1").as_deref(), Some("checkpoint"));
     storage
         .append_entry(SessionTreeEntry::Label {
             id: "label-2".to_owned(),

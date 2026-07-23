@@ -2076,6 +2076,25 @@ not part of this pass.
   policy enabling. `BuiltInOAuthAdapter::login` now delegates here, so
   `Models::login` performs real interactive logins for the built-in OAuth
   providers.
+- SQLite storage completed to pi's full architecture (write-side
+  materialization + lazy cursor reads). Appends run one transaction
+  mirroring pi `appendEntry`: entry row + sequence advance, the reduced
+  session state (name, message count, token/cost stats, current
+  model/thinking level, model-thinking configs) into
+  `session_materialized`, label rows into `entry_materialized`, the leaf
+  pointer onto `sessions.active_leaf_id`, and the active branch path into
+  `branch_entries` — rebuilt only on branch-membership changes (leaf
+  navigation, forks from parents with existing children; linear appends
+  extend by one row), with in-memory snapshot restore on rollback. Opens
+  are lazy: only the session row, materialized summary (required, as in
+  pi), label rows, and newest branch id load; entries resolve on demand
+  (`get_entry` point queries with a decode cache, `find_entries` by type,
+  new cursor-paged `entries_page`), and the active leaf's
+  `path_to_root_or_compaction` reads the materialized branch table. The
+  storage surface moved to owned returns (`get_entry`/`label`) across all
+  three backends, which also gained `entries_page` and the shared
+  compaction-stopped path walker; `session_name`/`session_stats` come from
+  the materialized state. Sequences start at 1 matching pi's DB layout.
 - ri-owned catalog generator (`models_generator` + the `generate-models`
   bin) replacing pi's `scripts/generate-models.ts` for routine refreshes:
   fetches models.dev `api.json` (or `--source` for an offline snapshot),
@@ -2442,12 +2461,6 @@ Alignment; the following upstream increments remain open:
   apply). Remaining generator gaps versus pi: new-model addition rules for
   the non-ported providers (reported as `additions skipped` for manual
   review) and the OpenRouter/NVIDIA/Vercel gateway live sources.
-- SQLite storage follow-ups: materialized-state caches
-  (`session_materialized`/`entry_materialized`) and `branch_entries`
-  acceleration with cursor paging. Deferred deliberately: ri's SQLite
-  storage keeps the full entry set in an in-memory mirror (like the JSONL
-  backend), so the caches only pay off once ri adopts pi's lazy
-  cursor-based reads; the schema tables are already in place.
 - Codex SSE header-timeout tuning needs no port: pi 54113731 replaced the
   fixed 20s pre-header timeout with the caller's `timeoutMs`, and ri
   already applies `StreamOptions.timeout_ms` as the request timeout (none

@@ -180,7 +180,7 @@ fn sqlite_entries_round_trip_and_leaf_id_is_materialized() {
         entries.iter().map(SessionTreeEntry::id).collect::<Vec<_>>(),
         vec!["aaaa", "bbbb", "cccc"]
     );
-    assert_eq!(reopened.label("aaaa"), Some("root label"));
+    assert_eq!(reopened.label("aaaa").as_deref(), Some("root label"));
     let session_path = reopened
         .path_to_root(Some("bbbb"))
         .expect("path to root")
@@ -385,4 +385,351 @@ fn sqlite_fork_copies_branch_and_inherits_metadata() {
         .expect_err("invalid fork target");
     assert!(err.to_string().contains("Entry missing not found"));
     cleanup(&path);
+}
+
+#[test]
+fn sqlite_open_is_lazy_and_reads_entries_on_demand() {
+    let path = temp_database_path("lazy");
+    let repo = SqliteSessionRepo::new(&path);
+    let mut storage = repo
+        .create(SqliteSessionCreateOptions {
+            id: Some("session-lazy".to_owned()),
+            cwd: "/tmp/project".to_owned(),
+            ..Default::default()
+        })
+        .expect("create");
+    storage
+        .append_entry(message_entry("aaaa", None, "hello"))
+        .expect("append");
+    drop(storage);
+
+    let reopened = repo.open("session-lazy").expect("reopen");
+    // Insert a row behind the storage's back: a lazy reader must see it.
+    let connection = rusqlite::Connection::open(&path).expect("raw connection");
+    connection
+        .execute(
+            "INSERT INTO session_entries (session_id, id, entry_seq, parent_id, type, timestamp, payload) VALUES ('session-lazy', 'bbbb', 99, 'aaaa', 'message', '2026-07-23T00:00:00.000Z', ?1)",
+            rusqlite::params![
+                serde_json::json!({ "message": { "role": "user", "content": "sneaky", "timestamp": 2 } }).to_string()
+            ],
+        )
+        .expect("raw insert");
+    drop(connection);
+
+    let found = reopened.get_entry("bbbb").expect("lazy read");
+    assert_eq!(found.parent_id(), Some("aaaa"));
+    assert_eq!(reopened.entries().len(), 2);
+}
+
+#[test]
+fn sqlite_append_materializes_summary_labels_and_branches() {
+    let path = temp_database_path("materialized");
+    let repo = SqliteSessionRepo::new(&path);
+    let mut storage = repo
+        .create(SqliteSessionCreateOptions {
+            id: Some("session-mat".to_owned()),
+            cwd: "/tmp/project".to_owned(),
+            ..Default::default()
+        })
+        .expect("create");
+    storage
+        .append_entry(message_entry("aaaa", None, "hello"))
+        .expect("append root");
+    storage
+        .append_entry(SessionTreeEntry::SessionInfo {
+            id: "info".to_owned(),
+            parent_id: Some("aaaa".to_owned()),
+            timestamp: "2026-07-23T00:00:00.000Z".to_owned(),
+            name: Some("  My Session  ".to_owned()),
+        })
+        .expect("append info");
+    storage
+        .append_entry(SessionTreeEntry::Label {
+            id: "lbl1".to_owned(),
+            parent_id: Some("info".to_owned()),
+            timestamp: "2026-07-23T00:00:01.000Z".to_owned(),
+            target_id: "aaaa".to_owned(),
+            label: Some("checkpoint".to_owned()),
+        })
+        .expect("append label");
+    storage
+        .append_entry(SessionTreeEntry::ThinkingLevelChange {
+            id: "tlc1".to_owned(),
+            parent_id: Some("lbl1".to_owned()),
+            timestamp: "2026-07-23T00:00:02.000Z".to_owned(),
+            thinking_level: "high".to_owned(),
+        })
+        .expect("append thinking");
+    storage
+        .append_entry(SessionTreeEntry::ModelChange {
+            id: "mc1".to_owned(),
+            parent_id: Some("tlc1".to_owned()),
+            timestamp: "2026-07-23T00:00:03.000Z".to_owned(),
+            provider: "anthropic".to_owned(),
+            model_id: "claude-sonnet-5".to_owned(),
+        })
+        .expect("append model");
+    assert_eq!(storage.session_name().as_deref(), Some("My Session"));
+    drop(storage);
+
+    // Raw rows: summary payload, label materialization, branch path.
+    let connection = rusqlite::Connection::open(&path).expect("raw connection");
+    let summary: String = connection
+        .query_row(
+            "SELECT payload FROM session_materialized WHERE session_id = 'session-mat'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("summary row");
+    let summary: serde_json::Value = serde_json::from_str(&summary).expect("summary json");
+    assert_eq!(summary["name"], "My Session");
+    assert_eq!(summary["messageCount"], 1);
+    assert_eq!(summary["currentThinkingLevel"], "high");
+    assert_eq!(summary["currentModel"]["provider"], "anthropic");
+    assert_eq!(summary["currentModel"]["modelId"], "claude-sonnet-5");
+
+    let (label_type, label_payload): (String, String) = connection
+        .query_row(
+            "SELECT type, payload FROM entry_materialized WHERE session_id = 'session-mat'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("label row");
+    assert_eq!(label_type, "label");
+    let label_payload: serde_json::Value =
+        serde_json::from_str(&label_payload).expect("label json");
+    assert_eq!(label_payload["targetId"], "aaaa");
+    assert_eq!(label_payload["label"], "checkpoint");
+
+    // Linear appends share one branch with one row per entry.
+    let branch_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(DISTINCT branch_id) FROM branch_entries WHERE session_id = 'session-mat'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("branch count");
+    assert_eq!(branch_count, 1);
+    let branch_rows: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM branch_entries WHERE session_id = 'session-mat'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("branch rows");
+    assert_eq!(branch_rows, 5);
+    drop(connection);
+
+    // Reopen restores the derived state from the materialized rows.
+    let reopened = repo.open("session-mat").expect("reopen");
+    assert_eq!(reopened.session_name().as_deref(), Some("My Session"));
+    assert_eq!(reopened.label("aaaa").as_deref(), Some("checkpoint"));
+    let stats = reopened.session_stats();
+    assert_eq!(stats.message_count, 1);
+}
+
+#[test]
+fn sqlite_branching_rematerializes_and_answers_active_paths_from_branch_table() {
+    let path = temp_database_path("branching");
+    let repo = SqliteSessionRepo::new(&path);
+    let mut storage = repo
+        .create(SqliteSessionCreateOptions {
+            id: Some("session-branch".to_owned()),
+            cwd: "/tmp/project".to_owned(),
+            ..Default::default()
+        })
+        .expect("create");
+    storage
+        .append_entry(message_entry("aaaa", None, "root"))
+        .expect("append");
+    storage
+        .append_entry(message_entry("bbbb", Some("aaaa"), "first child"))
+        .expect("append");
+    // Fork: a second child under the same parent starts a new branch.
+    storage
+        .append_entry(message_entry("cccc", Some("aaaa"), "second child"))
+        .expect("append fork");
+
+    let connection = rusqlite::Connection::open(&path).expect("raw connection");
+    let branch_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(DISTINCT branch_id) FROM branch_entries WHERE session_id = 'session-branch'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("branch count");
+    assert_eq!(branch_count, 2, "fork starts a new branch");
+    drop(connection);
+
+    // The active-leaf path resolves from the branch table and equals the
+    // fork side.
+    let active_path = storage
+        .path_to_root_or_compaction(Some("cccc"))
+        .expect("active path")
+        .iter()
+        .map(SessionTreeEntry::id)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(active_path, vec!["aaaa", "cccc"]);
+
+    // Navigating back re-materializes and excludes the leaf marker.
+    storage
+        .set_leaf_id(Some("bbbb".to_owned()))
+        .expect("navigate");
+    let navigated = storage
+        .path_to_root_or_compaction(Some("bbbb"))
+        .expect("navigated path")
+        .iter()
+        .map(SessionTreeEntry::id)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(navigated, vec!["aaaa", "bbbb"]);
+
+    // Reopen resumes the newest branch as active.
+    drop(storage);
+    let reopened = repo.open("session-branch").expect("reopen");
+    assert_eq!(reopened.leaf_id().expect("leaf"), Some("bbbb".to_owned()));
+    let resumed = reopened
+        .path_to_root_or_compaction(Some("bbbb"))
+        .expect("resumed path")
+        .iter()
+        .map(SessionTreeEntry::id)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(resumed, vec!["aaaa", "bbbb"]);
+}
+
+#[test]
+fn sqlite_compaction_paths_stop_at_first_kept_entry() {
+    let path = temp_database_path("compaction");
+    let repo = SqliteSessionRepo::new(&path);
+    let mut storage = repo
+        .create(SqliteSessionCreateOptions {
+            id: Some("session-compact".to_owned()),
+            cwd: "/tmp/project".to_owned(),
+            ..Default::default()
+        })
+        .expect("create");
+    storage
+        .append_entry(message_entry("aaaa", None, "old"))
+        .expect("append");
+    storage
+        .append_entry(message_entry("bbbb", Some("aaaa"), "kept"))
+        .expect("append");
+    storage
+        .append_entry(SessionTreeEntry::Compaction {
+            id: "comp".to_owned(),
+            parent_id: Some("bbbb".to_owned()),
+            timestamp: "2026-07-23T00:00:00.000Z".to_owned(),
+            summary: "summary".to_owned(),
+            first_kept_entry_id: "bbbb".to_owned(),
+            tokens_before: 100,
+            details: None,
+            usage: None,
+            from_hook: None,
+        })
+        .expect("append compaction");
+    storage
+        .append_entry(message_entry("dddd", Some("comp"), "after"))
+        .expect("append");
+
+    // The active leaf reads the materialized branch, which linear appends
+    // extended without rebuilding — it still holds the pre-compaction rows
+    // (pi keeps the same shape; the context transform drops them later).
+    let ids = storage
+        .path_to_root_or_compaction(Some("dddd"))
+        .expect("active branch path")
+        .iter()
+        .map(SessionTreeEntry::id)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["aaaa", "bbbb", "comp", "dddd"]);
+
+    // A non-active leaf walks parents and stops at the first kept entry.
+    storage
+        .set_leaf_id(Some("bbbb".to_owned()))
+        .expect("navigate");
+    let ids = storage
+        .path_to_root_or_compaction(Some("dddd"))
+        .expect("compaction path")
+        .iter()
+        .map(SessionTreeEntry::id)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["bbbb", "comp", "dddd"], "stops at first kept");
+
+    // The plain path keeps the full chain.
+    let full = storage
+        .path_to_root(Some("dddd"))
+        .expect("plain path")
+        .iter()
+        .map(SessionTreeEntry::id)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(full, vec!["aaaa", "bbbb", "comp", "dddd"]);
+}
+
+#[test]
+fn sqlite_entries_page_follows_the_sequence_cursor() {
+    let path = temp_database_path("paging");
+    let repo = SqliteSessionRepo::new(&path);
+    let mut storage = repo
+        .create(SqliteSessionCreateOptions {
+            id: Some("session-page".to_owned()),
+            cwd: "/tmp/project".to_owned(),
+            ..Default::default()
+        })
+        .expect("create");
+    let mut parent: Option<&str> = None;
+    for id in ["e1", "e2", "e3", "e4", "e5"] {
+        storage
+            .append_entry(message_entry(id, parent, id))
+            .expect("append");
+        parent = Some(id);
+    }
+
+    let page = |limit, after| {
+        storage
+            .entries_page(&ri_agent_core::harness::SessionEntryCursorOptions {
+                limit,
+                after_entry_seq: after,
+            })
+            .expect("page")
+            .iter()
+            .map(SessionTreeEntry::id)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(page(Some(2), None), vec!["e4", "e5"]);
+    assert_eq!(page(Some(2), Some(3)), vec!["e2", "e3"]);
+    assert_eq!(page(Some(10), Some(2)), vec!["e1", "e2"]);
+    assert_eq!(page(None, None), vec!["e1", "e2", "e3", "e4", "e5"]);
+}
+
+#[test]
+fn sqlite_open_requires_the_materialized_row() {
+    let path = temp_database_path("strict");
+    let repo = SqliteSessionRepo::new(&path);
+    let storage = repo
+        .create(SqliteSessionCreateOptions {
+            id: Some("session-strict".to_owned()),
+            cwd: "/tmp/project".to_owned(),
+            ..Default::default()
+        })
+        .expect("create");
+    drop(storage);
+
+    let connection = rusqlite::Connection::open(&path).expect("raw connection");
+    connection
+        .execute(
+            "DELETE FROM session_materialized WHERE session_id = 'session-strict'",
+            [],
+        )
+        .expect("delete materialized");
+    drop(connection);
+
+    let err = repo
+        .open("session-strict")
+        .expect_err("open without materialized row");
+    assert!(err.to_string().contains("missing materialized row"));
 }
