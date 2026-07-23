@@ -1,4 +1,7 @@
+use std::collections::HashMap;
 use std::env;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 pub const UNSUPPORTED_PROXY_PROTOCOL_MESSAGE: &str = "Unsupported proxy protocol. SOCKS and PAC proxy URLs are not supported; use an HTTP or HTTPS proxy URL.";
 
@@ -62,16 +65,45 @@ pub fn resolve_http_proxy_url_for_websocket_target(
     resolve_http_proxy_url_for_target(&http_target)
 }
 
+// Gateways commonly drop idle connections after ~60s; keeping our pool idle
+// timeout below that means we never try to reuse a connection the gateway has
+// already silently closed.
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(50);
+
+// One client per resolved proxy configuration. The proxy URL is the only
+// per-target variable in client construction, so caching on it preserves the
+// exact configuration each target would have received, while letting every
+// request to the same proxy configuration share one connection pool.
+static CLIENT_CACHE: OnceLock<Mutex<HashMap<Option<String>, reqwest::Client>>> = OnceLock::new();
+
 pub fn reqwest_client_for_target(target_url: &str) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder().no_proxy();
-    if let Some(proxy_url) = resolve_http_proxy_url_for_target(target_url)? {
+    let proxy_url = resolve_http_proxy_url_for_target(target_url)?;
+    let (client, _cached) = cached_or_build_client(proxy_url)?;
+    Ok(client)
+}
+
+fn cached_or_build_client(proxy_url: Option<ProxyUrl>) -> Result<(reqwest::Client, bool), String> {
+    let key = proxy_url.as_ref().map(|proxy| proxy.as_str().to_owned());
+    let cache = CLIENT_CACHE.get_or_init(Default::default);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(client) = cache.get(&key) {
+        return Ok((client.clone(), true));
+    }
+    let mut builder = reqwest::Client::builder()
+        .no_proxy()
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT);
+    if let Some(proxy_url) = &proxy_url {
         let proxy = reqwest::Proxy::all(proxy_url.as_str())
             .map_err(|error| format!("Invalid proxy URL {:?}: {error}", proxy_url.as_str()))?;
         builder = builder.proxy(proxy);
     }
-    builder
+    let client = builder
         .build()
-        .map_err(|error| format!("Could not build HTTP client: {error}"))
+        .map_err(|error| format!("Could not build HTTP client: {error}"))?;
+    cache.insert(key, client.clone());
+    Ok((client, false))
 }
 
 fn proxy_env(key: &str) -> Option<String> {
@@ -159,6 +191,49 @@ impl ParsedUrl {
             hostname: hostname.to_ascii_lowercase(),
             port,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proxy(raw: &str) -> ProxyUrl {
+        ProxyUrl {
+            raw: raw.to_owned(),
+        }
+    }
+
+    #[test]
+    fn same_proxy_configuration_reuses_cached_client() {
+        let key = proxy("http://reuse-test-proxy.example:18080/");
+        let (_, cached) = cached_or_build_client(Some(key.clone())).expect("first build");
+        assert!(!cached, "first call must build a fresh client");
+        let (_, cached) = cached_or_build_client(Some(key)).expect("second build");
+        assert!(cached, "second call with the same proxy must hit the cache");
+    }
+
+    #[test]
+    fn different_proxy_configurations_get_distinct_clients() {
+        let (_, cached) = cached_or_build_client(Some(proxy("http://distinct-a.example:18081/")))
+            .expect("first build");
+        assert!(!cached);
+        let (_, cached) = cached_or_build_client(Some(proxy("http://distinct-b.example:18082/")))
+            .expect("second build");
+        assert!(
+            !cached,
+            "a different proxy configuration must not share a client"
+        );
+    }
+
+    #[test]
+    fn no_proxy_targets_share_one_client() {
+        let (_, _) = cached_or_build_client(None).expect("first build");
+        let (_, cached) = cached_or_build_client(None).expect("second build");
+        assert!(
+            cached,
+            "all direct (no-proxy) targets must share one client"
+        );
     }
 }
 
