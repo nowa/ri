@@ -62,7 +62,9 @@ pub fn build_openai_responses_payload(
 
     if cache_retention != CacheRetention::None {
         if let Some(session_id) = options.session_id {
-            payload["prompt_cache_key"] = Value::String(session_id);
+            payload["prompt_cache_key"] = Value::String(
+                crate::openai_codex_responses::clamp_openai_prompt_cache_key(&session_id),
+            );
         }
     }
     if cache_retention == CacheRetention::Long
@@ -189,10 +191,12 @@ pub fn build_openai_responses_default_headers_with_context(
     if let Some(session_id) = session_id.filter(|value| !value.is_empty())
         && cache_retention != CacheRetention::None
     {
-        if openai_responses_session_affinity_format(model) == "openrouter" {
+        let affinity_format = openai_responses_session_affinity_format(model);
+        if affinity_format == "openrouter" {
             headers.insert("x-session-id".to_owned(), session_id.to_owned());
         } else {
-            if send_openai_responses_session_id_header(model) {
+            // "openai-nosession" keeps x-client-request-id but drops session_id.
+            if affinity_format == "openai" && send_openai_responses_session_id_header(model) {
                 headers.insert("session_id".to_owned(), session_id.to_owned());
             }
             headers.insert("x-client-request-id".to_owned(), session_id.to_owned());

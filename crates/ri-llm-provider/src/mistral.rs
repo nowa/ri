@@ -1,8 +1,8 @@
 use crate::{
     AssistantContent, AssistantMessage, AssistantMessageEvent, AssistantMessageEventSender,
-    Context, InputKind, Message, Model, SimpleStreamOptions, StopReason, TextContent,
-    ThinkingContent, ThinkingLevel, Tool, ToolCall, ToolResultContent, Usage, UserContent,
-    UserContentValue,
+    CacheRetention, Context, InputKind, Message, Model, SimpleStreamOptions, StopReason,
+    TextContent, ThinkingContent, ThinkingLevel, Tool, ToolCall, ToolResultContent, Usage,
+    UserContent, UserContentValue,
     json_repair::{parse_streaming_json, sanitize_surrogates, short_hash},
     message_transform::transform_messages,
     models::{calculate_cost, clamp_thinking_level},
@@ -33,6 +33,7 @@ pub struct MistralPayloadOptions {
     pub tool_choice: Option<MistralToolChoice>,
     pub prompt_mode: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub prompt_cache_key: Option<String>,
 }
 
 pub fn build_mistral_simple_payload(
@@ -68,6 +69,7 @@ pub fn build_mistral_simple_payload(
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .map(str::to_owned),
+        prompt_cache_key: mistral_prompt_cache_key(&options),
         ..Default::default()
     };
 
@@ -134,8 +136,24 @@ pub fn build_mistral_chat_payload(
     if let Some(reasoning_effort) = options.reasoning_effort {
         payload["reasoningEffort"] = Value::String(reasoning_effort);
     }
+    if let Some(prompt_cache_key) = options.prompt_cache_key {
+        payload["promptCacheKey"] = Value::String(prompt_cache_key);
+    }
 
     payload
+}
+
+/// The session id doubles as the Mistral prompt cache key unless the caller
+/// disabled caching (pi `mistral-conversations.ts` `shouldUsePromptCaching`).
+fn mistral_prompt_cache_key(options: &SimpleStreamOptions) -> Option<String> {
+    if options.stream.cache_retention == Some(CacheRetention::None) {
+        return None;
+    }
+    options
+        .stream
+        .session_id
+        .clone()
+        .filter(|session_id| !session_id.is_empty())
 }
 
 pub fn build_mistral_request_headers(

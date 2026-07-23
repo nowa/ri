@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -23,15 +23,25 @@ impl std::fmt::Display for ProxyUrl {
 }
 
 pub fn resolve_http_proxy_url_for_target(target_url: &str) -> Result<Option<ProxyUrl>, String> {
+    resolve_http_proxy_url_for_target_with_env(target_url, &BTreeMap::new())
+}
+
+/// [`resolve_http_proxy_url_for_target`] with a request-scoped environment
+/// map consulted before the process environment for every proxy variable
+/// lookup (pi `resolveHttpProxyUrlForTarget(targetUrl, env)`).
+pub fn resolve_http_proxy_url_for_target_with_env(
+    target_url: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<ProxyUrl>, String> {
     let Some(target) = ParsedUrl::parse(target_url) else {
         return Ok(None);
     };
-    if !should_proxy_hostname(&target.hostname, target.port) {
+    if !should_proxy_hostname(&target.hostname, target.port, env) {
         return Ok(None);
     }
-    let mut proxy = proxy_env_with_npm_fallback(&format!("{}_proxy", target.protocol))
-        .or_else(|| proxy_env("npm_config_proxy"))
-        .or_else(|| proxy_env_with_npm_fallback("all_proxy"))
+    let mut proxy = proxy_env_with_npm_fallback(&format!("{}_proxy", target.protocol), env)
+        .or_else(|| proxy_env("npm_config_proxy", env))
+        .or_else(|| proxy_env_with_npm_fallback("all_proxy", env))
         .unwrap_or_default();
     if proxy.is_empty() {
         return Ok(None);
@@ -106,20 +116,34 @@ fn cached_or_build_client(proxy_url: Option<ProxyUrl>) -> Result<(reqwest::Clien
     Ok((client, false))
 }
 
-fn proxy_env(key: &str) -> Option<String> {
-    env::var(key.to_ascii_lowercase())
-        .ok()
+fn proxy_env(key: &str, scoped_env: &BTreeMap<String, String>) -> Option<String> {
+    scoped_env
+        .get(&key.to_ascii_lowercase())
         .filter(|value| !value.is_empty())
-        .or_else(|| env::var(key.to_ascii_uppercase()).ok())
-        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            scoped_env
+                .get(&key.to_ascii_uppercase())
+                .filter(|value| !value.is_empty())
+        })
+        .cloned()
+        .or_else(|| {
+            env::var(key.to_ascii_lowercase())
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            env::var(key.to_ascii_uppercase())
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
 }
 
-fn proxy_env_with_npm_fallback(key: &str) -> Option<String> {
-    proxy_env(key).or_else(|| proxy_env(&format!("npm_config_{key}")))
+fn proxy_env_with_npm_fallback(key: &str, scoped_env: &BTreeMap<String, String>) -> Option<String> {
+    proxy_env(key, scoped_env).or_else(|| proxy_env(&format!("npm_config_{key}"), scoped_env))
 }
 
-fn should_proxy_hostname(hostname: &str, port: u16) -> bool {
-    let no_proxy = proxy_env_with_npm_fallback("no_proxy")
+fn should_proxy_hostname(hostname: &str, port: u16, scoped_env: &BTreeMap<String, String>) -> bool {
+    let no_proxy = proxy_env_with_npm_fallback("no_proxy", scoped_env)
         .unwrap_or_default()
         .to_ascii_lowercase();
     if no_proxy.is_empty() {

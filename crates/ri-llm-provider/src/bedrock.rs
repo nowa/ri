@@ -44,34 +44,40 @@ pub fn resolve_bedrock_client_config(
     // conflicts with AWS_REGION set for other services.
     let arn_region = bedrock_arn_region(&model.id);
     let configured_region = arn_region.or_else(|| configured_bedrock_region(&options));
-    let has_configured_profile = options
-        .profile
-        .as_deref()
+    // Only an ambient process-env AWS_PROFILE unpins standard endpoints and
+    // defers region resolution to the AWS config chain. Explicit `profile`
+    // options and request-scoped AWS_PROFILE overrides keep the catalog
+    // endpoint pinned (pi parity: hasAmbientConfiguredProfile).
+    let has_ambient_configured_profile = env::var("AWS_PROFILE")
+        .ok()
         .filter(|profile| !profile.is_empty())
-        .is_some()
-        || crate::get_provider_env_value("AWS_PROFILE", &options.env).is_some();
+        .is_some();
     let endpoint_region = standard_bedrock_endpoint_region(&model.base_url);
     let use_explicit_endpoint = should_use_explicit_bedrock_endpoint(
         &model.base_url,
         configured_region.as_deref(),
-        has_configured_profile,
+        has_ambient_configured_profile,
     );
 
     let endpoint = use_explicit_endpoint.then(|| model.base_url.clone());
     let region = configured_region.or_else(|| {
-        if use_explicit_endpoint {
+        if use_explicit_endpoint && endpoint_region.is_some() {
             endpoint_region
-        } else if !has_configured_profile {
+        } else if !has_ambient_configured_profile {
             Some("us-east-1".to_owned())
         } else {
             None
         }
     });
+    let profile = options
+        .profile
+        .filter(|profile| !profile.is_empty())
+        .or_else(|| crate::get_provider_env_value("AWS_PROFILE", &options.env));
 
     BedrockClientConfig {
         region,
         endpoint,
-        profile: options.profile,
+        profile,
     }
 }
 
@@ -1381,10 +1387,14 @@ pub fn convert_bedrock_raw_messages(
         };
         match role {
             "user" => {
-                let content = convert_bedrock_raw_content(message.get("content"), true);
-                if !content.is_empty() {
-                    result.push(json!({ "role": "user", "content": content }));
+                let mut content = convert_bedrock_raw_content(message.get("content"), true);
+                // pi keeps user turns whose blocks are all blank or
+                // unrepresentable and substitutes a placeholder; dropping the
+                // message would desync the user/assistant alternation.
+                if content.is_empty() {
+                    content.push(json!({ "text": BEDROCK_EMPTY_TEXT_PLACEHOLDER }));
                 }
+                result.push(json!({ "role": "user", "content": content }));
             }
             "assistant" => {
                 let content = convert_bedrock_raw_content(message.get("content"), false);
@@ -1401,11 +1411,16 @@ pub fn convert_bedrock_raw_messages(
 
 fn convert_bedrock_raw_content(content: Option<&Value>, allow_images: bool) -> Vec<Value> {
     match content {
-        Some(Value::String(text)) => vec![json!({ "text": text })],
+        // Bedrock rejects blank text blocks; filter them here and let the
+        // caller decide between a placeholder (user) and dropping (assistant).
+        Some(Value::String(text)) => bedrock_non_blank_text_block(text).into_iter().collect(),
         Some(Value::Array(blocks)) => blocks
             .iter()
             .filter_map(|block| match block.get("type").and_then(Value::as_str) {
-                Some("text") => block.get("text").map(|text| json!({ "text": text })),
+                Some("text") => block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .and_then(bedrock_non_blank_text_block),
                 Some("image") if allow_images => {
                     let mime_type = block
                         .get("mimeType")

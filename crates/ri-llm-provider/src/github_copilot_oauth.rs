@@ -2,13 +2,15 @@ use crate::{
     anthropic_oauth::{OAuthHttpRequest, send_oauth_http_request},
     device_code::{
         DeviceCodePollConfig, DeviceCodePollProgress, DeviceCodePollResponse, DeviceCodePollState,
-        poll_device_code_flow_with_sleeper,
+        poll_device_code_flow_with_sleeper_and_abort,
     },
     models::get_models,
     types::now_millis,
 };
 use serde_json::Value;
-use std::{collections::BTreeMap, future::Future, time::Duration};
+use std::{
+    collections::BTreeMap, future::Future, sync::Arc, sync::atomic::AtomicBool, time::Duration,
+};
 
 pub const GITHUB_COPILOT_OAUTH_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
 pub const GITHUB_COPILOT_USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
@@ -292,7 +294,11 @@ pub fn parse_github_copilot_device_code_response(
     Ok(GitHubDeviceCode {
         device_code: required_string(&data, "device_code", "GitHub Copilot device code")?,
         user_code: required_string(&data, "user_code", "GitHub Copilot device code")?,
-        verification_uri: required_string(&data, "verification_uri", "GitHub Copilot device code")?,
+        verification_uri: normalize_github_verification_uri(&required_string(
+            &data,
+            "verification_uri",
+            "GitHub Copilot device code",
+        )?)?,
         verification_uri_complete: data
             .get("verification_uri_complete")
             .and_then(Value::as_str)
@@ -300,6 +306,19 @@ pub fn parse_github_copilot_device_code_response(
         interval_seconds: required_u64(&data, "interval", "GitHub Copilot device code")?,
         expires_in_seconds: required_u64(&data, "expires_in", "GitHub Copilot device code")?,
     })
+}
+
+/// The verification URI is opened in the user's browser, and to prevent the
+/// launcher from opening an executable or similar, force it to be an http(s)
+/// URL and normalize it at the deserialization boundary (pi
+/// `github-copilot.ts` `startDeviceFlow`).
+fn normalize_github_verification_uri(verification_uri: &str) -> Result<String, String> {
+    const UNTRUSTED_MESSAGE: &str = "Untrusted verification_uri in device code response";
+    let parsed = reqwest::Url::parse(verification_uri).map_err(|_| UNTRUSTED_MESSAGE.to_owned())?;
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+        return Err(UNTRUSTED_MESSAGE.to_owned());
+    }
+    Ok(parsed.into())
 }
 
 pub fn build_github_copilot_access_token_poll_request(
@@ -382,14 +401,34 @@ pub async fn complete_github_copilot_device_flow_for_urls_with_sleeper<F, Fut>(
     urls: &GitHubCopilotUrls,
     device: &GitHubDeviceCode,
     start_ms: i64,
+    sleep: F,
+) -> Result<String, String>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    complete_github_copilot_device_flow_for_urls_with_sleeper_and_abort(
+        urls, device, start_ms, sleep, None,
+    )
+    .await
+}
+
+/// [`complete_github_copilot_device_flow_for_urls_with_sleeper`] with a
+/// cooperative abort flag (pi passes `interaction.signal` through to
+/// `pollForGitHubAccessToken`).
+pub async fn complete_github_copilot_device_flow_for_urls_with_sleeper_and_abort<F, Fut>(
+    urls: &GitHubCopilotUrls,
+    device: &GitHubDeviceCode,
+    start_ms: i64,
     mut sleep: F,
+    abort_flag: Option<Arc<AtomicBool>>,
 ) -> Result<String, String>
 where
     F: FnMut(u64) -> Fut,
     Fut: Future<Output = ()>,
 {
     let config = github_device_poll_config(device.interval_seconds, device.expires_in_seconds);
-    poll_device_code_flow_with_sleeper(
+    poll_device_code_flow_with_sleeper_and_abort(
         &config,
         start_ms,
         || async {
@@ -398,6 +437,7 @@ where
             Ok(github_device_poll_response(response))
         },
         &mut sleep,
+        abort_flag,
     )
     .await
 }

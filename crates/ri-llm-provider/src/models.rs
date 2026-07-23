@@ -474,13 +474,8 @@ const COMMON_MODELS: &[(&str, &str)] = &[
     ("xai", "grok-2-vision"),
     ("xai", "grok-2-vision-1212"),
     ("xai", "grok-2-vision-latest"),
-    ("xai", "grok-3"),
-    ("xai", "grok-3-fast"),
-    ("xai", "grok-4.20-0309-non-reasoning"),
-    ("xai", "grok-4.20-0309-reasoning"),
     ("xai", "grok-4.3"),
     ("xai", "grok-beta"),
-    ("xai", "grok-code-fast-1"),
     ("xai", "grok-vision-beta"),
     ("mistral", "codestral-latest"),
     ("mistral", "devstral-2512"),
@@ -591,14 +586,21 @@ fn synthesize_model(provider: &str, model_id: &str) -> Model {
             .insert(ThinkingLevel::Minimal, None);
         model.thinking_level_map.insert(ThinkingLevel::Low, None);
         model.thinking_level_map.insert(ThinkingLevel::Medium, None);
-        model.thinking_level_map.insert(
-            ThinkingLevel::XHigh,
-            Some(
-                xhigh_effort_for_model(provider, model_id)
-                    .unwrap_or("max")
-                    .to_owned(),
-            ),
-        );
+        model
+            .thinking_level_map
+            .insert(ThinkingLevel::High, Some("high".to_owned()));
+        if provider == "openrouter" {
+            // OpenRouter still exposes the DeepSeek V4 Flash `xhigh` alias.
+            model.thinking_level_map.insert(ThinkingLevel::Max, None);
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+        } else {
+            // pi HEAD moved first-party DeepSeek V4 Flash to a `max` level.
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Max, Some("max".to_owned()));
+        }
     }
 
     if let Some(effort) = xhigh_effort_for_model(provider, model_id) {
@@ -1184,7 +1186,7 @@ fn apply_deepseek_generated_metadata(model: &mut Model) -> bool {
         .insert(ThinkingLevel::High, Some("high".to_owned()));
     model
         .thinking_level_map
-        .insert(ThinkingLevel::XHigh, Some("max".to_owned()));
+        .insert(ThinkingLevel::Max, Some("max".to_owned()));
     model.input = vec![crate::types::InputKind::Text];
     model.cost = cost;
     model.context_window = 1_000_000;
@@ -1735,58 +1737,8 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 tiers: Vec::new(),
             },
         )),
-        "grok-3" => Some((
-            false,
-            false,
-            131_072,
-            8_192,
-            ModelCost {
-                input: 3.0,
-                output: 15.0,
-                cache_read: 0.75,
-                cache_write: 0.0,
-                tiers: Vec::new(),
-            },
-        )),
-        "grok-3-fast" => Some((
-            false,
-            false,
-            131_072,
-            8_192,
-            ModelCost {
-                input: 5.0,
-                output: 25.0,
-                cache_read: 1.25,
-                cache_write: 0.0,
-                tiers: Vec::new(),
-            },
-        )),
-        "grok-4.20-0309-non-reasoning" => Some((
-            false,
-            true,
-            2_000_000,
-            30_000,
-            ModelCost {
-                input: 2.0,
-                output: 6.0,
-                cache_read: 0.2,
-                cache_write: 0.0,
-                tiers: Vec::new(),
-            },
-        )),
-        "grok-4.20-0309-reasoning" => Some((
-            true,
-            true,
-            2_000_000,
-            30_000,
-            ModelCost {
-                input: 2.0,
-                output: 6.0,
-                cache_read: 0.2,
-                cache_write: 0.0,
-                tiers: Vec::new(),
-            },
-        )),
+        // grok-3, grok-3-fast, grok-4.20-0309-*, and grok-code-fast-1 were
+        // retired from the pi built-in xAI catalog.
         "grok-4.3" => Some((
             true,
             true,
@@ -1809,19 +1761,6 @@ fn apply_xai_generated_metadata(model: &mut Model) -> bool {
                 input: 5.0,
                 output: 15.0,
                 cache_read: 5.0,
-                cache_write: 0.0,
-                tiers: Vec::new(),
-            },
-        )),
-        "grok-code-fast-1" => Some((
-            false,
-            false,
-            32_768,
-            8_192,
-            ModelCost {
-                input: 0.2,
-                output: 1.5,
-                cache_read: 0.02,
                 cache_write: 0.0,
                 tiers: Vec::new(),
             },
@@ -2294,7 +2233,7 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
         "anthropic/claude-opus-4.6" => {
             model
                 .thinking_level_map
-                .insert(ThinkingLevel::XHigh, Some("max".to_owned()));
+                .insert(ThinkingLevel::Max, Some("max".to_owned()));
         }
         "deepseek/deepseek-v4-flash" => {
             model
@@ -2305,9 +2244,10 @@ fn apply_openrouter_generated_metadata(model: &mut Model) -> bool {
             model
                 .thinking_level_map
                 .insert(ThinkingLevel::High, Some("high".to_owned()));
+            model.thinking_level_map.insert(ThinkingLevel::Max, None);
             model
                 .thinking_level_map
-                .insert(ThinkingLevel::XHigh, Some("max".to_owned()));
+                .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
             model.compat = Some(json!({
                 "requiresReasoningContentOnAssistantMessages": true,
                 "thinkingFormat": "deepseek",
@@ -2380,12 +2320,38 @@ fn apply_vercel_ai_gateway_generated_metadata(model: &mut Model) -> bool {
 }
 
 fn apply_kimi_coding_generated_metadata(model: &mut Model) -> bool {
-    let input = match model.id.as_str() {
-        "kimi-for-coding" => vec![
-            crate::types::InputKind::Text,
-            crate::types::InputKind::Image,
-        ],
-        "kimi-k2-thinking" => vec![crate::types::InputKind::Text],
+    // Kimi Coding is subscription-backed, so models.dev reports zero cost. pi
+    // substitutes the equivalent Moonshot API rates to estimate the value of
+    // subscription usage, and flags every model for adaptive thinking.
+    let (input, cost, compat) = match model.id.as_str() {
+        "kimi-for-coding" => (
+            vec![
+                crate::types::InputKind::Text,
+                crate::types::InputKind::Image,
+            ],
+            ModelCost {
+                input: 0.95,
+                output: 4.0,
+                cache_read: 0.19,
+                cache_write: 0.0,
+                tiers: Vec::new(),
+            },
+            json!({
+                "allowEmptySignature": true,
+                "forceAdaptiveThinking": true,
+            }),
+        ),
+        "kimi-k2-thinking" => (
+            vec![crate::types::InputKind::Text],
+            ModelCost {
+                input: 0.6,
+                output: 2.5,
+                cache_read: 0.15,
+                cache_write: 0.0,
+                tiers: Vec::new(),
+            },
+            json!({ "forceAdaptiveThinking": true }),
+        ),
         _ => return false,
     };
 
@@ -2394,10 +2360,10 @@ fn apply_kimi_coding_generated_metadata(model: &mut Model) -> bool {
     model.reasoning = true;
     model.thinking_level_map.clear();
     model.input = input;
-    model.cost = ModelCost::default();
+    model.cost = cost;
     model.context_window = 262_144;
     model.max_tokens = 32_768;
-    model.compat = None;
+    model.compat = Some(compat);
     true
 }
 
@@ -3967,6 +3933,13 @@ fn apply_gpt5_generated_metadata(
             .thinking_level_map
             .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
     }
+    if model.id == "gpt-5.5-pro" {
+        // GPT-5.5 Pro only accepts medium/high/xhigh reasoning efforts.
+        model
+            .thinking_level_map
+            .insert(ThinkingLevel::Minimal, None);
+        model.thinking_level_map.insert(ThinkingLevel::Low, None);
+    }
     ensure_image_input(model);
     model.context_window = metadata.context_window;
     model.max_tokens = metadata.max_tokens;
@@ -4030,8 +4003,8 @@ fn apply_github_copilot_generated_metadata(model: &mut Model) -> bool {
             true,
             1_000_000,
             64_000,
-            None,
-            Some("opus-max"),
+            Some(json!({ "forceAdaptiveThinking": true })),
+            Some("claude-max"),
         )),
         "claude-opus-4.7" => Some((
             "anthropic-messages",
@@ -4039,8 +4012,11 @@ fn apply_github_copilot_generated_metadata(model: &mut Model) -> bool {
             true,
             144_000,
             64_000,
-            None,
-            Some("opus-xhigh"),
+            Some(json!({
+                "forceAdaptiveThinking": true,
+                "supportsTemperature": false,
+            })),
+            Some("claude-minimal-xhigh-max"),
         )),
         "claude-sonnet-4.5" => Some((
             "anthropic-messages",
@@ -4057,8 +4033,8 @@ fn apply_github_copilot_generated_metadata(model: &mut Model) -> bool {
             true,
             1_000_000,
             32_000,
-            None,
-            None,
+            Some(json!({ "forceAdaptiveThinking": true })),
+            Some("claude-minimal-max"),
         )),
         "gemini-2.5-pro" => Some((
             "openai-completions",
@@ -4146,15 +4122,29 @@ fn apply_github_copilot_generated_metadata(model: &mut Model) -> bool {
     model.reasoning = reasoning;
     model.thinking_level_map.clear();
     match thinking_profile {
-        Some("opus-max") => {
+        Some("claude-max") => {
             model
                 .thinking_level_map
-                .insert(ThinkingLevel::XHigh, Some("max".to_owned()));
+                .insert(ThinkingLevel::Max, Some("max".to_owned()));
         }
-        Some("opus-xhigh") => {
+        Some("claude-minimal-max") => {
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Minimal, Some("low".to_owned()));
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Max, Some("max".to_owned()));
+        }
+        Some("claude-minimal-xhigh-max") => {
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Minimal, Some("low".to_owned()));
             model
                 .thinking_level_map
                 .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Max, Some("max".to_owned()));
         }
         Some("gpt5-mini") => {
             model.thinking_level_map.insert(ThinkingLevel::Off, None);
@@ -4265,6 +4255,12 @@ fn apply_opencode_model_overrides(model: &mut Model) {
                 cache_write: 0.0,
                 tiers: Vec::new(),
             };
+            model.compat = Some(json!({
+                "supportsStore": false,
+                "supportsDeveloperRole": false,
+                "maxTokensField": "max_tokens",
+                "supportsLongCacheRetention": false,
+            }));
         }
         "minimax-m2.5" => {
             model.reasoning = true;
@@ -4297,7 +4293,7 @@ fn apply_opencode_go_model_overrides(model: &mut Model) {
                 .insert(ThinkingLevel::High, Some("high".to_owned()));
             model
                 .thinking_level_map
-                .insert(ThinkingLevel::XHigh, Some("max".to_owned()));
+                .insert(ThinkingLevel::Max, Some("max".to_owned()));
             model.context_window = 1_000_000;
             model.max_tokens = 384_000;
             model.cost = ModelCost {
@@ -4327,6 +4323,12 @@ fn apply_opencode_go_model_overrides(model: &mut Model) {
         }
         "kimi-k2.6" => {
             model.reasoning = true;
+            model.thinking_level_map.clear();
+            model
+                .thinking_level_map
+                .insert(ThinkingLevel::Minimal, None);
+            model.thinking_level_map.insert(ThinkingLevel::Low, None);
+            model.thinking_level_map.insert(ThinkingLevel::Medium, None);
             ensure_image_input(model);
             model.context_window = 262_144;
             model.max_tokens = 65_536;
@@ -4337,6 +4339,14 @@ fn apply_opencode_go_model_overrides(model: &mut Model) {
                 cache_write: 0.0,
                 tiers: Vec::new(),
             };
+            model.compat = Some(json!({
+                "supportsStore": false,
+                "supportsDeveloperRole": false,
+                "thinkingFormat": "deepseek",
+                "supportsReasoningEffort": false,
+                "maxTokensField": "max_tokens",
+                "supportsLongCacheRetention": false,
+            }));
         }
         "minimax-m2.5" => {
             model.api = "anthropic-messages".to_owned();
@@ -4462,11 +4472,8 @@ fn reasoning_for_model(provider: &str, model_id: &str) -> bool {
 
 fn xhigh_effort_for_model(provider: &str, model_id: &str) -> Option<&'static str> {
     match (provider, model_id) {
-        ("anthropic", "claude-opus-4-6") => Some("max"),
         ("anthropic", "claude-opus-4-7") => Some("xhigh"),
         ("openai-codex", "gpt-5.4" | "gpt-5.5") => Some("xhigh"),
-        ("openrouter", "anthropic/claude-opus-4.6") => Some("max"),
-        _ if is_deepseek_v4_flash(provider, model_id) => Some("max"),
         _ => None,
     }
 }

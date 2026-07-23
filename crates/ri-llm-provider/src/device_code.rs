@@ -4,8 +4,15 @@
 //! machine (deadline, current interval, slow_down bookkeeping) so drivers can
 //! run it against real timers while tests drive it with virtual time.
 
-use std::future::Future;
+use std::{
+    future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
+pub const DEVICE_FLOW_CANCEL_MESSAGE: &str = "Login cancelled";
 pub const DEVICE_FLOW_TIMEOUT_MESSAGE: &str = "Device flow timed out";
 pub const DEVICE_FLOW_SLOW_DOWN_TIMEOUT_MESSAGE: &str = "Device flow timed out after one or more slow_down responses. This is often caused by clock drift in WSL or VM environments. Please sync or restart the VM clock and try again.";
 
@@ -162,8 +169,8 @@ pub fn device_flow_timeout_message(slow_down_seen: bool) -> String {
 pub async fn poll_device_code_flow_with_sleeper<T, P, PFut, S, SFut>(
     config: &DeviceCodePollConfig,
     start_ms: i64,
-    mut poll: P,
-    mut sleep: S,
+    poll: P,
+    sleep: S,
 ) -> Result<T, String>
 where
     P: FnMut() -> PFut,
@@ -171,15 +178,47 @@ where
     S: FnMut(u64) -> SFut,
     SFut: Future<Output = ()>,
 {
+    poll_device_code_flow_with_sleeper_and_abort(config, start_ms, poll, sleep, None).await
+}
+
+/// [`poll_device_code_flow_with_sleeper`] with a cooperative abort flag.
+///
+/// Mirrors pi's `pollOAuthDeviceCodeFlow` abort signal: the flag is checked
+/// before the initial wait, before every poll, and before every inter-poll
+/// wait, failing with [`DEVICE_FLOW_CANCEL_MESSAGE`] once set.
+pub async fn poll_device_code_flow_with_sleeper_and_abort<T, P, PFut, S, SFut>(
+    config: &DeviceCodePollConfig,
+    start_ms: i64,
+    mut poll: P,
+    mut sleep: S,
+    abort_flag: Option<Arc<AtomicBool>>,
+) -> Result<T, String>
+where
+    P: FnMut() -> PFut,
+    PFut: Future<Output = Result<DeviceCodePollResponse<T>, String>>,
+    S: FnMut(u64) -> SFut,
+    SFut: Future<Output = ()>,
+{
+    let aborted = || -> bool {
+        abort_flag
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+    };
     let mut state = DeviceCodePollState::new(start_ms, config);
     let mut now_ms = start_ms;
     if let Some(delay_ms) = state.initial_wait_ms(now_ms) {
+        if aborted() {
+            return Err(DEVICE_FLOW_CANCEL_MESSAGE.to_owned());
+        }
         sleep(delay_ms).await;
         now_ms += delay_ms as i64;
     }
     loop {
         if !state.should_poll(now_ms) {
             return Err(state.timeout_message());
+        }
+        if aborted() {
+            return Err(DEVICE_FLOW_CANCEL_MESSAGE.to_owned());
         }
         match state.apply_response(poll().await?) {
             DeviceCodePollProgress::Continue => {}
@@ -188,6 +227,9 @@ where
         }
         match state.wait_after_poll_ms(now_ms) {
             Some(delay_ms) => {
+                if aborted() {
+                    return Err(DEVICE_FLOW_CANCEL_MESSAGE.to_owned());
+                }
                 sleep(delay_ms).await;
                 now_ms += delay_ms as i64;
             }

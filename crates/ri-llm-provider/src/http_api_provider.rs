@@ -1387,9 +1387,12 @@ async fn stream_openai_codex_websocket_json(
         (cached.socket, cached.continuation, cached.created_at_ms)
     } else {
         (
-            OpenAICodexWebSocket::connect(url, headers)
-                .await
-                .map_err(CodexWebSocketStreamError::transport)?,
+            connect_openai_codex_websocket(
+                url,
+                headers,
+                openai_codex_websocket_connect_timeout_ms(options),
+            )
+            .await?,
             None,
             now_millis() as i64,
         )
@@ -1420,14 +1423,38 @@ async fn stream_openai_codex_websocket_json(
     let mut processor = OpenAIResponsesStreamProcessor::with_request_service_tier(
         request_service_tier_for_usage(model, options),
     );
+    // The stream timeout acts as an idle timeout between websocket events (pi
+    // 7c02a556): before the first event the transport error falls back to
+    // SSE; after the stream started it surfaces as an error.
+    let idle_timeout_ms = options
+        .stream
+        .timeout_ms
+        .filter(|timeout_ms| *timeout_ms > 0);
     loop {
         if push_abort_if_requested(sender, options, output) {
             let _ = socket.close().await;
             return Ok(());
         }
-        let event = socket
-            .read_json_text()
-            .await
+        let read_result = match idle_timeout_ms {
+            Some(timeout_ms) => {
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(timeout_ms),
+                    socket.read_json_text(),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => {
+                        let _ = socket.close().await;
+                        return Err(CodexWebSocketStreamError::transport(format!(
+                            "WebSocket idle timeout after {timeout_ms}ms"
+                        )));
+                    }
+                }
+            }
+            None => socket.read_json_text().await,
+        };
+        let event = read_result
             .map_err(|error| {
                 if error.starts_with("Invalid Codex WebSocket JSON:") {
                     CodexWebSocketStreamError::non_transport(error)
@@ -1526,7 +1553,10 @@ async fn stream_openai_completions_sse_json(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.map_err(|error| error.to_string())?;
-        return Err(provider_error_from_body(status.as_u16(), &body));
+        return Err(openai_completions_provider_error_from_body(
+            status.as_u16(),
+            &body,
+        ));
     }
 
     sender.push(AssistantMessageEvent::Start {
@@ -1586,7 +1616,16 @@ async fn stream_openai_responses_sse_json(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.map_err(|error| error.to_string())?;
-        return Err(provider_error_from_body(status.as_u16(), &body));
+        let prefix = if model.api == "azure-openai-responses" {
+            "Azure OpenAI API error"
+        } else {
+            "OpenAI API error"
+        };
+        return Err(openai_provider_error_from_body(
+            status.as_u16(),
+            &body,
+            Some(prefix),
+        ));
     }
 
     stream_openai_responses_sse_response(model, options, response, sender, output).await
@@ -1606,6 +1645,18 @@ async fn stream_openai_codex_sse_json(
     let body_json = payload.to_string();
     let compressed_body =
         crate::openai_codex_responses::compress_openai_codex_request_body(&body_json);
+    // The stream timeout only guards SSE response-header arrival (pi
+    // 493efd42); a whole-request reqwest timeout would kill long-lived
+    // streaming bodies, so strip it from the request builder.
+    let request_options = {
+        let mut request_options = options.clone();
+        request_options.stream.timeout_ms = None;
+        request_options
+    };
+    let header_timeout_ms = options
+        .stream
+        .timeout_ms
+        .filter(|timeout_ms| *timeout_ms > 0);
     let mut attempt = 0usize;
     loop {
         if push_abort_if_requested(sender, options, output) {
@@ -1615,18 +1666,33 @@ async fn stream_openai_codex_sse_json(
         let request = match &compressed_body {
             Some(compressed) => {
                 let mut request =
-                    build_json_request(model, options, url, headers, payload.clone())?;
+                    build_json_request(model, &request_options, url, headers, payload.clone())?;
                 request = request
                     .header("content-encoding", "zstd")
                     .body(compressed.clone());
                 request
             }
-            None => build_json_request(model, options, url, headers, payload.clone())?,
+            None => build_json_request(model, &request_options, url, headers, payload.clone())?,
         };
-        let response = match request.send().await {
+        let send_result = match header_timeout_ms {
+            Some(timeout_ms) => {
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(timeout_ms),
+                    request.send(),
+                )
+                .await
+                {
+                    Ok(result) => result.map_err(|error| error.to_string()),
+                    Err(_) => Err(format!(
+                        "Codex SSE response headers timed out after {timeout_ms}ms"
+                    )),
+                }
+            }
+            None => request.send().await.map_err(|error| error.to_string()),
+        };
+        let response = match send_result {
             Ok(response) => response,
             Err(error) => {
-                let error = error.to_string();
                 let max_retries = openai_codex_max_retries(options);
                 if attempt >= max_retries || error.contains("usage limit") {
                     return Err(error);
@@ -1677,6 +1743,42 @@ async fn stream_openai_codex_sse_json(
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
         }
         attempt += 1;
+    }
+}
+
+const DEFAULT_OPENAI_CODEX_WEBSOCKET_CONNECT_TIMEOUT_MS: u64 = 15_000;
+
+fn openai_codex_websocket_connect_timeout_ms(options: &SimpleStreamOptions) -> u64 {
+    options
+        .stream
+        .extra
+        .get("websocketConnectTimeoutMs")
+        .and_then(Value::as_u64)
+        .unwrap_or(DEFAULT_OPENAI_CODEX_WEBSOCKET_CONNECT_TIMEOUT_MS)
+}
+
+/// A connect timeout of 0 disables the guard, matching pi's `connectTimeoutMs
+/// > 0` check (pi be7d5cf5).
+async fn connect_openai_codex_websocket(
+    url: &str,
+    headers: &BTreeMap<String, String>,
+    connect_timeout_ms: u64,
+) -> Result<OpenAICodexWebSocket, CodexWebSocketStreamError> {
+    if connect_timeout_ms == 0 {
+        return OpenAICodexWebSocket::connect(url, headers)
+            .await
+            .map_err(CodexWebSocketStreamError::transport);
+    }
+    match tokio::time::timeout(
+        std::time::Duration::from_millis(connect_timeout_ms),
+        OpenAICodexWebSocket::connect(url, headers),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(CodexWebSocketStreamError::transport),
+        Err(_) => Err(CodexWebSocketStreamError::transport(format!(
+            "WebSocket connect timeout after {connect_timeout_ms}ms"
+        ))),
     }
 }
 
@@ -2461,6 +2563,59 @@ fn push_sse_event(events: &mut Vec<Value>, data_lines: &mut Vec<String>) {
     if let Ok(value) = parse_json_with_repair::<Value>(&data) {
         events.push(value);
     }
+}
+
+const MAX_PROVIDER_ERROR_BODY_CHARS: usize = 4000;
+
+fn truncate_provider_error_text(text: &str, max_chars: usize) -> String {
+    let total_chars = text.chars().count();
+    if total_chars <= max_chars {
+        return text.to_owned();
+    }
+    let truncated = text.chars().take(max_chars).collect::<String>();
+    format!(
+        "{truncated}... [truncated {} chars]",
+        total_chars - max_chars
+    )
+}
+
+/// pi surfaces non-2xx OpenAI bodies as `<status>: <body>` (no prefix) or
+/// `<prefix> (<status>): <body>` (`formatProviderError`).
+fn openai_provider_error_from_body(status: u16, body: &str, prefix: Option<&str>) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        let message = format!("Provider returned HTTP {status}");
+        return match prefix {
+            Some(prefix) => format!("{prefix} ({status}): {message}"),
+            None => message,
+        };
+    }
+    let body = truncate_provider_error_text(trimmed, MAX_PROVIDER_ERROR_BODY_CHARS);
+    match prefix {
+        Some(prefix) => format!("{prefix} ({status}): {body}"),
+        None => format!("{status}: {body}"),
+    }
+}
+
+fn openai_completions_provider_error_from_body(status: u16, body: &str) -> String {
+    let mut message = openai_provider_error_from_body(status, body, None);
+    // OpenRouter tucks the upstream reason under error.metadata.raw; append it
+    // only when the surfaced body does not already carry it (pi dedups).
+    if let Some(raw) = parse_json_with_repair::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/error/metadata/raw")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .filter(|raw| !raw.is_empty())
+        && !message.contains(&raw)
+    {
+        message.push('\n');
+        message.push_str(&raw);
+    }
+    message
 }
 
 fn provider_error_from_body(status: u16, body: &str) -> String {

@@ -523,34 +523,47 @@ fn supports_xhigh_model_metadata_port() {
         assert!(get_supported_thinking_levels(&model).contains(&ThinkingLevel::XHigh));
     }
 
+    // First-party DeepSeek V4 models moved from `xhigh` to a `max` level in
+    // the pi catalog refresh; the OpenRouter alias still exposes `xhigh`.
     for (provider, model_id) in [
         ("deepseek", "deepseek-v4-flash"),
         ("deepseek", "deepseek-v4-pro"),
         ("opencode-go", "deepseek-v4-flash"),
-        ("openrouter", "deepseek/deepseek-v4-flash"),
     ] {
         let model = get_model(provider, model_id).expect("model");
         assert_eq!(
             get_supported_thinking_levels(&model),
-            vec![
-                ThinkingLevel::Off,
-                ThinkingLevel::High,
-                ThinkingLevel::XHigh
-            ]
+            vec![ThinkingLevel::Off, ThinkingLevel::High, ThinkingLevel::Max]
         );
         assert_eq!(
-            model.thinking_level_map.get(&ThinkingLevel::XHigh),
+            model.thinking_level_map.get(&ThinkingLevel::Max),
             Some(&Some("max".to_owned()))
         );
     }
 
-    let openrouter_opus =
-        get_model("openrouter", "anthropic/claude-opus-4.6").expect("openrouter opus");
-    assert!(get_supported_thinking_levels(&openrouter_opus).contains(&ThinkingLevel::XHigh));
+    let openrouter_deepseek =
+        get_model("openrouter", "deepseek/deepseek-v4-flash").expect("openrouter deepseek");
     assert_eq!(
-        openrouter_opus
+        get_supported_thinking_levels(&openrouter_deepseek),
+        vec![
+            ThinkingLevel::Off,
+            ThinkingLevel::High,
+            ThinkingLevel::XHigh
+        ]
+    );
+    assert_eq!(
+        openrouter_deepseek
             .thinking_level_map
             .get(&ThinkingLevel::XHigh),
+        Some(&Some("xhigh".to_owned()))
+    );
+
+    let openrouter_opus =
+        get_model("openrouter", "anthropic/claude-opus-4.6").expect("openrouter opus");
+    assert!(!get_supported_thinking_levels(&openrouter_opus).contains(&ThinkingLevel::XHigh));
+    assert!(get_supported_thinking_levels(&openrouter_opus).contains(&ThinkingLevel::Max));
+    assert_eq!(
+        openrouter_opus.thinking_level_map.get(&ThinkingLevel::Max),
         Some(&Some("max".to_owned()))
     );
 }
@@ -781,7 +794,8 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
             (ThinkingLevel::Low, None),
             (ThinkingLevel::Medium, None),
             (ThinkingLevel::High, Some("high".to_owned())),
-            (ThinkingLevel::XHigh, Some("max".to_owned())),
+            (ThinkingLevel::XHigh, Some("xhigh".to_owned())),
+            (ThinkingLevel::Max, None),
         ])
     );
     assert_eq!(
@@ -794,9 +808,10 @@ fn openrouter_model_metadata_matches_source_tested_generated_catalog() {
 
     let opus = get_model("openrouter", "anthropic/claude-opus-4.6").expect("opus");
     assert_eq!(
-        opus.thinking_level_map.get(&ThinkingLevel::XHigh),
+        opus.thinking_level_map.get(&ThinkingLevel::Max),
         Some(&Some("max".to_owned()))
     );
+    assert_eq!(opus.thinking_level_map.get(&ThinkingLevel::XHigh), None);
 
     let codex = get_model("openrouter", "openai/gpt-5.2-codex").expect("codex");
     assert_eq!(
@@ -2195,15 +2210,10 @@ fn xai_model_metadata_matches_generated_catalog() {
             "grok-2-vision",
             "grok-2-vision-1212",
             "grok-2-vision-latest",
-            "grok-3",
-            "grok-3-fast",
-            "grok-4.20-0309-non-reasoning",
-            "grok-4.20-0309-reasoning",
             "grok-4.3",
             "grok-4.5",
             "grok-beta",
             "grok-build-0.1",
-            "grok-code-fast-1",
             "grok-vision-beta",
         ]
     );
@@ -2294,62 +2304,6 @@ fn xai_model_metadata_matches_generated_catalog() {
             },
         ),
         (
-            "grok-3",
-            false,
-            false,
-            131_072,
-            8_192,
-            ModelCost {
-                input: 3.0,
-                output: 15.0,
-                cache_read: 0.75,
-                cache_write: 0.0,
-                tiers: Vec::new(),
-            },
-        ),
-        (
-            "grok-3-fast",
-            false,
-            false,
-            131_072,
-            8_192,
-            ModelCost {
-                input: 5.0,
-                output: 25.0,
-                cache_read: 1.25,
-                cache_write: 0.0,
-                tiers: Vec::new(),
-            },
-        ),
-        (
-            "grok-4.20-0309-non-reasoning",
-            false,
-            true,
-            2_000_000,
-            30_000,
-            ModelCost {
-                input: 2.0,
-                output: 6.0,
-                cache_read: 0.2,
-                cache_write: 0.0,
-                tiers: Vec::new(),
-            },
-        ),
-        (
-            "grok-4.20-0309-reasoning",
-            true,
-            true,
-            2_000_000,
-            30_000,
-            ModelCost {
-                input: 2.0,
-                output: 6.0,
-                cache_read: 0.2,
-                cache_write: 0.0,
-                tiers: Vec::new(),
-            },
-        ),
-        (
             "grok-4.3",
             true,
             true,
@@ -2373,20 +2327,6 @@ fn xai_model_metadata_matches_generated_catalog() {
                 input: 5.0,
                 output: 15.0,
                 cache_read: 5.0,
-                cache_write: 0.0,
-                tiers: Vec::new(),
-            },
-        ),
-        (
-            "grok-code-fast-1",
-            false,
-            false,
-            32_768,
-            8_192,
-            ModelCost {
-                input: 0.2,
-                output: 1.5,
-                cache_read: 0.02,
                 cache_write: 0.0,
                 tiers: Vec::new(),
             },
@@ -2511,8 +2451,8 @@ fn github_copilot_model_metadata_matches_generated_catalog() {
             true,
             1_000_000,
             64_000,
-            None,
-            Some("opus-max"),
+            Some("adaptive"),
+            Some("claude-max"),
         ),
         (
             "claude-opus-4.7",
@@ -2521,8 +2461,8 @@ fn github_copilot_model_metadata_matches_generated_catalog() {
             true,
             144_000,
             64_000,
-            None,
-            Some("opus-xhigh"),
+            Some("adaptive-no-temperature"),
+            Some("claude-minimal-xhigh-max"),
         ),
         (
             "claude-sonnet-4.5",
@@ -2541,8 +2481,8 @@ fn github_copilot_model_metadata_matches_generated_catalog() {
             true,
             1_000_000,
             32_000,
-            None,
-            None,
+            Some("adaptive"),
+            Some("claude-minimal-max"),
         ),
         (
             "gemini-2.5-pro",
@@ -2703,15 +2643,28 @@ fn github_copilot_model_metadata_matches_generated_catalog() {
             Some("eager-off") => Some(json!({
                 "supportsEagerToolInputStreaming": false,
             })),
+            Some("adaptive") => Some(json!({
+                "forceAdaptiveThinking": true,
+            })),
+            Some("adaptive-no-temperature") => Some(json!({
+                "forceAdaptiveThinking": true,
+                "supportsTemperature": false,
+            })),
             _ => None,
         };
         assert_eq!(model.compat, expected_compat, "{model_id} compat");
 
         let expected_thinking = match thinking {
-            Some("opus-max") => BTreeMap::from([(ThinkingLevel::XHigh, Some("max".to_owned()))]),
-            Some("opus-xhigh") => {
-                BTreeMap::from([(ThinkingLevel::XHigh, Some("xhigh".to_owned()))])
-            }
+            Some("claude-max") => BTreeMap::from([(ThinkingLevel::Max, Some("max".to_owned()))]),
+            Some("claude-minimal-max") => BTreeMap::from([
+                (ThinkingLevel::Minimal, Some("low".to_owned())),
+                (ThinkingLevel::Max, Some("max".to_owned())),
+            ]),
+            Some("claude-minimal-xhigh-max") => BTreeMap::from([
+                (ThinkingLevel::Minimal, Some("low".to_owned())),
+                (ThinkingLevel::XHigh, Some("xhigh".to_owned())),
+                (ThinkingLevel::Max, Some("max".to_owned())),
+            ]),
             Some("gpt5-mini") => BTreeMap::from([
                 (ThinkingLevel::Off, None),
                 (ThinkingLevel::Minimal, Some("low".to_owned())),
@@ -4342,6 +4295,11 @@ fn openai_model_metadata_matches_generated_gpt5_catalog() {
         if supports_xhigh {
             expected_thinking_map.insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
         }
+        if model_id == "gpt-5.5-pro" {
+            // GPT-5.5 Pro only accepts medium/high/xhigh reasoning efforts.
+            expected_thinking_map.insert(ThinkingLevel::Minimal, None);
+            expected_thinking_map.insert(ThinkingLevel::Low, None);
+        }
         assert_eq!(
             model.thinking_level_map, expected_thinking_map,
             "{model_id} thinking map"
@@ -5186,7 +5144,7 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
     let expected = [
         (
             "xai",
-            "grok-3-fast",
+            "grok-4.3",
             "openai-completions",
             "https://api.x.ai/v1",
         ),
@@ -5393,13 +5351,24 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
         ]
     );
 
+    // Kimi Coding is subscription-backed; pi substitutes the equivalent
+    // Moonshot API rates as implied pricing instead of zero cost.
     let kimi_for_coding = get_model("kimi-coding", "kimi-for-coding").expect("kimi for coding");
     assert!(kimi_for_coding.reasoning);
     assert_eq!(
         kimi_for_coding.input,
         vec![InputKind::Text, InputKind::Image]
     );
-    assert_eq!(kimi_for_coding.cost, ModelCost::default());
+    assert_eq!(
+        kimi_for_coding.cost,
+        ModelCost {
+            input: 0.95,
+            output: 4.0,
+            cache_read: 0.19,
+            cache_write: 0.0,
+            tiers: Vec::new(),
+        }
+    );
     assert_eq!(kimi_for_coding.context_window, 262_144);
     assert_eq!(kimi_for_coding.max_tokens, 32_768);
     assert_eq!(
@@ -5413,7 +5382,16 @@ fn openai_compatible_provider_base_urls_match_provider_catalog() {
     let kimi = get_model("kimi-coding", "kimi-k2-thinking").expect("kimi model");
     assert!(kimi.reasoning);
     assert_eq!(kimi.input, vec![InputKind::Text]);
-    assert_eq!(kimi.cost, ModelCost::default());
+    assert_eq!(
+        kimi.cost,
+        ModelCost {
+            input: 0.6,
+            output: 2.5,
+            cache_read: 0.15,
+            cache_write: 0.0,
+            tiers: Vec::new(),
+        }
+    );
     assert_eq!(kimi.context_window, 262_144);
     assert_eq!(kimi.max_tokens, 32_768);
     assert_eq!(
@@ -5482,7 +5460,7 @@ fn opencode_model_metadata_and_env_key_match_provider_catalog() {
             (ThinkingLevel::Low, None),
             (ThinkingLevel::Medium, None),
             (ThinkingLevel::High, Some("high".to_owned())),
-            (ThinkingLevel::XHigh, Some("max".to_owned())),
+            (ThinkingLevel::Max, Some("max".to_owned())),
         ])
     );
     assert_eq!(
@@ -9864,7 +9842,7 @@ fn bedrock_raw_message_conversion_skips_unknown_assistant_content_blocks() {
 }
 
 #[test]
-fn bedrock_raw_message_conversion_skips_user_messages_with_only_unknown_blocks() {
+fn bedrock_raw_message_conversion_replaces_user_messages_with_only_unknown_blocks() {
     let model = get_model(
         "amazon-bedrock",
         "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -9879,7 +9857,11 @@ fn bedrock_raw_message_conversion_skips_user_messages_with_only_unknown_blocks()
         CacheRetention::None,
     );
 
-    assert!(messages.is_empty());
+    // pi replaces user messages whose blocks are all unrepresentable with a
+    // "<empty>" placeholder instead of dropping the turn.
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"], json!("user"));
+    assert_eq!(messages[0]["content"], json!([{ "text": "<empty>" }]));
 }
 
 #[test]
@@ -10746,6 +10728,11 @@ fn azure_openai_model_metadata_matches_generated_gpt5_catalog() {
         {
             expected_thinking_map.insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
         }
+        if model_id == "gpt-5.5-pro" {
+            // GPT-5.5 Pro only accepts medium/high/xhigh reasoning efforts.
+            expected_thinking_map.insert(ThinkingLevel::Minimal, None);
+            expected_thinking_map.insert(ThinkingLevel::Low, None);
+        }
         assert_eq!(
             azure.thinking_level_map, expected_thinking_map,
             "{model_id} thinking map"
@@ -10796,7 +10783,7 @@ fn azure_openai_responses_payload_uses_deployment_tools_session_and_reasoning() 
 
     assert_eq!(payload["model"], "prod-mini");
     assert_eq!(payload["stream"], true);
-    assert!(payload.get("store").is_none());
+    assert_eq!(payload["store"], false);
     assert_eq!(payload["prompt_cache_key"], "session-1");
     assert_eq!(payload["max_output_tokens"], 123);
     assert_eq!(payload["temperature"], 0.2);
@@ -16693,7 +16680,7 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
             ..Default::default()
         },
         OpenAICompletionsPayloadOptions {
-            reasoning: Some(ThinkingLevel::XHigh),
+            reasoning: Some(ThinkingLevel::Max),
             ..Default::default()
         },
     );
@@ -16736,7 +16723,7 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
                 (ThinkingLevel::Low, None),
                 (ThinkingLevel::Medium, None),
                 (ThinkingLevel::High, Some("high".to_owned())),
-                (ThinkingLevel::XHigh, Some("max".to_owned())),
+                (ThinkingLevel::Max, Some("max".to_owned())),
             ]),
             "{model_id}"
         );
@@ -16755,7 +16742,7 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
                 ..Default::default()
             },
             OpenAICompletionsPayloadOptions {
-                reasoning: Some(ThinkingLevel::XHigh),
+                reasoning: Some(ThinkingLevel::Max),
                 ..Default::default()
             },
         );

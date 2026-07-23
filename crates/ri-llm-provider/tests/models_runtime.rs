@@ -9,7 +9,6 @@ use ri_llm_provider::auth::{
     OAuthAuth, OAuthCredential, ProviderAuth, env_api_key_auth,
 };
 use ri_llm_provider::*;
-use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1007,6 +1006,300 @@ fn user_context(text: &str) -> Context {
         messages: vec![Message::User(UserMessage::text(text))],
         tools: Vec::new(),
     }
+}
+
+#[tokio::test]
+async fn refresh_passes_effective_credentials_and_options_while_skipping_unconfigured() {
+    let models = create_models(CreateModelsOptions::default());
+
+    // Configured provider: fetch_models sees the effective credential and the
+    // force flag from the refresh options.
+    let seen: Arc<parking_lot::Mutex<Vec<(Option<Credential>, bool)>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let configured_handle = faux_provider(RegisterFauxProviderOptions {
+        provider: Some("configured".to_owned()),
+        ..Default::default()
+    });
+    let mut configured = CreateProviderOptions::new(
+        "configured",
+        ProviderAuth {
+            api_key: Some(always_configured_api_key("ambient-key")),
+            oauth: None,
+        },
+        ProviderApiDispatch::Single(handle_api(&configured_handle)),
+    );
+    let seen_ref = seen.clone();
+    configured.fetch_models = Some(Arc::new(move |context| {
+        let seen = seen_ref.clone();
+        Box::pin(async move {
+            seen.lock()
+                .push((context.credential.clone(), context.force));
+            Ok(Vec::new())
+        }) as BoxFuture<'static, Result<Vec<Model>, String>>
+    }));
+    models.set_provider(create_provider(configured));
+
+    // Unconfigured provider: fetch_models is never invoked.
+    let unconfigured_handle = faux_provider(RegisterFauxProviderOptions {
+        provider: Some("unconfigured".to_owned()),
+        ..Default::default()
+    });
+    let mut unconfigured = CreateProviderOptions::new(
+        "unconfigured",
+        ProviderAuth {
+            api_key: Some(env_api_key_auth(
+                "Unconfigured key",
+                ["RI_TEST_AUDIT_UNCONFIGURED_KEY"],
+            )),
+            oauth: None,
+        },
+        ProviderApiDispatch::Single(handle_api(&unconfigured_handle)),
+    );
+    let unconfigured_calls = Arc::new(AtomicUsize::new(0));
+    let unconfigured_calls_ref = unconfigured_calls.clone();
+    unconfigured.fetch_models = Some(Arc::new(move |_context| {
+        let calls = unconfigured_calls_ref.clone();
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }) as BoxFuture<'static, Result<Vec<Model>, String>>
+    }));
+    models.set_provider(create_provider(unconfigured));
+
+    let result = models
+        .refresh(ModelsRefreshOptions {
+            force: true,
+            ..Default::default()
+        })
+        .await;
+    assert!(!result.aborted);
+    assert!(result.errors.is_empty());
+
+    let seen = seen.lock().clone();
+    assert_eq!(seen.len(), 1);
+    let (credential, force) = &seen[0];
+    let Some(Credential::ApiKey(credential)) = credential else {
+        panic!("expected effective api-key credential, got {credential:?}");
+    };
+    assert_eq!(credential.key.as_deref(), Some("ambient-key"));
+    assert!(*force);
+    assert_eq!(unconfigured_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn refresh_refreshes_expired_oauth_before_refreshing_models() {
+    let store = Arc::new(InMemoryCredentialStore::new());
+    let models = create_models(CreateModelsOptions {
+        credentials: Some(store.clone()),
+        ..Default::default()
+    });
+    let oauth = Arc::new(StaticOAuth::succeeding("fresh-access"));
+    store
+        .modify(
+            "oauth-dynamic",
+            Box::new(|_| Box::pin(async { Ok(Some(oauth_credential("expired", 0))) })),
+        )
+        .await
+        .expect("store expired credential");
+
+    let handle = faux_provider(RegisterFauxProviderOptions {
+        provider: Some("oauth-dynamic".to_owned()),
+        ..Default::default()
+    });
+    let mut options = CreateProviderOptions::new(
+        "oauth-dynamic",
+        ProviderAuth {
+            api_key: None,
+            oauth: Some(oauth.clone()),
+        },
+        ProviderApiDispatch::Single(handle_api(&handle)),
+    );
+    let seen_credentials: Arc<parking_lot::Mutex<Vec<Option<Credential>>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let seen_credentials_ref = seen_credentials.clone();
+    options.fetch_models = Some(Arc::new(move |context| {
+        let seen = seen_credentials_ref.clone();
+        Box::pin(async move {
+            seen.lock().push(context.credential.clone());
+            Ok(Vec::new())
+        }) as BoxFuture<'static, Result<Vec<Model>, String>>
+    }));
+    models.set_provider(create_provider(options));
+
+    let result = models.refresh(ModelsRefreshOptions::default()).await;
+    assert!(result.errors.is_empty());
+    assert_eq!(oauth.refresh_calls.load(Ordering::SeqCst), 1);
+
+    // fetch_models received the refreshed credential, not the expired one.
+    let seen = seen_credentials.lock().clone();
+    assert_eq!(seen.len(), 1);
+    let Some(Credential::OAuth(credential)) = &seen[0] else {
+        panic!("expected refreshed oauth credential, got {:?}", seen[0]);
+    };
+    assert_eq!(credential.access, "fresh-access");
+    assert!(credential.expires > now_millis());
+
+    // The rotated credential was persisted through the store.
+    let stored = store
+        .read("oauth-dynamic")
+        .await
+        .expect("read")
+        .expect("stored");
+    let Credential::OAuth(stored) = stored else {
+        panic!("expected oauth credential");
+    };
+    assert_eq!(stored.access, "fresh-access");
+}
+
+#[tokio::test]
+async fn refresh_returns_aborted_state_without_reporting_cancellation_as_error() {
+    let models = create_models(CreateModelsOptions::default());
+    let handle = faux_provider(RegisterFauxProviderOptions {
+        provider: Some("dynamic".to_owned()),
+        ..Default::default()
+    });
+    let mut options = CreateProviderOptions::new(
+        "dynamic",
+        ProviderAuth {
+            api_key: Some(always_configured_api_key("key")),
+            oauth: None,
+        },
+        ProviderApiDispatch::Single(handle_api(&handle)),
+    );
+    // The fetch aborts the refresh mid-flight, mirroring pi's refreshModels
+    // calling controller.abort() before returning.
+    options.fetch_models = Some(Arc::new(move |context| {
+        Box::pin(async move {
+            if let Some(abort_flag) = &context.abort_flag {
+                abort_flag.store(true, Ordering::SeqCst);
+            }
+            Ok(vec![test_model("dynamic", "never-published")])
+        }) as BoxFuture<'static, Result<Vec<Model>, String>>
+    }));
+    models.set_provider(create_provider(options));
+
+    let abort_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let result = models
+        .refresh(ModelsRefreshOptions {
+            abort_flag: Some(abort_flag),
+            ..Default::default()
+        })
+        .await;
+    assert!(result.aborted);
+    assert!(result.errors.is_empty());
+    // The aborted fetch result was not published.
+    assert!(models.get_model("dynamic", "never-published").is_none());
+}
+
+#[tokio::test]
+async fn adds_model_headers_only_for_model_auth_and_transforms_assembled_headers_once() {
+    let transforms = Arc::new(AtomicUsize::new(0));
+    let transformed_input: Arc<parking_lot::Mutex<Vec<BTreeMap<String, String>>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let transforms_ref = transforms.clone();
+    let transformed_input_ref = transformed_input.clone();
+    let models = create_models(CreateModelsOptions {
+        transform_headers: Some(Arc::new(move |headers| {
+            let transforms = transforms_ref.clone();
+            let transformed_input = transformed_input_ref.clone();
+            Box::pin(async move {
+                transforms.fetch_add(1, Ordering::SeqCst);
+                transformed_input.lock().push(headers.clone());
+                let mut headers = headers;
+                headers.insert("x-transformed".to_owned(), "yes".to_owned());
+                headers
+            }) as BoxFuture<'static, BTreeMap<String, String>>
+        })),
+        ..Default::default()
+    });
+
+    let handle = faux_provider(RegisterFauxProviderOptions {
+        provider: Some("p1".to_owned()),
+        ..Default::default()
+    });
+    let seen_options: Arc<parking_lot::Mutex<Vec<SimpleStreamOptions>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let seen_ref = seen_options.clone();
+    handle.set_responses(vec![faux_response_factory(move |_, options, _, _| {
+        seen_ref.lock().push(options.clone());
+        faux_assistant_message("ok", Default::default())
+    })]);
+
+    let mut options = CreateProviderOptions::new(
+        "p1",
+        ProviderAuth {
+            api_key: Some(always_configured_api_key("key")),
+            oauth: None,
+        },
+        ProviderApiDispatch::Single(handle_api(&handle)),
+    );
+    let mut model = handle.get_model();
+    model.provider = "p1".to_owned();
+    model.headers = BTreeMap::from([
+        ("x-model".to_owned(), "model".to_owned()),
+        ("x-shared".to_owned(), "model".to_owned()),
+    ]);
+    options.models = vec![model.clone()];
+    models.set_provider(create_provider(options));
+
+    // Model headers apply only for model-scoped auth resolution.
+    let provider_auth = models
+        .get_auth("p1", &Default::default())
+        .await
+        .expect("auth")
+        .expect("configured");
+    assert!(provider_auth.auth.headers.is_empty());
+    let model_auth = models
+        .get_auth_for_model(&model, &Default::default())
+        .await
+        .expect("auth")
+        .expect("configured");
+    assert_eq!(
+        model_auth.auth.headers,
+        BTreeMap::from([
+            ("x-model".to_owned(), "model".to_owned()),
+            ("x-shared".to_owned(), "model".to_owned()),
+        ])
+    );
+
+    let mut stream_options = SimpleStreamOptions::default();
+    stream_options
+        .stream
+        .headers
+        .insert("x-explicit".to_owned(), "explicit".to_owned());
+    stream_options
+        .stream
+        .headers
+        .insert("X-Shared".to_owned(), "explicit".to_owned());
+    let message = models
+        .complete_simple(&model, user_context("hello"), stream_options)
+        .await;
+    assert_eq!(message.stop_reason, StopReason::Stop);
+
+    // The transform ran once, over the fully assembled headers.
+    assert_eq!(transforms.load(Ordering::SeqCst), 1);
+    let transform_inputs = transformed_input.lock().clone();
+    assert_eq!(
+        transform_inputs,
+        vec![BTreeMap::from([
+            ("x-model".to_owned(), "model".to_owned()),
+            ("x-explicit".to_owned(), "explicit".to_owned()),
+            ("X-Shared".to_owned(), "explicit".to_owned()),
+        ])]
+    );
+
+    // The provider saw the transformed headers.
+    let seen = seen_options.lock().clone();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(
+        seen[0].stream.headers,
+        BTreeMap::from([
+            ("x-model".to_owned(), "model".to_owned()),
+            ("x-explicit".to_owned(), "explicit".to_owned()),
+            ("X-Shared".to_owned(), "explicit".to_owned()),
+            ("x-transformed".to_owned(), "yes".to_owned()),
+        ])
+    );
 }
 
 #[tokio::test]

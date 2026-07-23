@@ -12,7 +12,7 @@ use crate::auth::{
     AuthEvent, AuthInteraction, AuthPrompt, AuthPromptOption, OAuthAuth, OAuthCredential,
 };
 use crate::device_code::{
-    DeviceCodePollConfig, DeviceCodePollResponse, poll_device_code_flow_with_sleeper,
+    DeviceCodePollConfig, DeviceCodePollResponse, poll_device_code_flow_with_sleeper_and_abort,
 };
 use crate::types::{Model, now_millis};
 use async_trait::async_trait;
@@ -416,7 +416,9 @@ async fn login_radius_with_device_code(
         expires_in_seconds: Some(device.expires_in_seconds),
         wait_before_first_poll: false,
     };
-    poll_device_code_flow_with_sleeper(
+    // pi passes `interaction.signal` here; ri's `AuthInteraction` does not
+    // model an abort signal, so there is no flag to pass through yet.
+    poll_device_code_flow_with_sleeper_and_abort(
         &poll_config,
         now_millis() as i64,
         || async {
@@ -451,6 +453,7 @@ async fn login_radius_with_device_code(
         |delay_ms| async move {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
         },
+        None,
     )
     .await
 }

@@ -446,12 +446,23 @@ fn push_models_error(sender: &AssistantMessageEventSender, model: &Model, error:
     });
 }
 
+/// Transform fully assembled model/auth/request headers before provider
+/// dispatch, mirroring pi `ModelsStreamTransforms.transformHeaders`. The hook
+/// runs exactly once per request, after resolved auth headers (including
+/// model-level headers, which apply only for model-scoped auth) merge with
+/// explicit request headers.
+pub type TransformHeadersFn = Arc<
+    dyn Fn(BTreeMap<String, String>) -> BoxFuture<'static, BTreeMap<String, String>> + Send + Sync,
+>;
+
 /// Options for [`create_models`].
 #[derive(Default)]
 pub struct CreateModelsOptions {
     pub credentials: Option<Arc<dyn CredentialStore>>,
     pub models_store: Option<Arc<dyn ModelsStore>>,
     pub auth_context: Option<Arc<dyn AuthContext>>,
+    /// Optional header-transform hook applied once over assembled headers.
+    pub transform_headers: Option<TransformHeadersFn>,
 }
 
 /// Runtime collection of providers plus auth application and stream
@@ -467,6 +478,7 @@ struct ModelsInner {
     credentials: Arc<dyn CredentialStore>,
     models_store: Arc<dyn ModelsStore>,
     auth_context: Arc<dyn AuthContext>,
+    transform_headers: Option<TransformHeadersFn>,
 }
 
 pub fn create_models(options: CreateModelsOptions) -> Models {
@@ -482,6 +494,7 @@ pub fn create_models(options: CreateModelsOptions) -> Models {
             auth_context: options
                 .auth_context
                 .unwrap_or_else(|| Arc::new(DefaultAuthContext)),
+            transform_headers: options.transform_headers,
         }),
     }
 }
@@ -951,6 +964,10 @@ impl Models {
             options.api_key = auth.api_key;
         }
         options.headers = merge_headers(&auth.headers, &options.headers);
+        // The Models-only transform runs last, once over assembled headers.
+        if let Some(transform) = &self.inner.transform_headers {
+            options.headers = transform(std::mem::take(&mut options.headers)).await;
+        }
         let mut env = resolution.env;
         env.extend(options.env.clone());
         options.env = env;

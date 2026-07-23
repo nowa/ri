@@ -292,8 +292,11 @@ pub fn build_openai_codex_sse_headers(
     set_header_case_insensitive(&mut headers, "accept", "text/event-stream");
     set_header_case_insensitive(&mut headers, "content-type", "application/json");
     if let Some(session_id) = session_id {
-        set_header_case_insensitive(&mut headers, "session-id", session_id);
-        set_header_case_insensitive(&mut headers, "x-client-request-id", session_id);
+        // The Codex backend enforces the same 64-char cap as prompt_cache_key
+        // on the session affinity headers (pi dcfe36c7).
+        let session_id = clamp_openai_prompt_cache_key(session_id);
+        set_header_case_insensitive(&mut headers, "session-id", &session_id);
+        set_header_case_insensitive(&mut headers, "x-client-request-id", &session_id);
     }
     headers
 }
@@ -310,8 +313,9 @@ pub fn build_openai_codex_websocket_headers(
     remove_header_case_insensitive(&mut headers, "accept");
     remove_header_case_insensitive(&mut headers, "content-type");
     set_header_case_insensitive(&mut headers, "OpenAI-Beta", OPENAI_CODEX_WEBSOCKET_BETA);
-    set_header_case_insensitive(&mut headers, "x-client-request-id", request_id);
-    set_header_case_insensitive(&mut headers, "session-id", request_id);
+    let request_id = clamp_openai_prompt_cache_key(request_id);
+    set_header_case_insensitive(&mut headers, "x-client-request-id", &request_id);
+    set_header_case_insensitive(&mut headers, "session-id", &request_id);
     headers
 }
 

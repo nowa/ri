@@ -602,13 +602,33 @@ where
     F: FnMut(u64) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
+    poll_openai_codex_device_auth_with_url_with_sleeper_and_abort(
+        device, token_url, start_ms, sleep, None,
+    )
+    .await
+}
+
+/// [`poll_openai_codex_device_auth_with_url_with_sleeper`] with a cooperative
+/// abort flag (pi passes the login `signal` through to
+/// `pollOAuthDeviceCodeFlow`).
+pub async fn poll_openai_codex_device_auth_with_url_with_sleeper_and_abort<F, Fut>(
+    device: &OpenAICodexDeviceAuth,
+    token_url: &str,
+    start_ms: i64,
+    sleep: F,
+    abort_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<OpenAICodexDeviceAuthorization, String>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     let config = crate::device_code::DeviceCodePollConfig {
         interval_seconds: Some(device.interval_seconds),
         expires_in_seconds: Some(OPENAI_CODEX_DEVICE_CODE_TIMEOUT_SECONDS),
         wait_before_first_poll: false,
     };
     let request = build_openai_codex_device_token_poll_request_with_url(device, token_url);
-    crate::device_code::poll_device_code_flow_with_sleeper(
+    crate::device_code::poll_device_code_flow_with_sleeper_and_abort(
         &config,
         start_ms,
         || async {
@@ -619,6 +639,7 @@ where
             ))
         },
         sleep,
+        abort_flag,
     )
     .await
 }
@@ -636,13 +657,43 @@ where
     F: FnMut(u64) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
+    login_openai_codex_device_code_with_urls_with_sleeper_and_abort(
+        user_code_url,
+        device_token_url,
+        exchange_token_url,
+        on_device_code,
+        start_ms,
+        sleep,
+        None,
+    )
+    .await
+}
+
+/// [`login_openai_codex_device_code_with_urls_with_sleeper`] with a
+/// cooperative abort flag checked by the token poll loop.
+#[allow(clippy::too_many_arguments)]
+pub async fn login_openai_codex_device_code_with_urls_with_sleeper_and_abort<C, F, Fut>(
+    user_code_url: &str,
+    device_token_url: &str,
+    exchange_token_url: &str,
+    on_device_code: C,
+    start_ms: i64,
+    sleep: F,
+    abort_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<OAuthCredentials, String>
+where
+    C: FnOnce(&OpenAICodexDeviceAuth),
+    F: FnMut(u64) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     let device = request_openai_codex_device_auth_with_url(user_code_url).await?;
     on_device_code(&device);
-    let authorization = poll_openai_codex_device_auth_with_url_with_sleeper(
+    let authorization = poll_openai_codex_device_auth_with_url_with_sleeper_and_abort(
         &device,
         device_token_url,
         start_ms,
         sleep,
+        abort_flag,
     )
     .await?;
     exchange_openai_codex_authorization_code_with_url_at(

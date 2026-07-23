@@ -106,10 +106,13 @@ pub fn build_azure_openai_responses_payload(
         "model": deployment_name,
         "input": messages,
         "stream": true,
+        "store": false,
     });
 
     if let Some(session_id) = options.session_id {
-        payload["prompt_cache_key"] = Value::String(session_id);
+        payload["prompt_cache_key"] = Value::String(
+            crate::openai_codex_responses::clamp_openai_prompt_cache_key(&session_id),
+        );
     }
     if let Some(max_tokens) = options.max_tokens.filter(|value| *value > 0) {
         // OpenAI Responses rejects max_output_tokens below 16.
@@ -178,15 +181,19 @@ pub fn normalize_azure_openai_base_url(base_url: &str) -> Result<String, String>
         return Err(format!("Invalid Azure OpenAI base URL: {base_url}"));
     }
 
-    let is_azure_host =
-        host.ends_with(".openai.azure.com") || host.ends_with(".cognitiveservices.azure.com");
+    // `.ai.azure.com` also covers Microsoft Foundry `.services.ai.azure.com`.
+    let is_azure_host = host.ends_with(".openai.azure.com")
+        || host.ends_with(".cognitiveservices.azure.com")
+        || host.ends_with(".ai.azure.com");
     let path = tail
         .split_once(['?', '#'])
         .map(|(path, _)| path)
         .unwrap_or(tail)
         .trim_end_matches('/');
 
-    if is_azure_host && (path.is_empty() || path == "/" || path == "/openai") {
+    if is_azure_host
+        && (path.is_empty() || path == "/" || path == "/openai" || path == "/openai/v1/responses")
+    {
         return Ok(format!("{scheme}://{host}/openai/v1"));
     }
 
