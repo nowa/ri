@@ -1593,14 +1593,22 @@ fn supports_bedrock_adaptive_thinking(model: &Model) -> bool {
         .any(|candidate| {
             candidate.contains("opus-4-6")
                 || candidate.contains("opus-4-7")
+                || candidate.contains("opus-4-8")
                 || candidate.contains("sonnet-4-6")
+                || candidate.contains("sonnet-5")
+                || candidate.contains("fable-5")
         })
 }
 
 fn supports_bedrock_native_xhigh_effort(model: &Model) -> bool {
     bedrock_model_match_candidates(model)
         .iter()
-        .any(|candidate| candidate.contains("opus-4-7"))
+        .any(|candidate| {
+            candidate.contains("opus-4-7")
+                || candidate.contains("opus-4-8")
+                || candidate.contains("sonnet-5")
+                || candidate.contains("fable-5")
+        })
 }
 
 fn map_bedrock_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> &'static str {

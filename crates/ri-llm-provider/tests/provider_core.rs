@@ -28079,3 +28079,56 @@ fn content_text_helpers_extract_and_join_text_blocks() {
     ];
     assert_eq!(user_content_text(&user_blocks, "\n"), "first\nsecond");
 }
+
+#[test]
+fn bedrock_adaptive_thinking_covers_the_new_claude_generations() {
+    // pi bedrock-thinking-payload: Opus 4.8 / Fable 5 / Sonnet 5 use
+    // adaptive thinking, and xhigh maps to effort=xhigh natively.
+    for (model_id, xhigh_effort) in [
+        ("global.anthropic.claude-opus-4-8-v1", "xhigh"),
+        ("global.anthropic.claude-fable-5-v1", "xhigh"),
+        ("global.anthropic.claude-sonnet-5-v1", "xhigh"),
+    ] {
+        let mut model = Model::faux("bedrock-converse-stream", "amazon-bedrock", model_id);
+        model.reasoning = true;
+        let payload = build_bedrock_payload(
+            &model,
+            &user_context("hello"),
+            BedrockPayloadOptions {
+                reasoning: Some(ThinkingLevel::XHigh),
+                ..Default::default()
+            },
+        );
+        let thinking = payload
+            .pointer("/additionalModelRequestFields/thinking")
+            .unwrap_or(&Value::Null);
+        assert_eq!(thinking["type"], "adaptive", "{model_id} adaptive");
+        assert_eq!(
+            payload.pointer("/additionalModelRequestFields/output_config/effort"),
+            Some(&json!(xhigh_effort)),
+            "{model_id} effort"
+        );
+    }
+}
+
+#[test]
+fn anthropic_omits_thinking_disabled_for_fable_5_when_off() {
+    // pi anthropic-thinking-disable: models whose thinkingLevelMap disables
+    // `off` (Claude Fable 5) omit the explicit disable; others send it.
+    let disabled_options = || {
+        let mut options = SimpleStreamOptions::default();
+        options
+            .stream
+            .extra
+            .insert("thinkingEnabled".to_owned(), json!(false));
+        options
+    };
+    let fable = get_model("anthropic", "claude-fable-5").expect("fable model");
+    let payload =
+        build_anthropic_simple_payload(&fable, &user_context("hello"), disabled_options());
+    assert!(payload.get("thinking").is_none(), "{payload}");
+
+    let opus = get_model("anthropic", "claude-opus-4-8").expect("opus model");
+    let payload = build_anthropic_simple_payload(&opus, &user_context("hello"), disabled_options());
+    assert_eq!(payload["thinking"], json!({ "type": "disabled" }));
+}

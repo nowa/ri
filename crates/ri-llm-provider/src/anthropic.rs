@@ -920,7 +920,11 @@ pub fn build_anthropic_payload(
                 }
             }
             Some(false) => {
-                payload["thinking"] = json!({ "type": "disabled" });
+                // Models whose thinking map disables `off` (Claude Fable 5)
+                // omit the explicit disable.
+                if model.thinking_level_map.get(&ThinkingLevel::Off) != Some(&None) {
+                    payload["thinking"] = json!({ "type": "disabled" });
+                }
             }
             None => {}
         }
