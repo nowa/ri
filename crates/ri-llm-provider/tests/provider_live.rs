@@ -87,6 +87,24 @@ impl ProviderPayloadHook for CaptureProviderPayloadHook {
     }
 }
 
+/// Captures the outgoing provider payload and then fails the request before
+/// it is sent, mirroring pi's throw-from-onPayload capture pattern.
+#[derive(Debug)]
+struct CaptureThenAbortProviderPayloadHook {
+    captured: Arc<Mutex<Option<Value>>>,
+}
+
+impl ProviderPayloadHook for CaptureThenAbortProviderPayloadHook {
+    fn on_payload(&self, _model: &Model, payload: Value) -> Result<Value, String> {
+        let mut captured = self
+            .captured
+            .lock()
+            .map_err(|_| "payload capture lock poisoned".to_owned())?;
+        *captured = Some(payload);
+        Err("live payload captured before send".to_owned())
+    }
+}
+
 #[derive(Debug)]
 struct OpenRouterCacheControlPayloadHook;
 
@@ -369,6 +387,26 @@ fn live_external_requirements() -> &'static [LiveExternalRequirement] {
             category: "api_key",
             name: "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
             detail: "Xiaomi token-plan SGP live tests",
+        },
+        LiveExternalRequirement {
+            category: "api_key",
+            name: "NVIDIA_API_KEY",
+            detail: "NVIDIA NIM OpenAI-compatible live tests",
+        },
+        LiveExternalRequirement {
+            category: "api_key",
+            name: "QWEN_TOKEN_PLAN_API_KEY",
+            detail: "Qwen Token Plan international live tests",
+        },
+        LiveExternalRequirement {
+            category: "api_key",
+            name: "QWEN_TOKEN_PLAN_CN_API_KEY",
+            detail: "Qwen Token Plan CN live tests",
+        },
+        LiveExternalRequirement {
+            category: "api_key",
+            name: "ANT_LING_API_KEY",
+            detail: "Ant Ling OpenAI-compatible live tests",
         },
         LiveExternalRequirement {
             category: "api_key",
@@ -1371,7 +1409,7 @@ fn live_openrouter_cache_write_context() -> Context {
     }
 }
 
-fn live_anthropic_opus_47_reasoning_context() -> Context {
+fn live_anthropic_opus_48_reasoning_context() -> Context {
     Context {
         system_prompt: Some(
             "You are a precise assistant. Follow the user's instructions exactly.".to_owned(),
@@ -2130,7 +2168,7 @@ fn assert_live_usage_total_matches_components(test: &str, usage: &Usage) {
     );
 }
 
-fn assert_live_anthropic_opus_47_payload(test: &str, payload: &Value) {
+fn assert_live_anthropic_opus_48_payload(test: &str, payload: &Value) {
     assert_eq!(
         payload
             .get("thinking")
@@ -2149,7 +2187,7 @@ fn assert_live_anthropic_opus_47_payload(test: &str, payload: &Value) {
     );
 }
 
-fn assert_live_anthropic_opus_47_response(
+fn assert_live_anthropic_opus_48_response(
     test: &str,
     message: &AssistantMessage,
     saw_thinking_event: bool,
@@ -2850,12 +2888,12 @@ async fn run_live_basic_text_generation_api_key_smoke(
         .await
 }
 
-async fn run_live_anthropic_opus_47_reasoning_smoke(test: &str) -> Result<(), Box<dyn Error>> {
+async fn run_live_anthropic_opus_48_reasoning_smoke(test: &str) -> Result<(), Box<dyn Error>> {
     let Some(api_key) = live_api_key(test, "ANTHROPIC_API_KEY") else {
         return Ok(());
     };
-    let model = get_model("anthropic", "claude-opus-4-7")
-        .ok_or_else(|| "missing model registry entry: anthropic/claude-opus-4-7")?;
+    let model = get_model("anthropic", "claude-opus-4-8")
+        .ok_or_else(|| "missing model registry entry: anthropic/claude-opus-4-8")?;
     let captured = Arc::new(Mutex::new(None));
     let mut options = live_text_options(Some(api_key));
     options.reasoning = Some(ThinkingLevel::High);
@@ -2866,7 +2904,7 @@ async fn run_live_anthropic_opus_47_reasoning_smoke(test: &str) -> Result<(), Bo
             captured: Arc::clone(&captured),
         }));
 
-    let mut stream = stream_simple(&model, live_anthropic_opus_47_reasoning_context(), options)?;
+    let mut stream = stream_simple(&model, live_anthropic_opus_48_reasoning_context(), options)?;
     let mut saw_thinking_event = false;
     while let Some(event) = stream.next().await {
         if matches!(
@@ -2885,8 +2923,8 @@ async fn run_live_anthropic_opus_47_reasoning_smoke(test: &str) -> Result<(), Bo
         .clone()
         .ok_or_else(|| format!("{test} did not capture a provider payload"))?;
 
-    assert_live_anthropic_opus_47_payload(test, &payload);
-    assert_live_anthropic_opus_47_response(test, &message, saw_thinking_event);
+    assert_live_anthropic_opus_48_payload(test, &payload);
+    assert_live_anthropic_opus_48_response(test, &message, saw_thinking_event);
     Ok(())
 }
 
@@ -9023,9 +9061,9 @@ async fn live_anthropic_messages_reports_total_usage_components() -> Result<(), 
 }
 
 #[tokio::test]
-async fn live_anthropic_opus_47_streams_reasoning_with_signature() -> Result<(), Box<dyn Error>> {
-    run_live_anthropic_opus_47_reasoning_smoke(
-        "live_anthropic_opus_47_streams_reasoning_with_signature",
+async fn live_anthropic_opus_48_streams_reasoning_with_signature() -> Result<(), Box<dyn Error>> {
+    run_live_anthropic_opus_48_reasoning_smoke(
+        "live_anthropic_opus_48_streams_reasoning_with_signature",
     )
     .await
 }
@@ -10781,6 +10819,20 @@ live_stream_reasoning_api_key_tests!(
 );
 
 live_stream_reasoning_api_key_tests!(
+    live_nvidia_stream_basic_text_generation,
+    live_nvidia_stream_handles_tool_call,
+    live_nvidia_streams_text_deltas,
+    live_nvidia_streams_thinking,
+    live_nvidia_handles_multiturn_with_thinking_and_tools,
+    "nvidia",
+    "nvidia/nemotron-3-super-120b-a12b",
+    "NVIDIA_API_KEY",
+    ThinkingLevel::High,
+    Some(1_024),
+    None
+);
+
+live_stream_reasoning_api_key_tests!(
     live_openrouter_stream_basic_text_generation,
     live_openrouter_stream_handles_tool_call,
     live_openrouter_streams_text_deltas,
@@ -10909,6 +10961,220 @@ live_stream_reasoning_api_key_tests!(
         ..Default::default()
     })
 );
+
+live_stream_reasoning_api_key_tests!(
+    live_qwen_token_plan_stream_basic_text_generation,
+    live_qwen_token_plan_stream_handles_tool_call,
+    live_qwen_token_plan_streams_text_deltas,
+    live_qwen_token_plan_streams_thinking,
+    live_qwen_token_plan_handles_multiturn_with_thinking_and_tools,
+    "qwen-token-plan",
+    "qwen3.7-max",
+    "QWEN_TOKEN_PLAN_API_KEY",
+    ThinkingLevel::High,
+    Some(4_096),
+    None
+);
+
+live_stream_reasoning_api_key_tests!(
+    live_qwen_token_plan_cn_stream_basic_text_generation,
+    live_qwen_token_plan_cn_stream_handles_tool_call,
+    live_qwen_token_plan_cn_streams_text_deltas,
+    live_qwen_token_plan_cn_streams_thinking,
+    live_qwen_token_plan_cn_handles_multiturn_with_thinking_and_tools,
+    "qwen-token-plan-cn",
+    "qwen3.7-max",
+    "QWEN_TOKEN_PLAN_CN_API_KEY",
+    ThinkingLevel::High,
+    Some(4_096),
+    None
+);
+
+// pi's Ant Ling describe block runs four cases: basic completion, tool call,
+// and streaming on Ling-2.6-flash, plus thinking on Ring-2.6-1T (no
+// multi-turn case).
+#[tokio::test]
+async fn live_ant_ling_stream_basic_text_generation() -> Result<(), Box<dyn Error>> {
+    run_live_basic_text_generation_api_key_smoke(
+        "live_ant_ling_stream_basic_text_generation",
+        "ant-ling",
+        "Ling-2.6-flash",
+        "ANT_LING_API_KEY",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn live_ant_ling_stream_handles_tool_call() -> Result<(), Box<dyn Error>> {
+    run_live_tool_call_smoke(
+        "live_ant_ling_stream_handles_tool_call",
+        "ant-ling",
+        "Ling-2.6-flash",
+        "ANT_LING_API_KEY",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn live_ant_ling_streams_text_deltas() -> Result<(), Box<dyn Error>> {
+    run_live_streaming_smoke(
+        "live_ant_ling_streams_text_deltas",
+        "ant-ling",
+        "Ling-2.6-flash",
+        "ANT_LING_API_KEY",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn live_ant_ling_ring_streams_thinking() -> Result<(), Box<dyn Error>> {
+    run_live_reasoning_api_key_smoke(
+        "live_ant_ling_ring_streams_thinking",
+        "ant-ling",
+        "Ring-2.6-1T",
+        "ANT_LING_API_KEY",
+        ThinkingLevel::High,
+        Some(4_096),
+        None,
+    )
+    .await
+}
+
+/// Custom Anthropic Messages model mirroring pi's
+/// xiaomi-token-plan-ams-anthropic-empty-signature-smoke.test.ts fixture
+/// (the registry entry for this provider uses openai-completions).
+fn live_xiaomi_token_plan_ams_anthropic_empty_signature_model() -> Model {
+    Model {
+        id: "mimo-v2.5-pro".to_owned(),
+        name: "MiMo-V2.5-Pro Anthropic smoke".to_owned(),
+        api: "anthropic-messages".to_owned(),
+        provider: "xiaomi-token-plan-ams".to_owned(),
+        base_url: "https://token-plan-ams.xiaomimimo.com/anthropic".to_owned(),
+        reasoning: true,
+        thinking_level_map: BTreeMap::new(),
+        input: vec![InputKind::Text],
+        cost: ModelCost {
+            input: 1.0,
+            output: 3.0,
+            cache_read: 0.2,
+            cache_write: 0.0,
+            tiers: Vec::new(),
+        },
+        context_window: 1_048_576,
+        max_tokens: 1_024,
+        headers: BTreeMap::new(),
+        compat: Some(json!({ "allowEmptySignature": true })),
+    }
+}
+
+#[tokio::test]
+async fn live_xiaomi_token_plan_ams_anthropic_preserves_empty_thinking_signature()
+-> Result<(), Box<dyn Error>> {
+    let test = "live_xiaomi_token_plan_ams_anthropic_preserves_empty_thinking_signature";
+    let Some(api_key) = live_api_key(test, "XIAOMI_TOKEN_PLAN_AMS_API_KEY") else {
+        return Ok(());
+    };
+    let model = live_xiaomi_token_plan_ams_anthropic_empty_signature_model();
+    let first_context = Context {
+        system_prompt: Some(
+            "You are concise. Follow the requested output format exactly.".to_owned(),
+        ),
+        messages: vec![Message::User(UserMessage::text(
+            "Think internally if you need to, then reply with exactly this text and nothing else: first-ok",
+        ))],
+        ..Default::default()
+    };
+    let mut options = live_text_options(Some(api_key.clone()));
+    options.reasoning = Some(ThinkingLevel::High);
+    options.stream.max_tokens = Some(512);
+    let first = complete_simple(&model, first_context.clone(), options).await?;
+    assert_eq!(
+        first.stop_reason,
+        StopReason::Stop,
+        "{test} expected stop, got {:?}: {first:?}",
+        first.stop_reason
+    );
+    let thinking_blocks = first
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            AssistantContent::Thinking(thinking) => Some(thinking.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !thinking_blocks.is_empty(),
+        "{test} returned no thinking blocks: {first:?}"
+    );
+    assert!(
+        thinking_blocks
+            .iter()
+            .any(|thinking| thinking.thinking_signature.as_deref() == Some("")),
+        "{test} expected an empty thinking signature: {thinking_blocks:?}"
+    );
+
+    // Replay the empty-signature assistant turn and capture the outgoing
+    // payload without sending the request (pi throws from onPayload).
+    let mut replay_context = first_context;
+    replay_context.messages.push(Message::Assistant(first));
+    replay_context
+        .messages
+        .push(Message::User(UserMessage::text(
+            "Reply with exactly this text and nothing else: second-ok",
+        )));
+    let captured = Arc::new(Mutex::new(None));
+    let mut replay_options = live_text_options(Some(api_key));
+    replay_options.reasoning = Some(ThinkingLevel::High);
+    replay_options.stream.max_tokens = Some(512);
+    replay_options
+        .payload_hooks
+        .push(Arc::new(CaptureThenAbortProviderPayloadHook {
+            captured: Arc::clone(&captured),
+        }));
+    if let Ok(stream) = stream_simple(&model, replay_context, replay_options) {
+        let _ = stream.result().await;
+    }
+    let payload = live_captured_payload(test, &captured)?;
+
+    let assistant_payload = payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .and_then(|messages| {
+            messages
+                .iter()
+                .find(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        })
+        .unwrap_or_else(|| panic!("{test} replay payload missing assistant message: {payload:?}"));
+    let assistant_content = assistant_payload
+        .get("content")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| {
+            panic!("{test} replay assistant content should be an array: {assistant_payload:?}")
+        });
+    let replayed_thinking = assistant_content
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        replayed_thinking,
+        vec![json!({
+            "type": "thinking",
+            "thinking": thinking_blocks[0].thinking,
+            "signature": "",
+        })],
+        "{test} did not preserve the empty thinking signature on replay: {assistant_content:?}"
+    );
+    assert!(
+        !assistant_content.iter().any(|block| {
+            block.get("type").and_then(Value::as_str) == Some("text")
+                && block.get("text").and_then(Value::as_str)
+                    == Some(thinking_blocks[0].thinking.as_str())
+        }),
+        "{test} downgraded the thinking block to text on replay: {assistant_content:?}"
+    );
+    Ok(())
+}
 
 live_stream_tools_api_key_tests!(
     live_vercel_ai_gateway_google_stream_basic_text_generation,

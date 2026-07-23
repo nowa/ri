@@ -84,7 +84,9 @@ pub fn build_openai_completions_payload(
 
     if should_set_prompt_cache_key(model, cache_retention) {
         if let Some(session_id) = options.session_id {
-            payload["prompt_cache_key"] = Value::String(session_id);
+            payload["prompt_cache_key"] = Value::String(
+                crate::openai_codex_responses::clamp_openai_prompt_cache_key(&session_id),
+            );
         }
     }
     if cache_retention == CacheRetention::Long && supports_long_cache_retention(model) {
@@ -171,7 +173,6 @@ fn convert_openai_completions_messages_with_cache(
         Some(&|id, model, _source| normalize_openai_completions_tool_call_id(id, model)),
     );
     let mut last_role: Option<&str> = None;
-    let mut kimi_deferred_tool_names: Vec<String> = Vec::new();
     let mut index = 0;
     while index < transformed_messages.len() {
         let message = &transformed_messages[index];
@@ -308,6 +309,9 @@ fn convert_openai_completions_messages_with_cache(
             }
             Message::ToolResult(_) => {
                 let mut image_blocks = Vec::new();
+                // The deferred-name accumulator resets per tool-result batch;
+                // pi only ships the names added by the batch it just replayed.
+                let mut kimi_deferred_tool_names: Vec<String> = Vec::new();
                 let mut next = index;
                 let kimi_deferred_mode =
                     openai_completions_deferred_tools_mode(model).as_deref() == Some("kimi");
@@ -367,20 +371,6 @@ fn convert_openai_completions_messages_with_cache(
                 }
 
                 index = next - 1;
-                if !kimi_deferred_tool_names.is_empty() {
-                    let deferred_tools = tools_by_name(&context.tools, &kimi_deferred_tool_names);
-                    if !deferred_tools.is_empty() {
-                        // Kimi accepts a system message with tools but omits
-                        // the standard content field.
-                        messages.push(json!({
-                            "role": "system",
-                            "tools": deferred_tools
-                                .iter()
-                                .map(|tool| format_tool(tool, model, None))
-                                .collect::<Vec<_>>(),
-                        }));
-                    }
-                }
                 if !image_blocks.is_empty() {
                     if requires_assistant_after_tool_result(model) {
                         messages.push(json!({
@@ -400,6 +390,22 @@ fn convert_openai_completions_messages_with_cache(
                     last_role = Some("user");
                 } else {
                     last_role = Some("toolResult");
+                }
+                // pi emits the Kimi system-tools message after the image user
+                // message that closes the batch.
+                if !kimi_deferred_tool_names.is_empty() {
+                    let deferred_tools = tools_by_name(&context.tools, &kimi_deferred_tool_names);
+                    if !deferred_tools.is_empty() {
+                        // Kimi accepts a system message with tools but omits
+                        // the standard content field.
+                        messages.push(json!({
+                            "role": "system",
+                            "tools": deferred_tools
+                                .iter()
+                                .map(|tool| format_tool(tool, model, None))
+                                .collect::<Vec<_>>(),
+                        }));
+                    }
                 }
             }
         }
@@ -461,11 +467,16 @@ pub fn build_openai_completions_default_headers_with_context(
         && send_session_affinity_headers(model)
     {
         // OpenRouter routes session affinity through its own x-session-id
-        // header; other providers use the OpenAI-style triple.
-        if session_affinity_format(model) == "openrouter" {
+        // header; other providers use the OpenAI-style triple. The
+        // "openai-nosession" format keeps the affinity pair but drops the
+        // session_id header.
+        let affinity_format = session_affinity_format(model);
+        if affinity_format == "openrouter" {
             headers.insert("x-session-id".to_owned(), session_id.to_owned());
         } else {
-            headers.insert("session_id".to_owned(), session_id.to_owned());
+            if affinity_format == "openai" {
+                headers.insert("session_id".to_owned(), session_id.to_owned());
+            }
             headers.insert("x-client-request-id".to_owned(), session_id.to_owned());
             headers.insert("x-session-affinity".to_owned(), session_id.to_owned());
         }
@@ -1360,7 +1371,28 @@ fn apply_reasoning_options(payload: &mut Value, model: &Model, reasoning: Option
         }
     } else {
         match thinking_format(model) {
-            "zai" | "qwen" => {
+            "zai" => {
+                payload["thinking"] = if reasoning.is_some() {
+                    json!({ "type": "enabled", "clear_thinking": false })
+                } else {
+                    json!({ "type": "disabled" })
+                };
+                if let Some(reasoning) = reasoning
+                    && supports_reasoning_effort(model)
+                {
+                    // A thinkingLevelMap entry of null suppresses the effort;
+                    // an absent entry falls back to the raw level name.
+                    let effort = match model.thinking_level_map.get(&reasoning) {
+                        Some(Some(mapped)) => Some(mapped.clone()),
+                        Some(None) => None,
+                        None => Some(thinking_level_name(reasoning).to_owned()),
+                    };
+                    if let Some(effort) = effort {
+                        payload["reasoning_effort"] = Value::String(effort);
+                    }
+                }
+            }
+            "qwen" => {
                 payload["enable_thinking"] = Value::Bool(reasoning.is_some());
             }
             "qwen-chat-template" => {
@@ -1369,13 +1401,33 @@ fn apply_reasoning_options(payload: &mut Value, model: &Model, reasoning: Option
                     "preserve_thinking": true,
                 });
             }
+            "chat-template" => {
+                if let Some(kwargs) =
+                    build_openai_completions_chat_template_kwargs(model, reasoning)
+                {
+                    payload["chat_template_kwargs"] = Value::Object(kwargs);
+                }
+            }
             "deepseek" => {
-                payload["thinking"] = json!({
-                    "type": if reasoning.is_some() { "enabled" } else { "disabled" },
-                });
-                if let Some(reasoning) = reasoning {
+                if reasoning.is_some() {
+                    payload["thinking"] = json!({ "type": "enabled" });
+                } else if model.thinking_level_map.get(&ThinkingLevel::Off) != Some(&None) {
+                    payload["thinking"] = json!({ "type": "disabled" });
+                }
+                if let Some(reasoning) = reasoning
+                    && supports_reasoning_effort(model)
+                {
                     payload["reasoning_effort"] =
                         Value::String(thinking_level_wire(model, reasoning));
+                }
+            }
+            "ant-ling" => {
+                // Ant Ling only accepts efforts explicitly mapped to strings;
+                // unmapped levels omit the reasoning object entirely.
+                if let Some(reasoning) = reasoning
+                    && let Some(Some(effort)) = model.thinking_level_map.get(&reasoning)
+                {
+                    payload["reasoning"] = json!({ "effort": effort });
                 }
             }
             "openrouter" => {
@@ -1413,6 +1465,55 @@ fn apply_reasoning_options(payload: &mut Value, model: &Model, reasoning: Option
                 }
             }
         }
+    }
+}
+
+/// Substitute configurable `chat_template_kwargs` from `model.compat`
+/// (pi `chatTemplateKwargs`): scalar values pass through unchanged and
+/// `$var` objects resolve against the requested thinking level.
+fn build_openai_completions_chat_template_kwargs(
+    model: &Model,
+    reasoning: Option<ThinkingLevel>,
+) -> Option<Map<String, Value>> {
+    let configured = model
+        .compat
+        .as_ref()?
+        .get("chatTemplateKwargs")?
+        .as_object()?;
+    let mut kwargs = Map::new();
+    for (key, value) in configured {
+        if let Some(resolved) =
+            resolve_openai_completions_chat_template_kwarg(model, reasoning, value)
+        {
+            kwargs.insert(key.clone(), resolved);
+        }
+    }
+    (!kwargs.is_empty()).then_some(kwargs)
+}
+
+fn resolve_openai_completions_chat_template_kwarg(
+    model: &Model,
+    reasoning: Option<ThinkingLevel>,
+    value: &Value,
+) -> Option<Value> {
+    let Some(object) = value.as_object() else {
+        return Some(value.clone());
+    };
+    if reasoning.is_none() && object.get("omitWhenOff").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    if object.get("$var").and_then(Value::as_str) == Some("thinking.enabled") {
+        return Some(Value::Bool(reasoning.is_some()));
+    }
+    // "thinking.effort": mapped strings win, null mappings omit the kwarg,
+    // and unmapped levels fall back to the raw level name.
+    match model
+        .thinking_level_map
+        .get(&reasoning.unwrap_or(ThinkingLevel::Off))
+    {
+        Some(Some(mapped)) => Some(Value::String(mapped.clone())),
+        Some(None) => None,
+        None => reasoning.map(|level| Value::String(thinking_level_name(level).to_owned())),
     }
 }
 
@@ -1488,6 +1589,10 @@ fn thinking_level_wire(model: &Model, level: ThinkingLevel) -> String {
     if let Some(Some(mapped)) = model.thinking_level_map.get(&level) {
         return mapped.clone();
     }
+    thinking_level_name(level).to_owned()
+}
+
+fn thinking_level_name(level: ThinkingLevel) -> &'static str {
     match level {
         ThinkingLevel::Off => "off",
         ThinkingLevel::Minimal => "minimal",
@@ -1497,5 +1602,4 @@ fn thinking_level_wire(model: &Model, level: ThinkingLevel) -> String {
         ThinkingLevel::XHigh => "xhigh",
         ThinkingLevel::Max => "max",
     }
-    .to_owned()
 }

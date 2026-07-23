@@ -16768,7 +16768,8 @@ fn openai_completions_payload_maps_reasoning_and_zai_tool_stream_compat() {
         },
         OpenAICompletionsPayloadOptions::default(),
     );
-    assert_eq!(payload["enable_thinking"], false);
+    assert_eq!(payload["thinking"], json!({ "type": "disabled" }));
+    assert!(payload.get("enable_thinking").is_none());
     assert_eq!(payload["tool_stream"], true);
 
     let unsupported = get_model("zai", "glm-4.5-air").expect("zai unsupported");
@@ -16995,7 +16996,7 @@ fn openai_completions_payload_maps_detected_and_explicit_thinking_formats() {
         &context,
         OpenAICompletionsPayloadOptions::default(),
     );
-    assert_eq!(payload["enable_thinking"], false);
+    assert_eq!(payload["thinking"], json!({ "type": "disabled" }));
     assert!(payload.get("reasoning_effort").is_none());
 
     let payload = build_openai_completions_payload(
@@ -17006,7 +17007,10 @@ fn openai_completions_payload_maps_detected_and_explicit_thinking_formats() {
             ..Default::default()
         },
     );
-    assert_eq!(payload["enable_thinking"], true);
+    assert_eq!(
+        payload["thinking"],
+        json!({ "type": "enabled", "clear_thinking": false })
+    );
     assert!(payload.get("reasoning_effort").is_none());
 
     let qwen_template_model = Model {

@@ -53,6 +53,7 @@ pub mod text;
 pub mod typebox_helpers;
 pub mod types;
 pub mod validation;
+pub mod xai_oauth;
 
 pub use anthropic::*;
 pub use anthropic_compat::*;
@@ -103,3 +104,4 @@ pub use text::*;
 pub use typebox_helpers::*;
 pub use types::*;
 pub use validation::*;
+pub use xai_oauth::*;

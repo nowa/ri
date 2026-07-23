@@ -827,6 +827,7 @@ pub fn build_anthropic_payload(
             &transformed_messages,
             cache_control.as_ref(),
             use_claude_code_tool_names,
+            anthropic_allow_empty_signature(model),
             &deferred_tool_names,
         ),
         "max_tokens": options.max_tokens.unwrap_or(model.max_tokens / 3),
@@ -1108,6 +1109,7 @@ fn convert_anthropic_messages(
         &transformed_messages,
         cache_control,
         use_claude_code_tool_names,
+        anthropic_allow_empty_signature(model),
         &std::collections::BTreeSet::new(),
     )
 }
@@ -1116,6 +1118,7 @@ fn convert_anthropic_messages_from_transformed(
     transformed_messages: &[Message],
     cache_control: Option<&Value>,
     use_claude_code_tool_names: bool,
+    allow_empty_signature: bool,
     deferred_tool_names: &std::collections::BTreeSet<String>,
 ) -> Vec<Value> {
     let mut loaded_tool_names = std::collections::BTreeSet::new();
@@ -1188,7 +1191,10 @@ fn convert_anthropic_messages_from_transformed(
                                 .filter(|signature| !signature.trim().is_empty());
                             // Signed thinking blocks replay even when the
                             // thinking text is empty; unsigned empty blocks
-                            // are dropped.
+                            // are dropped. Unsigned non-empty blocks convert
+                            // to plain text for Anthropic, except that some
+                            // compatible providers emit and accept empty
+                            // signatures, so marked models preserve the block.
                             if let Some(signature) = signature {
                                 Some(json!({
                                     "type": "thinking",
@@ -1197,6 +1203,12 @@ fn convert_anthropic_messages_from_transformed(
                                 }))
                             } else if thinking_text.trim().is_empty() {
                                 None
+                            } else if allow_empty_signature {
+                                Some(json!({
+                                    "type": "thinking",
+                                    "thinking": thinking_text,
+                                    "signature": "",
+                                }))
                             } else {
                                 Some(json!({
                                     "type": "text",
@@ -1514,6 +1526,18 @@ fn anthropic_force_adaptive_thinking(model: &Model) -> bool {
         .and_then(|compat| compat.get("forceAdaptiveThinking"))
         .and_then(Value::as_bool)
         .unwrap_or_else(|| supports_anthropic_adaptive_thinking(&model.id))
+}
+
+/// Whether unsigned thinking blocks replay as `thinking` blocks with an empty
+/// signature instead of converting to plain text. Some Anthropic-compatible
+/// providers (e.g. Kimi Coding) emit and accept empty signatures.
+fn anthropic_allow_empty_signature(model: &Model) -> bool {
+    model
+        .compat
+        .as_ref()
+        .and_then(|compat| compat.get("allowEmptySignature"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Claude Opus 4.7+ deprecates the temperature parameter.

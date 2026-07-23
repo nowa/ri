@@ -36,7 +36,30 @@ Commits 7a2fb55, 0a15cf6:
   branch-summary retry events + hook-usage persistence; stored Copilot
   OAuth per-credential base URL through `Models::get_auth`
 
-## Remaining gap backlog (138), categorized
+## Gap closure — waves 1+2 (2026-07-23, commits 0c0b648 + follow-up)
+
+Nine parallel work packages closed the remainder of the actionable
+backlog: all category-A behavior drifts (Azure normalization/store/clamp,
+prompt-cache-key clamping on every path, openai-nosession affinity,
+codex SSE/WS connect+idle timeouts, error-body formats with
+metadata.raw dedup, bedrock placeholder/endpoint/headers, mistral
+promptCacheKey, copilot verification_uri hardening, device-code abort,
+scoped proxy env, z.ai GLM-5.2 reasoning_effort format, ant-ling and
+chat-template thinking formats, deepseek/kimi gates, stale thinking
+maps, copilot overrides, xai retired models, kimi implied pricing,
+allowEmptySignature, Models transform_headers), the full xAI OAuth port
+(16 tests), all category-B assertion tests, and category-C live smoke
+additions (NVIDIA, Qwen Token Plan intl+CN, Ant Ling, xiaomi-ams
+empty-signature, opus smoke bumped to 4.8). Workspace: 1469 passed / 0
+failed (was 1336 before gap porting; +133 tests).
+
+Residual (small, documented): pi's "string-thinking" thinkingFormat
+branch; four openrouter/xiaomi/qwen replay-compat metadata assertion
+rows; bedrock `global.anthropic.claude-opus-4-6-v1` hand-written
+xhigh:"max" vs pi {max:"max"}; copilot gpt-4o / xai grok-2-era seeds pi
+HEAD dropped; `Compaction.retainedTail` (unimplemented, recorded).
+
+## Original gap backlog (138) as found, categorized
 
 ### A. Behavior/catalog drift vs pi HEAD (needs code changes)
 - Azure: Foundry root-endpoint normalization (`.ai.azure.com` → `/openai/v1`),

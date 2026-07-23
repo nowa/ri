@@ -133,6 +133,11 @@ impl OAuthAuth for BuiltInOAuthAdapter {
 }
 
 fn oauth_adapter(provider_id: &str) -> Option<Arc<dyn OAuthAuth>> {
+    // xAI carries its own device-code OAuth on the provider (pi
+    // `providers/xai.ts` `auth.oauth: xaiOAuth`).
+    if provider_id == "xai" {
+        return Some(Arc::new(crate::xai_oauth::XaiOAuth::new()));
+    }
     let info = get_oauth_provider(provider_id)?;
     Some(Arc::new(BuiltInOAuthAdapter {
         provider_id: info.id,

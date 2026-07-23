@@ -2474,6 +2474,20 @@ Alignment; the following upstream increments remain open:
   timeout), and canonicalized temp dirs in the execution-env tests — which
   fixes the long-standing macOS-only `/var -> /private/var` failure; the
   workspace suite now passes 1325/1325 locally.
+- Parity-audit gap closure (waves 1+2, nine work packages): all
+  actionable behavior drifts fixed (Azure Foundry normalization +
+  store:false, prompt-cache-key clamping on responses/azure/completions/
+  codex-headers, `openai-nosession` affinity, Codex SSE/WS connect and
+  idle timeouts, pi-format error bodies with OpenRouter metadata.raw
+  dedup, Bedrock `<empty>` placeholder + endpoint pinning, Mistral
+  promptCacheKey, Copilot verification_uri validation, device-code
+  abort, scoped proxy env, z.ai GLM-5.2 `reasoning_effort` + ant-ling +
+  chat-template thinking formats, stale thinking maps, kimi implied
+  pricing, xAI retired models, `allowEmptySignature`, Models
+  `transform_headers`); xAI OAuth fully ported; ~65 assertion tests and
+  20 gated live smokes (NVIDIA, Qwen Token Plan intl+CN, Ant Ling,
+  xiaomi-ams, opus 4.8) added. Workspace 1469 passed / 0 failed.
+  Residuals listed in docs/TEST_PARITY_AUDIT.md.
 - Case-by-case test-parity audit against pi HEAD (2026-07-23): 1179 pi
   cases audited — 715 covered by verified ri tests, 264 live-gated (205
   with `provider_live.rs` equivalents), 39 Node-specific, 7 consciously
