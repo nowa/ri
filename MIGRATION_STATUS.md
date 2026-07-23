@@ -2466,6 +2466,14 @@ Alignment; the following upstream increments remain open:
   already applies `StreamOptions.timeout_ms` as the request timeout (none
   when unset), which matches pi HEAD's observable behavior.
 
+- Merged PR #4 (longbridge downstream): OpenAI-completions streaming
+  tolerance for translation gateways (parallel tool calls sharing stream
+  index 0 split on conflicting id+name header chunks; bare
+  argument-continuation deltas route to the current tool call), pooled
+  reqwest clients keyed per resolved proxy configuration (50s idle
+  timeout), and canonicalized temp dirs in the execution-env tests — which
+  fixes the long-standing macOS-only `/var -> /private/var` failure; the
+  workspace suite now passes 1325/1325 locally.
 - Strict provider live/E2E completion still requires running the gated provider
   matrix with real API keys, provider-specific environment configuration,
   local Ollama/LM Studio/llama.cpp services, and stored OAuth credentials.
