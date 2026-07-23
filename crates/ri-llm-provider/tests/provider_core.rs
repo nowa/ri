@@ -27695,3 +27695,212 @@ mod radius_gateway {
         assert_eq!(error, format!("Invalid Radius config from {gateway}"));
     }
 }
+
+mod catalog_generator {
+    use ri_llm_provider::{
+        InputKind, Model, ModelCost, ModelCostTier, ThinkingLevel, parse_models_dev_catalog,
+        plan_catalog_refresh, render_generated_provider_json,
+    };
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    fn embedded_model(provider: &str, id: &str) -> Model {
+        let mut model = Model::faux("anthropic-messages", provider, id);
+        model.base_url = "https://api.anthropic.com".to_owned();
+        model.reasoning = true;
+        model.cost = ModelCost {
+            input: 3.0,
+            output: 15.0,
+            cache_read: 0.3,
+            cache_write: 3.75,
+            tiers: Vec::new(),
+        };
+        model.context_window = 200_000;
+        model.max_tokens = 64_000;
+        model
+            .thinking_level_map
+            .insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+        model.compat = Some(json!({ "forceAdaptiveThinking": true }));
+        model
+    }
+
+    fn models_dev_fixture() -> serde_json::Value {
+        json!({
+            "anthropic": {
+                "models": {
+                    "claude-known": {
+                        "name": "Claude Known v2",
+                        "tool_call": true,
+                        "reasoning": true,
+                        "modalities": { "input": ["text", "image"] },
+                        "cost": { "input": 4.0, "output": 20.0, "cache_read": 0.4, "cache_write": 5.0 },
+                        "limit": { "context": 500000, "output": 128000 }
+                    },
+                    "claude-sonnet-5-latest": {
+                        "name": "Claude Sonnet 5 Latest",
+                        "tool_call": true,
+                        "reasoning": true,
+                        "modalities": { "input": ["text", "image"] },
+                        "cost": { "input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25 },
+                        "limit": { "context": 1000000, "output": 128000 }
+                    },
+                    "claude-no-tools": { "tool_call": false }
+                }
+            },
+            "amazon-bedrock": {
+                "models": {
+                    "ai21.jamba-1-5": { "tool_call": true, "cost": {}, "limit": {} }
+                }
+            },
+            "mistral": {
+                "models": {
+                    "mistral-new-model": {
+                        "tool_call": true,
+                        "cost": { "input": 1.0, "output": 2.0 },
+                        "limit": { "context": 32000, "output": 8000 }
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn refresh_plan_updates_market_data_and_preserves_curated_fields() {
+        let models_dev = parse_models_dev_catalog(&models_dev_fixture());
+        let embedded = BTreeMap::from([
+            (
+                "anthropic".to_owned(),
+                vec![
+                    embedded_model("anthropic", "claude-known"),
+                    embedded_model("anthropic", "claude-stale"),
+                ],
+            ),
+            (
+                "amazon-bedrock".to_owned(),
+                vec![embedded_model("amazon-bedrock", "existing.bedrock-model")],
+            ),
+            (
+                "mistral".to_owned(),
+                vec![embedded_model("mistral", "mistral-existing")],
+            ),
+        ]);
+
+        let plan = plan_catalog_refresh(&models_dev, &embedded);
+        assert!(plan.has_changes());
+        let anthropic = &plan.providers["anthropic"];
+        assert_eq!(anthropic.updated, vec!["claude-known"]);
+        assert_eq!(anthropic.added, vec!["claude-sonnet-5-latest"]);
+        assert_eq!(anthropic.stale, vec!["claude-stale"]);
+
+        let updated = anthropic
+            .models
+            .iter()
+            .find(|model| model.id == "claude-known")
+            .expect("updated model");
+        // Market data refreshed...
+        assert_eq!(updated.name, "Claude Known v2");
+        assert_eq!(updated.cost.input, 4.0);
+        assert_eq!(updated.context_window, 500_000);
+        // ...curated fields preserved.
+        assert_eq!(updated.api, "anthropic-messages");
+        assert_eq!(
+            updated.thinking_level_map.get(&ThinkingLevel::XHigh),
+            Some(&Some("xhigh".to_owned()))
+        );
+        assert_eq!(
+            updated.compat,
+            Some(json!({ "forceAdaptiveThinking": true }))
+        );
+
+        // Additions run the adaptive-thinking curation.
+        let added = anthropic
+            .models
+            .iter()
+            .find(|model| model.id == "claude-sonnet-5-latest")
+            .expect("added model");
+        assert_eq!(added.api, "anthropic-messages");
+        assert_eq!(added.input, vec![InputKind::Text, InputKind::Image]);
+        assert_eq!(
+            added
+                .compat
+                .as_ref()
+                .and_then(|compat| compat.get("forceAdaptiveThinking"))
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            added.thinking_level_map.get(&ThinkingLevel::Max),
+            Some(&Some("max".to_owned()))
+        );
+
+        // Skip rules: jamba never lands on bedrock; unported providers only
+        // report their additions.
+        assert!(plan.providers["amazon-bedrock"].added.is_empty());
+        let mistral = &plan.providers["mistral"];
+        assert!(mistral.added.is_empty());
+        assert_eq!(mistral.skipped_additions, vec!["mistral-new-model"]);
+    }
+
+    #[test]
+    fn refresh_plan_guards_tiered_and_subscription_pricing() {
+        let models_dev = parse_models_dev_catalog(&json!({
+            "openai": {
+                "models": {
+                    "gpt-tiered": {
+                        "tool_call": true,
+                        "cost": { "input": 9.0, "output": 9.0 },
+                        "limit": { "context": 272000, "output": 128000 }
+                    },
+                    "subscription-model": {
+                        "tool_call": true,
+                        "cost": { "input": 0.0, "output": 0.0 },
+                        "limit": { "context": 262144, "output": 32768 }
+                    }
+                }
+            }
+        }));
+        let mut tiered = embedded_model("openai", "gpt-tiered");
+        tiered.cost.tiers = vec![ModelCostTier {
+            input_tokens_above: 272_000,
+            input: 6.0,
+            output: 22.5,
+            cache_read: 0.5,
+            cache_write: 0.0,
+        }];
+        let mut subscription = embedded_model("openai", "subscription-model");
+        subscription.cost.input = 0.6;
+        subscription.cost.output = 2.5;
+        let embedded = BTreeMap::from([("openai".to_owned(), vec![tiered, subscription])]);
+
+        let plan = plan_catalog_refresh(&models_dev, &embedded);
+        let openai = &plan.providers["openai"];
+        let tiered = openai
+            .models
+            .iter()
+            .find(|model| model.id == "gpt-tiered")
+            .expect("tiered");
+        // Tiered pricing never partially updates.
+        assert_eq!(tiered.cost.input, 3.0);
+        assert_eq!(tiered.cost.tiers.len(), 1);
+        // Zero upstream cost keeps curated subscription pricing.
+        let subscription = openai
+            .models
+            .iter()
+            .find(|model| model.id == "subscription-model")
+            .expect("subscription");
+        assert_eq!(subscription.cost.input, 0.6);
+        // Context/output limits still refresh on both.
+        assert_eq!(subscription.context_window, 262_144);
+        assert_eq!(subscription.max_tokens, 32_768);
+    }
+
+    #[test]
+    fn rendered_provider_json_round_trips_into_the_embedded_format() {
+        let models = vec![embedded_model("anthropic", "claude-known")];
+        let rendered = render_generated_provider_json(&models);
+        let parsed: BTreeMap<String, Model> =
+            serde_json::from_str(&rendered).expect("parse rendered catalog");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed["claude-known"], models[0]);
+    }
+}

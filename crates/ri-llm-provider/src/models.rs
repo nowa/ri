@@ -3790,7 +3790,7 @@ fn apply_anthropic_generated_metadata(model: &mut Model) -> bool {
 /// `max` on every adaptive model, `xhigh` only on Opus 4.7/4.8, Sonnet 5, and
 /// Fable 5 (which also disables `off`), plus the `forceAdaptiveThinking` and
 /// `supportsTemperature` compat flags.
-fn apply_anthropic_adaptive_catalog_metadata(model: &mut Model) {
+pub(crate) fn apply_anthropic_adaptive_catalog_metadata(model: &mut Model) {
     let id = model.id.as_str();
     let opus_4_6 = id.contains("opus-4-6") || id.contains("opus-4.6");
     let sonnet_4_6 = id.contains("sonnet-4-6") || id.contains("sonnet-4.6");

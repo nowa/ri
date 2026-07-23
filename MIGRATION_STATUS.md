@@ -2076,6 +2076,24 @@ not part of this pass.
   policy enabling. `BuiltInOAuthAdapter::login` now delegates here, so
   `Models::login` performs real interactive logins for the built-in OAuth
   providers.
+- ri-owned catalog generator (`models_generator` + the `generate-models`
+  bin) replacing pi's `scripts/generate-models.ts` for routine refreshes:
+  fetches models.dev `api.json` (or `--source` for an offline snapshot),
+  plans a refresh against the embedded `models_generated/` snapshot, prints
+  a per-provider report, and updates the JSON files with `--write`.
+  Deliberately conservative so a refresh can never silently regress
+  curation: only providers pi actually sources from models.dev are matched
+  (OpenRouter/gateway/token-plan providers keep their own upstreams);
+  existing models refresh market data only, with tiered-pricing models
+  fully frozen, per-component cost guards (a zero upstream value never
+  clobbers curated non-zero pricing, e.g. Mistral cache rates), pi's
+  explicit corrections ported (gpt-5-pro output limit, Vertex cacheWrite=0
+  and gemini-2.5-flash cacheRead), and new-model additions only for the
+  providers whose pi mapping rules are ported (Anthropic with
+  adaptive-thinking merges, Google, Vertex Gemini-only, Bedrock with skip
+  rules) — everything else is reported for manual review. Verified against
+  live models.dev data: one day after the pi snapshot the only planned
+  change was the legitimate zai pricing backfill (applied).
 - Radius gateway provider (pi `providers/radius.ts`, `radius-config.ts`,
   `auth/oauth/radius.ts`): new `radius` module with gateway-config loading
   (`/v1/config` with bearer auth, 512-char error truncation, per-entry
@@ -2419,8 +2437,11 @@ Alignment; the following upstream increments remain open:
   provider factories, provider-owned auth/`CredentialStore`, `/compat`
   entrypoint, per-provider generated catalogs) — deferred by decision; ri
   still mirrors the pre-0.80 global registry surface.
-- Regenerating the embedded `models_generated/` catalog data requires
-  re-running pi's generator (network).
+- Catalog refresh is now self-owned: run
+  `cargo run -p ri-llm-provider --bin generate-models` (add `--write` to
+  apply). Remaining generator gaps versus pi: new-model addition rules for
+  the non-ported providers (reported as `additions skipped` for manual
+  review) and the OpenRouter/NVIDIA/Vercel gateway live sources.
 - SQLite storage follow-ups: materialized-state caches
   (`session_materialized`/`entry_materialized`) and `branch_entries`
   acceleration with cursor paging. Deferred deliberately: ri's SQLite
