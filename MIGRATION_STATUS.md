@@ -2474,6 +2474,20 @@ Alignment; the following upstream increments remain open:
   timeout), and canonicalized temp dirs in the execution-env tests — which
   fixes the long-standing macOS-only `/var -> /private/var` failure; the
   workspace suite now passes 1325/1325 locally.
+- Case-by-case test-parity audit against pi HEAD (2026-07-23): 1179 pi
+  cases audited — 715 covered by verified ri tests, 264 live-gated (205
+  with `provider_live.rs` equivalents), 39 Node-specific, 7 consciously
+  out of scope, and 154 gaps of which 16 were fixed immediately
+  (including two behavior drifts: `truncate_tail` trailing-newline
+  handling and Bedrock/Anthropic adaptive-thinking coverage for the
+  newest Claude generations). Full matrix and categorized backlog:
+  `docs/TEST_PARITY_AUDIT.md` (+ raw verdicts in
+  `docs/test-parity-audit-2026-07-23.tsv`). Notable newly-recorded gaps:
+  xAI OAuth unported, `Compaction.retainedTail` unimplemented,
+  prompt-cache-key clamping only on the codex path, `openai-nosession`
+  session-affinity format ignored, z.ai GLM-5.2 `reasoning_effort`
+  format, Codex SSE/WS connect+idle timeouts, Azure Foundry base-URL
+  normalization and `store:false`.
 - Strict provider live/E2E completion still requires running the gated provider
   matrix with real API keys, provider-specific environment configuration,
   local Ollama/LM Studio/llama.cpp services, and stored OAuth credentials.
