@@ -1094,26 +1094,6 @@ fn supports_anthropic_session_affinity(model: &Model) -> bool {
         })
 }
 
-fn convert_anthropic_messages(
-    context: &Context,
-    model: &Model,
-    cache_control: Option<&Value>,
-    use_claude_code_tool_names: bool,
-) -> Vec<Value> {
-    let transformed_messages = transform_messages(
-        &context.messages,
-        model,
-        Some(&|id, _model, _source| normalize_anthropic_tool_call_id(id)),
-    );
-    convert_anthropic_messages_from_transformed(
-        &transformed_messages,
-        cache_control,
-        use_claude_code_tool_names,
-        anthropic_allow_empty_signature(model),
-        &std::collections::BTreeSet::new(),
-    )
-}
-
 fn convert_anthropic_messages_from_transformed(
     transformed_messages: &[Message],
     cache_control: Option<&Value>,
