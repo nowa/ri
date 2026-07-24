@@ -16,6 +16,11 @@ When ri syncs to a new pi minor line, the version jumps accordingly
 
 ## [Unreleased]
 
+## [0.81.1] - 2026-07-24
+
+Pi baseline: unchanged (v0.81.1, commit
+`dd6bea41efa8caa7a10fe5a6401676dc5699f83f`).
+
 ### Fixed
 
 - OpenAI Completions and Responses streams finalize tool-call arguments with
@@ -62,5 +67,6 @@ Pi baseline: v0.81.1, commit `dd6bea41efa8caa7a10fe5a6401676dc5699f83f`
   per-case verdicts (`docs/TEST_PARITY_AUDIT.md`,
   `docs/test-parity-audit-2026-07-23.tsv`).
 
-[Unreleased]: https://github.com/nowa/ri/compare/v0.81.0...HEAD
+[Unreleased]: https://github.com/nowa/ri/compare/v0.81.1...HEAD
+[0.81.1]: https://github.com/nowa/ri/compare/v0.81.0...v0.81.1
 [0.81.0]: https://github.com/nowa/ri/releases/tag/v0.81.0

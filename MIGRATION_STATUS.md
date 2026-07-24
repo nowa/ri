@@ -2474,6 +2474,14 @@ Alignment; the following upstream increments remain open:
   timeout), and canonicalized temp dirs in the execution-env tests — which
   fixes the long-standing macOS-only `/var -> /private/var` failure; the
   workspace suite now passes 1325/1325 locally.
+- Truncated tool-call argument recovery (v0.81.1): pi finalizes
+  completions/responses tool-call arguments with `parseStreamingJson`;
+  ri used the strict repair parser, so a stream cut off by the output
+  token limit mid-arguments collapsed to empty arguments (the truncated
+  tool call itself already survived into the `Length`-stopped message,
+  so the agent loop's fail-and-continue path was unaffected). Both
+  paths now use `parse_streaming_json`; locked by a regression test
+  simulating a mid-arguments `finish_reason: "length"` cutoff.
 - Parity-audit gap closure (waves 1+2, nine work packages): all
   actionable behavior drifts fixed (Azure Foundry normalization +
   store:false, prompt-cache-key clamping on responses/azure/completions/

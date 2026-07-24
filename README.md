@@ -169,7 +169,7 @@ tracks the pi release line ri is behavior-compatible with (`0.81` = pi
 0.81.x); the patch component is ri-owned and advances for ri bug fixes and
 small baseline syncs. Each release entry in [CHANGELOG.md](CHANGELOG.md)
 records the exact pi baseline (version and commit), and releases are tagged
-(`v0.81.0`) with matching
+(`v0.81.1`) with matching
 [GitHub Releases](https://github.com/nowa/ri/releases). The crates are not
 published to crates.io yet; consume them as Git dependencies.
 
@@ -180,8 +180,8 @@ dependencies pinned to a release tag:
 
 ```toml
 [dependencies]
-ri-llm-provider = { git = "https://github.com/nowa/ri.git", tag = "v0.81.0" }
-ri-agent-core = { git = "https://github.com/nowa/ri.git", tag = "v0.81.0" }
+ri-llm-provider = { git = "https://github.com/nowa/ri.git", tag = "v0.81.1" }
+ri-agent-core = { git = "https://github.com/nowa/ri.git", tag = "v0.81.1" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
