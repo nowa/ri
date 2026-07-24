@@ -17695,6 +17695,92 @@ async fn openai_completions_stream_coalesces_tool_call_deltas_by_stable_index() 
 }
 
 #[tokio::test]
+async fn openai_completions_stream_keeps_tool_call_cut_off_by_token_limit() {
+    // When the output token limit lands mid-tool-call, the in-progress block
+    // must survive into the final Length-stopped message: the agent loop only
+    // fails-and-continues when the truncated message still carries its tool
+    // calls, and would otherwise end the run as if there were nothing to do.
+    let mut model = get_model("openai", "gpt-4o-mini").expect("model");
+    model.api = "openai-completions".to_owned();
+    let mut output = empty_assistant_for_model(&model);
+    let (sender, stream) = assistant_message_event_stream();
+
+    process_openai_completions_chunks(
+        [
+            json!({
+                "id": "chatcmpl-truncated",
+                "choices": [{
+                    "delta": { "content": "Writing the report now." },
+                    "finish_reason": null,
+                }],
+            }),
+            json!({
+                "id": "chatcmpl-truncated",
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call-truncated",
+                            "type": "function",
+                            "function": {
+                                "name": "write_file",
+                                "arguments": "{\"path\":\"report.md\",\"content\":\"# Rep",
+                            },
+                        }],
+                    },
+                    "finish_reason": null,
+                }],
+            }),
+            json!({
+                "id": "chatcmpl-truncated",
+                "choices": [{ "delta": {}, "finish_reason": "length" }],
+            }),
+        ],
+        &mut output,
+        &sender,
+        &model,
+    )
+    .expect("process chunks");
+    drop(sender);
+    let events = collect_events(stream).await;
+
+    assert_eq!(output.stop_reason, StopReason::Length);
+    let tool_calls: Vec<&ToolCall> = output
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            AssistantContent::ToolCall(tool_call) => Some(tool_call),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].id, "call-truncated");
+    assert_eq!(tool_calls[0].name, "write_file");
+    // Streaming-JSON recovery keeps the completed prefix fields and closes
+    // the truncated trailing string, matching pi's parseStreamingJson.
+    assert_eq!(
+        tool_calls[0].arguments.get("path"),
+        Some(&json!("report.md"))
+    );
+    assert_eq!(
+        tool_calls[0].arguments.get("content"),
+        Some(&json!("# Rep"))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AssistantMessageEvent::ToolcallEnd { .. }))
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AssistantMessageEvent::Done {
+            reason: StopReason::Length,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
 async fn openai_completions_stream_splits_parallel_tool_calls_sharing_index_zero() {
     // Live capture from an Anthropic→OpenAI translation gateway: parallel
     // tool calls are NOT renumbered — every call arrives with `index: 0`,

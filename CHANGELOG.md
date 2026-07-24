@@ -16,6 +16,15 @@ When ri syncs to a new pi minor line, the version jumps accordingly
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenAI Completions and Responses streams finalize tool-call arguments with
+  streaming-JSON recovery (pi's `parseStreamingJson`), so a response cut off
+  by the output token limit mid-arguments keeps the parseable argument prefix
+  instead of collapsing to empty arguments. The truncated tool call already
+  survived into the `Length`-stopped message, so the agent loop continued
+  correctly; this restores the recovered arguments pi reports alongside it.
+
 ## [0.81.0] - 2026-07-24
 
 Initial release: a Rust port of pi's LLM provider (`packages/ai`) and agent

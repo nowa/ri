@@ -3,7 +3,7 @@ use crate::{
     CacheRetention, Context, InputKind, Model, StopReason, TextContent, TextSignatureV1,
     ThinkingLevel, Tool, ToolCall, ToolResultContent, Usage, UsageCost, UserContent,
     UserContentValue, calculate_cost, github_copilot_headers::build_copilot_dynamic_headers,
-    parse_json_with_repair, short_hash, transform_messages,
+    json_repair::parse_streaming_json, short_hash, transform_messages,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1178,9 +1178,12 @@ fn parse_arguments(json_text: &str) -> Map<String, Value> {
     if json_text.trim().is_empty() {
         return Map::new();
     }
-    parse_json_with_repair::<Value>(json_text)
-        .ok()
-        .and_then(|value| value.as_object().cloned())
+    // pi finalizes tool-call arguments with parseStreamingJson: a stream cut
+    // off mid-arguments (e.g. by the output token limit) must still recover
+    // the parseable prefix instead of collapsing to empty arguments.
+    parse_streaming_json(Some(json_text))
+        .as_object()
+        .cloned()
         .unwrap_or_default()
 }
 

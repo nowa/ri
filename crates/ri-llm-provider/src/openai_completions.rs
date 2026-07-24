@@ -3,7 +3,7 @@ use crate::{
     CacheRetention, Context, Message, Model, StopReason, TextContent, ThinkingContent,
     ThinkingLevel, Tool, ToolCall, Usage, UserContent, UserContentValue,
     github_copilot_headers::build_copilot_dynamic_headers,
-    json_repair::parse_json_with_repair,
+    json_repair::parse_streaming_json,
     message_transform::{normalize_openai_completions_tool_call_id, transform_messages},
     models::calculate_cost,
 };
@@ -960,9 +960,12 @@ fn parse_openai_completions_arguments(arguments: &str) -> Map<String, Value> {
     if arguments.trim().is_empty() {
         return Map::new();
     }
-    parse_json_with_repair::<Value>(arguments)
-        .ok()
-        .and_then(|value| value.as_object().cloned())
+    // pi finalizes tool-call arguments with parseStreamingJson: a stream cut
+    // off mid-arguments (e.g. by the output token limit) must still recover
+    // the parseable prefix instead of collapsing to empty arguments.
+    parse_streaming_json(Some(arguments))
+        .as_object()
+        .cloned()
         .unwrap_or_default()
 }
 
