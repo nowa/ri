@@ -87,8 +87,12 @@ model services where applicable, and manual OAuth flows.
 - A `ri-ai` CLI counterpart for listing providers and running supported OAuth
   login flows.
 - OpenAI, Azure OpenAI Responses, OpenAI Codex, Anthropic, Google, Vertex AI,
-  Mistral, Amazon Bedrock, GitHub Copilot, OpenRouter, OpenAI-compatible, and
-  related compatibility layers.
+  Mistral, Amazon Bedrock, GitHub Copilot, OpenRouter, xAI, Radius,
+  OpenAI-compatible, and related compatibility layers.
+- An embedded model catalog plus an ri-owned refresh generator
+  (`cargo run --bin generate-models`) that merges models.dev data under a
+  conservative update policy (allowlisted providers, per-component cost
+  guards, tier freezes).
 - Tool calling with streamed partial arguments.
 - Text, image, thinking, and tool-result content blocks.
 - Conservative parsing for common incomplete streamed tool-argument JSON,
@@ -110,7 +114,7 @@ model services where applicable, and manual OAuth flows.
 - GitHub Copilot dynamic headers for user/agent initiation and image-capable
   requests across supported OpenAI/Anthropic-compatible paths.
 - OAuth helpers for providers such as OpenAI Codex, Anthropic, GitHub Copilot,
-  and Google Vertex, including source display metadata, local callback pages
+  Google Vertex, and xAI, including source display metadata, local callback pages
   for browser-based flows, source-shaped `~/.pi/agent/auth.json` credential
   storage, and OpenAI Codex `accountId` credential preservation.
 
@@ -141,7 +145,8 @@ model services where applicable, and manual OAuth flows.
 `ri_agent_core::harness` includes:
 
 - `AgentHarness`, a higher-level runtime facade around `Agent`.
-- Persistent and in-memory session storage.
+- Persistent and in-memory session storage, including a SQLite backend with
+  write-side materialized session state and lazy cursor-based entry reads.
 - System prompt formatting with model, thinking level, active tools, resources,
   session, and local environment context.
 - Provider request, payload, and after-response events for harness subscribers
@@ -157,17 +162,30 @@ model services where applicable, and manual OAuth flows.
 - Model selection, thinking-level selection, resource updates, queue updates,
   save points, aborts, and settled lifecycle events.
 
+## Versioning And Releases
+
+The workspace crates are versioned in lockstep. The `major.minor` component
+tracks the pi release line ri is behavior-compatible with (`0.81` = pi
+0.81.x); the patch component is ri-owned and advances for ri bug fixes and
+small baseline syncs. Each release entry in [CHANGELOG.md](CHANGELOG.md)
+records the exact pi baseline (version and commit), and releases are tagged
+(`v0.81.0`) with matching
+[GitHub Releases](https://github.com/nowa/ri/releases). The crates are not
+published to crates.io yet; consume them as Git dependencies.
+
 ## Quick Start
 
 Add the crates as path dependencies inside this repository or as Git
-dependencies from `https://github.com/nowa/ri.git`.
+dependencies pinned to a release tag:
 
 ```toml
 [dependencies]
-ri-llm-provider = { git = "https://github.com/nowa/ri.git" }
-ri-agent-core = { git = "https://github.com/nowa/ri.git" }
+ri-llm-provider = { git = "https://github.com/nowa/ri.git", tag = "v0.81.0" }
+ri-agent-core = { git = "https://github.com/nowa/ri.git", tag = "v0.81.0" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
+
+Drop the `tag` field to track `main` instead.
 
 ### Complete One LLM Request
 
@@ -291,8 +309,11 @@ a first-class Rust surface.
 Run all tests:
 
 ```bash
-cargo test --workspace -- --test-threads=1
+cargo test --workspace
 ```
+
+Tests that mutate process environment variables serialize themselves behind a
+shared lock, so the default parallel test runner is safe.
 
 Useful focused commands:
 
