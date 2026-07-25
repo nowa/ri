@@ -2474,6 +2474,15 @@ Alignment; the following upstream increments remain open:
   timeout), and canonicalized temp dirs in the execution-env tests — which
   fixes the long-standing macOS-only `/var -> /private/var` failure; the
   workspace suite now passes 1325/1325 locally.
+- Prompt-text parity audit (2026-07-25): all 156 model-visible strings
+  (system/summarization prompts, skills/templates, session markers,
+  tool-error texts, transform placeholders, provider-injected text)
+  compared against pi; 24 drifts + 2 actionable missing items fixed —
+  typebox-exact validation error text (locked by a ground-truth matrix
+  test), pi abort checkpoints, Responses empty-text replay, Codex
+  fallback truthiness, branch-summary 128k fallback, empty-string
+  summarization truthiness, skill/template name edges. Residuals and
+  intentional divergences in docs/PROMPT_PARITY_AUDIT.md.
 - Truncated tool-call argument recovery (v0.81.1): pi finalizes
   completions/responses tool-call arguments with `parseStreamingJson`;
   ri used the strict repair parser, so a stream cut off by the output

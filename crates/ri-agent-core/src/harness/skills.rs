@@ -124,13 +124,10 @@ where
 
 pub(crate) fn dirname_env_path(path: &str) -> String {
     let normalized = path.trim_end_matches('/');
-    let Some(index) = normalized.rfind('/') else {
-        return ".".to_owned();
-    };
-    if index == 0 {
-        "/".to_owned()
-    } else {
-        normalized[..index].to_owned()
+    // pi: slashIndex <= 0 ? "/" : ... — a slash-less path resolves to "/".
+    match normalized.rfind('/') {
+        None | Some(0) => "/".to_owned(),
+        Some(index) => normalized[..index].to_owned(),
     }
 }
 
@@ -457,7 +454,12 @@ fn load_skill_from_file(path: &Path) -> (Option<Skill>, Vec<SkillDiagnostic>) {
     let file_path = display_path(path);
     let skill_dir = dirname_env_path(&file_path);
     let parent_dir_name = basename_env_path(Path::new(&skill_dir));
-    let name = parsed.name.unwrap_or_else(|| parent_dir_name.clone());
+    // pi: frontmatterName || parentDirName — an empty frontmatter name also
+    // falls back to the directory name.
+    let name = parsed
+        .name
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| parent_dir_name.clone());
     let description = parsed.description;
 
     for message in validate_description(description.as_deref()) {

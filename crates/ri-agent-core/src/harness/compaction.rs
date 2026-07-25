@@ -836,7 +836,15 @@ pub async fn generate_branch_summary(
     callbacks: Option<&RetryCallbacks>,
 ) -> Result<BranchSummaryResult, BranchSummaryError> {
     let reserve_tokens = reserve_tokens.unwrap_or(16_384);
-    let token_budget = model.context_window.saturating_sub(reserve_tokens);
+    // pi: model.contextWindow || 128000 — an unset context window must not
+    // collapse the budget to 0 (which prepare_branch_entries treats as
+    // unlimited).
+    let context_window = if model.context_window == 0 {
+        128_000
+    } else {
+        model.context_window
+    };
+    let token_budget = context_window.saturating_sub(reserve_tokens);
     let preparation = prepare_branch_entries(entries, token_budget);
 
     if preparation.messages.is_empty() {
@@ -850,6 +858,8 @@ pub async fn generate_branch_summary(
 
     let llm_messages = convert_session_messages_to_llm(&preparation.messages);
     let conversation_text = serialize_conversation(&llm_messages);
+    // pi treats empty strings as absent (JS truthiness).
+    let custom_instructions = custom_instructions.filter(|value| !value.is_empty());
     let instructions = if replace_instructions {
         custom_instructions
             .unwrap_or(BRANCH_SUMMARY_PROMPT)
@@ -1355,6 +1365,9 @@ async fn generate_summary_with_prompt(
     };
     let llm_messages = convert_session_messages_to_llm(current_messages);
     let conversation_text = serialize_conversation(&llm_messages);
+    // pi treats empty strings as absent (JS truthiness).
+    let custom_instructions = custom_instructions.filter(|value| !value.is_empty());
+    let previous_summary = previous_summary.filter(|value| !value.is_empty());
     let prompt_text = if turn_prefix {
         format!(
             "<conversation>\n{conversation_text}\n</conversation>\n\n{TURN_PREFIX_SUMMARIZATION_PROMPT}"

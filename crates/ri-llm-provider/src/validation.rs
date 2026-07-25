@@ -46,22 +46,30 @@ pub fn validate_tool_arguments_value(
     if errors.is_empty() {
         Ok(args)
     } else {
+        let details = errors
+            .into_iter()
+            .map(|error| format!("  - {error}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let details = if details.is_empty() {
+            "Unknown validation error".to_owned()
+        } else {
+            details
+        };
         Err(ValidationError::InvalidArguments {
             tool: tool_name.to_owned(),
-            details: errors
-                .into_iter()
-                .map(|error| format!("  - {error}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
+            details,
             received: serde_json::to_string_pretty(&received).unwrap_or_else(|_| "{}".to_owned()),
         })
     }
 }
 
 fn validate_value(value: &Value, schema: &Value, path: &str, errors: &mut Vec<String>) {
+    // Message text and error ordering mirror pi: typebox 1.1.38's en_US
+    // locale rendered through validateToolArguments' path formatting.
     if let Some(allowed) = schema.as_bool() {
         if !allowed {
-            errors.push(format!("{path}: value is not allowed by schema"));
+            errors.push(format!("{path}: schema is false"));
         }
         return;
     }
@@ -77,7 +85,10 @@ fn validate_value(value: &Value, schema: &Value, path: &str, errors: &mut Vec<St
             .iter()
             .any(|candidate| schema_matches(value, candidate))
         {
-            errors.push(format!("{path}: did not match any anyOf schema"));
+            for candidate in candidates {
+                validate_value(value, candidate, path, errors);
+            }
+            errors.push(format!("{path}: must match a schema in anyOf"));
         }
     }
 
@@ -87,57 +98,70 @@ fn validate_value(value: &Value, schema: &Value, path: &str, errors: &mut Vec<St
             .filter(|candidate| schema_matches(value, candidate))
             .count();
         if matches != 1 {
-            errors.push(format!(
-                "{path}: matched {matches} oneOf schemas instead of exactly one"
-            ));
-        }
-    }
-
-    if let Some(expected) = schema.get("const") {
-        if value != expected {
-            errors.push(format!(
-                "{path}: expected constant {}",
-                render_json_value(expected)
-            ));
-        }
-    }
-
-    if let Some(candidates) = schema.get("enum").and_then(Value::as_array) {
-        if !candidates.iter().any(|candidate| candidate == value) {
-            errors.push(format!(
-                "{path}: expected one of {}",
-                candidates
-                    .iter()
-                    .map(render_json_value)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-    }
-
-    if let Some(required) = schema.get("required").and_then(Value::as_array) {
-        if let Some(object) = value.as_object() {
-            for required_key in required.iter().filter_map(Value::as_str) {
-                if !object.contains_key(required_key) {
-                    errors.push(format!(
-                        "{path}.{required_key}: required property is missing"
-                    ));
+            if matches == 0 {
+                for candidate in candidates {
+                    validate_value(value, candidate, path, errors);
                 }
             }
+            errors.push(format!("{path}: must match exactly one schema in oneOf"));
         }
     }
 
     if let Some(schema_type) = schema.get("type") {
         if !matches_schema_type(value, schema_type) {
             errors.push(format!(
-                "{path}: expected {}",
+                "{path}: must be {}",
                 render_schema_type(schema_type)
             ));
-            return;
+        }
+    }
+
+    if let Some(expected) = schema.get("const") {
+        if value != expected {
+            errors.push(format!("{path}: must be equal to constant"));
+        }
+    }
+
+    if let Some(candidates) = schema.get("enum").and_then(Value::as_array) {
+        if !candidates.iter().any(|candidate| candidate == value) {
+            errors.push(format!(
+                "{path}: must be equal to one of the allowed values"
+            ));
         }
     }
 
     validate_scalar_constraints(value, schema, path, errors);
+
+    if let Some(object) = value.as_object() {
+        if let Some(required) = schema.get("required").and_then(Value::as_array) {
+            let missing = required
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|key| !object.contains_key(*key))
+                .collect::<Vec<_>>();
+            if let Some(first_missing) = missing.first() {
+                errors.push(format!(
+                    "{}: must have required properties {}",
+                    format_path(path, first_missing),
+                    missing.join(", ")
+                ));
+            }
+        }
+
+        if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
+            let defined_keys: BTreeSet<&str> = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .map(|properties| properties.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            if object
+                .keys()
+                .any(|key| !defined_keys.contains(key.as_str()))
+            {
+                errors.push(format!("{path}: must not have additional properties"));
+            }
+        }
+    }
 
     if let (Some(object), Some(properties)) = (
         value.as_object(),
@@ -208,11 +232,14 @@ fn matches_one_type(value: &Value, schema_type: &str) -> bool {
 fn render_schema_type(schema_type: &Value) -> String {
     match schema_type {
         Value::String(schema_type) => schema_type.clone(),
-        Value::Array(types) => types
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>()
-            .join(" | "),
+        Value::Array(types) => {
+            let names = types.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+            match names.as_slice() {
+                [] => "valid JSON schema type".to_owned(),
+                [single] => (*single).to_owned(),
+                names => format!("either {}", names.join(" or ")),
+            }
+        }
         _ => "valid JSON schema type".to_owned(),
     }
 }
@@ -231,18 +258,22 @@ fn validate_scalar_constraints(
         let len = text.encode_utf16().count() as u64;
         if let Some(min_length) = schema.get("minLength").and_then(Value::as_u64) {
             if len < min_length {
-                errors.push(format!("{path}: length must be at least {min_length}"));
+                errors.push(format!(
+                    "{path}: must not have fewer than {min_length} characters"
+                ));
             }
         }
         if let Some(max_length) = schema.get("maxLength").and_then(Value::as_u64) {
             if len > max_length {
-                errors.push(format!("{path}: length must be at most {max_length}"));
+                errors.push(format!(
+                    "{path}: must not have more than {max_length} characters"
+                ));
             }
         }
         if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
             match regex::Regex::new(pattern) {
                 Ok(regex) if !regex.is_match(text) => {
-                    errors.push(format!("{path}: must match pattern {pattern}"));
+                    errors.push(format!("{path}: must match pattern \"{pattern}\""));
                 }
                 Err(error) => {
                     errors.push(format!("{path}: invalid pattern {pattern}: {error}"));
@@ -277,7 +308,7 @@ fn validate_scalar_constraints(
             if multiple_of > 0.0 {
                 let quotient = number / multiple_of;
                 if (quotient - quotient.round()).abs() > f64::EPSILON * 16.0 {
-                    errors.push(format!("{path}: must be a multiple of {multiple_of}"));
+                    errors.push(format!("{path}: must be multiple of {multiple_of}"));
                 }
             }
         }
@@ -293,14 +324,14 @@ fn validate_object_constraints(
     if let Some(min_properties) = schema.get("minProperties").and_then(Value::as_u64) {
         if (object.len() as u64) < min_properties {
             errors.push(format!(
-                "{path}: must contain at least {min_properties} properties"
+                "{path}: must not have fewer than {min_properties} properties"
             ));
         }
     }
     if let Some(max_properties) = schema.get("maxProperties").and_then(Value::as_u64) {
         if (object.len() as u64) > max_properties {
             errors.push(format!(
-                "{path}: must contain at most {max_properties} properties"
+                "{path}: must not have more than {max_properties} properties"
             ));
         }
     }
@@ -319,14 +350,15 @@ fn validate_object_constraints(
         if defined_keys.contains(key.as_str()) {
             continue;
         }
-        let property_path = format_path(path, key);
-        match additional_properties {
-            Value::Bool(true) => {}
-            Value::Bool(false) => errors.push(format!("{property_path}: unexpected property")),
-            Value::Object(_) => {
-                validate_value(value, additional_properties, &property_path, errors)
-            }
-            _ => {}
+        // The Bool(false) form is reported as one object-level error in
+        // validate_value (before property recursion), matching typebox.
+        if additional_properties.is_object() {
+            validate_value(
+                value,
+                additional_properties,
+                &format_path(path, key),
+                errors,
+            );
         }
     }
 }
@@ -338,14 +370,45 @@ fn validate_array_items(
     path: &str,
     errors: &mut Vec<String>,
 ) {
+    let tuple_items = items.as_array();
+
+    // typebox reports a tuple's forbidden extra items as one "schema is
+    // false" error at the first out-of-range index, before item recursion.
+    if let Some(tuple_items) = tuple_items {
+        if schema.get("additionalItems") == Some(&Value::Bool(false))
+            && array.len() > tuple_items.len()
+        {
+            errors.push(format!("{path}.{}: schema is false", tuple_items.len()));
+        }
+    }
+
+    if let Some(tuple_items) = tuple_items {
+        for (index, item) in array.iter().enumerate() {
+            if let Some(item_schema) = tuple_items.get(index) {
+                validate_value(item, item_schema, &format!("{path}.{index}"), errors);
+            } else if let Some(additional_items) = schema
+                .get("additionalItems")
+                .filter(|value| value.is_object())
+            {
+                validate_value(item, additional_items, &format!("{path}.{index}"), errors);
+            }
+        }
+    } else {
+        for (index, item) in array.iter().enumerate() {
+            validate_value(item, items, &format!("{path}.{index}"), errors);
+        }
+    }
+
     if let Some(min_items) = schema.get("minItems").and_then(Value::as_u64) {
         if (array.len() as u64) < min_items {
-            errors.push(format!("{path}: must contain at least {min_items} items"));
+            errors.push(format!(
+                "{path}: must not have fewer than {min_items} items"
+            ));
         }
     }
     if let Some(max_items) = schema.get("maxItems").and_then(Value::as_u64) {
         if (array.len() as u64) > max_items {
-            errors.push(format!("{path}: must contain at most {max_items} items"));
+            errors.push(format!("{path}: must not have more than {max_items} items"));
         }
     }
     if schema
@@ -353,36 +416,14 @@ fn validate_array_items(
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        for index in 0..array.len() {
-            if array[..index]
+        let has_duplicates = (1..array.len()).any(|index| {
+            array[..index]
                 .iter()
                 .any(|previous| previous == &array[index])
-            {
-                errors.push(format!("{path}.{index}: duplicate item"));
-            }
+        });
+        if has_duplicates {
+            errors.push(format!("{path}: must not have duplicate items"));
         }
-    }
-
-    if let Some(tuple_items) = items.as_array() {
-        for (index, item) in array.iter().enumerate() {
-            if let Some(item_schema) = tuple_items.get(index) {
-                validate_value(item, item_schema, &format!("{path}.{index}"), errors);
-            } else if let Some(additional_items) = schema.get("additionalItems") {
-                match additional_items {
-                    Value::Bool(true) => {}
-                    Value::Bool(false) => errors.push(format!("{path}.{index}: unexpected item")),
-                    Value::Object(_) => {
-                        validate_value(item, additional_items, &format!("{path}.{index}"), errors)
-                    }
-                    _ => {}
-                }
-            }
-        }
-        return;
-    }
-
-    for (index, item) in array.iter().enumerate() {
-        validate_value(item, items, &format!("{path}.{index}"), errors);
     }
 }
 

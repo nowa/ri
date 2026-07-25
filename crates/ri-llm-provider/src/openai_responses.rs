@@ -369,9 +369,6 @@ pub fn convert_openai_responses_messages_with_deferred(
                                 format!("msg_pi_{message_index}_{text_block_index}")
                             };
                             text_block_index += 1;
-                            if text.text.trim().is_empty() {
-                                continue;
-                            }
                             let signature = openai_responses_text_signature_parts(&text);
                             let mut message_id = signature
                                 .as_ref()

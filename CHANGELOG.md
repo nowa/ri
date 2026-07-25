@@ -16,6 +16,18 @@ When ri syncs to a new pi minor line, the version jumps accordingly
 
 ## [Unreleased]
 
+### Fixed
+
+- Prompt-text parity audit (156 model-visible strings vs pi v0.81.1; see
+  `docs/PROMPT_PARITY_AUDIT.md`): tool-argument validation errors now use
+  typebox's en_US wording and aggregation exactly as pi emits them,
+  `Operation aborted` tool results are produced at pi's abort checkpoints,
+  OpenAI Responses replays empty assistant text blocks, the Codex
+  instructions fallback honors empty-string system prompts, branch-summary
+  budgets fall back to a 128k context window, empty-string summarization
+  inputs are treated as absent, and skill/template name-derivation edges
+  match pi.
+
 ## [0.81.1] - 2026-07-24
 
 Pi baseline: unchanged (v0.81.1, commit

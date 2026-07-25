@@ -380,6 +380,239 @@ fn object(value: Value) -> Map<String, Value> {
     value.as_object().cloned().expect("object")
 }
 
+/// Locks validation error text against pi's actual output: typebox 1.1.38
+/// en_US locale rendered through validateToolArguments (ground truth captured
+/// by running pi's formatting over the same schemas and inputs).
+#[test]
+fn validation_error_text_matches_typebox_en_us_locale() {
+    fn details(schema: Value, args: Value) -> String {
+        let tool = Tool {
+            name: "t".to_owned(),
+            description: "t".to_owned(),
+            parameters: schema,
+        };
+        match validate_tool_arguments_value(&tool, "t", args).expect_err("invalid") {
+            ValidationError::InvalidArguments { details, .. } => details,
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+    fn obj(props: Value, extra: &[(&str, Value)]) -> Value {
+        let mut schema = json!({ "type": "object", "properties": props });
+        for (key, value) in extra {
+            schema[key] = value.clone();
+        }
+        schema
+    }
+
+    let cases: Vec<(Value, Value, &str)> = vec![
+        (
+            obj(
+                json!({ "a": { "type": "string" }, "b": { "type": "number" } }),
+                &[("required", json!(["a", "b"]))],
+            ),
+            json!({}),
+            "  - a: must have required properties a, b",
+        ),
+        (
+            obj(
+                json!({ "outer": {
+                    "type": "object",
+                    "properties": { "x": { "type": "string" } },
+                    "required": ["x"],
+                } }),
+                &[("required", json!(["outer"]))],
+            ),
+            json!({ "outer": {} }),
+            "  - outer.x: must have required properties x",
+        ),
+        (
+            obj(json!({ "a": { "type": "string" } }), &[]),
+            json!({ "a": [] }),
+            "  - a: must be string",
+        ),
+        (
+            obj(json!({ "a": { "type": ["string", "number"] } }), &[]),
+            json!({ "a": [] }),
+            "  - a: must be either string or number",
+        ),
+        (
+            obj(
+                json!({ "a": { "type": "string", "enum": ["x", "y"] } }),
+                &[],
+            ),
+            json!({ "a": "z" }),
+            "  - a: must be equal to one of the allowed values",
+        ),
+        (
+            obj(json!({ "a": { "const": "fixed" } }), &[]),
+            json!({ "a": "other" }),
+            "  - a: must be equal to constant",
+        ),
+        (
+            obj(
+                json!({ "a": { "anyOf": [{ "type": "string" }, { "type": "object" }] } }),
+                &[],
+            ),
+            json!({ "a": [] }),
+            "  - a: must be string\n  - a: must be object\n  - a: must match a schema in anyOf",
+        ),
+        (
+            obj(
+                json!({ "a": { "oneOf": [{ "type": "number" }, { "type": "integer" }] } }),
+                &[],
+            ),
+            json!({ "a": 3 }),
+            "  - a: must match exactly one schema in oneOf",
+        ),
+        (
+            obj(json!({ "a": false }), &[]),
+            json!({ "a": "x" }),
+            "  - a: schema is false",
+        ),
+        (
+            obj(json!({ "a": { "type": "string", "minLength": 3 } }), &[]),
+            json!({ "a": "x" }),
+            "  - a: must not have fewer than 3 characters",
+        ),
+        (
+            obj(json!({ "a": { "type": "string", "maxLength": 2 } }), &[]),
+            json!({ "a": "xxx" }),
+            "  - a: must not have more than 2 characters",
+        ),
+        (
+            obj(
+                json!({ "a": { "type": "string", "pattern": "^ab+$" } }),
+                &[],
+            ),
+            json!({ "a": "zz" }),
+            "  - a: must match pattern \"^ab+$\"",
+        ),
+        (
+            obj(json!({ "a": { "type": "number", "multipleOf": 3 } }), &[]),
+            json!({ "a": 4 }),
+            "  - a: must be multiple of 3",
+        ),
+        (
+            obj(json!({}), &[("minProperties", json!(2))]),
+            json!({ "a": 1 }),
+            "  - root: must not have fewer than 2 properties",
+        ),
+        (
+            obj(json!({}), &[("maxProperties", json!(1))]),
+            json!({ "a": 1, "b": 2 }),
+            "  - root: must not have more than 1 properties",
+        ),
+        (
+            obj(
+                json!({ "a": { "type": "string" } }),
+                &[("additionalProperties", json!(false))],
+            ),
+            json!({ "a": "ok", "extra1": 1, "extra2": 2 }),
+            "  - root: must not have additional properties",
+        ),
+        (
+            obj(
+                json!({ "a": { "type": "array", "items": { "type": "object" }, "minItems": 2 } }),
+                &[],
+            ),
+            json!({ "a": [{}] }),
+            "  - a: must not have fewer than 2 items",
+        ),
+        (
+            obj(
+                json!({ "a": { "type": "array", "items": { "type": "object" }, "maxItems": 1 } }),
+                &[],
+            ),
+            json!({ "a": [{}, {}] }),
+            "  - a: must not have more than 1 items",
+        ),
+        (
+            obj(
+                json!({ "a": {
+                    "type": "array",
+                    "items": { "type": "number" },
+                    "uniqueItems": true,
+                } }),
+                &[],
+            ),
+            json!({ "a": [1, 1, 2, 2] }),
+            "  - a: must not have duplicate items",
+        ),
+        (
+            obj(
+                json!({ "a": {
+                    "type": "array",
+                    "items": [{ "type": "string" }, { "type": "object" }],
+                    "additionalItems": false,
+                } }),
+                &[],
+            ),
+            json!({ "a": [[], "x", true, false] }),
+            "  - a.2: schema is false\n  - a.0: must be string\n  - a.1: must be object",
+        ),
+        (
+            obj(json!({ "a": { "type": "number", "minimum": 5 } }), &[]),
+            json!({ "a": 1 }),
+            "  - a: must be >= 5",
+        ),
+        (
+            obj(
+                json!({ "a": { "type": "number", "exclusiveMaximum": 5 } }),
+                &[],
+            ),
+            json!({ "a": 5 }),
+            "  - a: must be < 5",
+        ),
+        (
+            obj(json!({ "a": { "type": "integer" } }), &[]),
+            json!({ "a": 1.5 }),
+            "  - a: must be integer",
+        ),
+        (
+            obj(
+                json!({ "outer": {
+                    "type": "object",
+                    "properties": { "list": { "type": "array", "items": { "type": "string" } } },
+                } }),
+                &[],
+            ),
+            json!({ "outer": { "list": ["ok", []] } }),
+            "  - outer.list.1: must be string",
+        ),
+        (
+            json!({ "type": "object", "properties": {} }),
+            json!("not an object"),
+            "  - root: must be object",
+        ),
+        (
+            obj(
+                json!({ "a": { "type": "string" }, "b": { "type": "number", "minimum": 2 } }),
+                &[("required", json!(["a"]))],
+            ),
+            json!({ "b": 1 }),
+            "  - a: must have required properties a\n  - b: must be >= 2",
+        ),
+        (
+            obj(
+                json!({ "a": { "type": "string" } }),
+                &[("additionalProperties", json!(false))],
+            ),
+            json!({ "a": [], "extra": 1 }),
+            "  - root: must not have additional properties\n  - a: must be string",
+        ),
+        (
+            obj(json!({ "a": { "type": "string", "enum": ["x"] } }), &[]),
+            json!({ "a": [] }),
+            "  - a: must be string\n  - a: must be equal to one of the allowed values",
+        ),
+    ];
+
+    for (schema, args, expected) in cases {
+        let actual = details(schema.clone(), args.clone());
+        assert_eq!(actual, expected, "schema {schema} with args {args}");
+    }
+}
+
 fn validate_single_value(schema: Value, input: Value) -> Result<Value, ValidationError> {
     let tool = Tool {
         name: "echo".to_owned(),
@@ -14207,16 +14440,10 @@ fn empty_message_conversion_skips_empty_user_blocks_and_empty_assistant_turns() 
 
     let responses_messages =
         convert_openai_responses_messages(&openai_model, &context, &["openai"], true);
-    assert_two_user_no_assistant_messages("openai responses empty assistant", &responses_messages);
-    assert!(!responses_messages.iter().any(|message| {
-        message.get("type").and_then(Value::as_str) == Some("message")
-            && message
-                .pointer("/content/0/text")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .trim()
-                .is_empty()
-    }));
+    assert_two_user_and_replayed_empty_assistant(
+        "openai responses empty assistant",
+        &responses_messages,
+    );
 
     let google_model = get_model("google", "gemini-2.5-flash").expect("google model");
     let google_messages = convert_google_messages(&google_model, &context);
@@ -14243,7 +14470,7 @@ fn empty_message_conversion_skips_empty_user_blocks_and_empty_assistant_turns() 
         .as_array()
         .expect("azure input")
         .clone();
-    assert_two_user_no_assistant_messages("azure empty assistant", &azure_input);
+    assert_two_user_and_replayed_empty_assistant("azure empty assistant", &azure_input);
 
     let codex_input = build_openai_codex_responses_payload(
         &codex_model,
@@ -14253,7 +14480,7 @@ fn empty_message_conversion_skips_empty_user_blocks_and_empty_assistant_turns() 
         .as_array()
         .expect("codex input")
         .clone();
-    assert_two_user_no_assistant_messages("codex empty assistant", &codex_input);
+    assert_two_user_and_replayed_empty_assistant("codex empty assistant", &codex_input);
 
     let anthropic_messages = build_anthropic_payload(
         &anthropic_model,
@@ -14351,6 +14578,37 @@ fn empty_message_conversion_skips_empty_user_blocks_and_empty_assistant_turns() 
                 .as_array()
                 .expect("mistral messages");
     }
+}
+
+/// pi's Responses converter replays every assistant text block without an
+/// empty guard (openai-responses-shared.ts), so a whitespace-only assistant
+/// turn must survive as one output_text item.
+fn assert_two_user_and_replayed_empty_assistant(label: &str, items: &[Value]) {
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+            .count(),
+        2,
+        "{label}: expected two user items"
+    );
+    let assistant_items = items
+        .iter()
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some("assistant"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        assistant_items.len(),
+        1,
+        "{label}: expected the empty assistant text block to be replayed"
+    );
+    let text = assistant_items[0]
+        .pointer("/content/0/text")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        text.trim().is_empty(),
+        "{label}: replayed assistant text should be the whitespace block"
+    );
 }
 
 fn assert_two_user_no_assistant_messages(label: &str, messages: &[Value]) {
@@ -19742,7 +20000,7 @@ fn validation_enforces_json_schema_object_array_and_constraint_keywords() {
                 "marker": true,
                 "extra": true
             }),
-            "extra: unexpected property",
+            "root: must not have additional properties",
         ),
         (
             json!({
@@ -19751,7 +20009,7 @@ fn validation_enforces_json_schema_object_array_and_constraint_keywords() {
                 "mode": "fast",
                 "marker": true
             }),
-            "pair.2: unexpected item",
+            "pair.2: schema is false",
         ),
         (
             json!({
@@ -19760,7 +20018,7 @@ fn validation_enforces_json_schema_object_array_and_constraint_keywords() {
                 "mode": "medium",
                 "marker": false
             }),
-            "mode: expected one of",
+            "mode: must be equal to one of the allowed values",
         ),
     ] {
         let call = ToolCall {
@@ -19803,7 +20061,7 @@ fn validation_enforces_combinators_and_additional_property_schemas() {
         )
         .expect_err("ambiguous oneOf")
         .to_string()
-        .contains("instead of exactly one")
+        .contains("must match exactly one schema in oneOf")
     );
 
     let tool = Tool {

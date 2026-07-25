@@ -222,7 +222,11 @@ pub fn build_openai_codex_responses_payload(
         "model": model.id,
         "store": false,
         "stream": true,
-        "instructions": context.system_prompt.clone().unwrap_or_else(|| "You are a helpful assistant.".to_owned()),
+        "instructions": context
+            .system_prompt
+            .clone()
+            .filter(|prompt| !prompt.is_empty())
+            .unwrap_or_else(|| "You are a helpful assistant.".to_owned()),
         "input": messages,
         "text": { "verbosity": options.text_verbosity.unwrap_or_else(|| "low".to_owned()) },
         "include": ["reasoning.encrypted_content"],

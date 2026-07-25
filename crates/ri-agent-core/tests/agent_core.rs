@@ -1330,7 +1330,7 @@ async fn agent_loop_validates_tool_arguments_before_hooks_and_execution() {
     );
     let validation_error = text_of(&messages[2]).expect("validation error");
     assert!(validation_error.contains("Validation failed for tool \"echo\""));
-    assert!(validation_error.contains("value: required property is missing"));
+    assert!(validation_error.contains("value: must have required properties value"));
     assert!(validation_error.contains("Received arguments"));
     assert_eq!(text_of(&messages[3]), Some("done"));
     let tool_end = events.iter().find_map(|event| match event {

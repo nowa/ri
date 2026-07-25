@@ -716,6 +716,15 @@ fn use_parallel_tool_execution(
         })
 }
 
+fn loop_aborted(config: &AgentLoopConfig) -> bool {
+    config
+        .stream_options
+        .stream
+        .abort_flag
+        .as_ref()
+        .is_some_and(|abort_flag| abort_flag.load(std::sync::atomic::Ordering::SeqCst))
+}
+
 async fn prepare_tool_call(
     index: usize,
     tool_call: ToolCall,
@@ -784,7 +793,19 @@ async fn prepare_tool_call(
         context: context.clone(),
     };
     for hook in &config.tool_call_hooks {
-        match hook.on_tool_call(hook_context.clone()).await {
+        let hook_result = hook.on_tool_call(hook_context.clone()).await;
+        // pi checks the abort signal after the hook resolves and fails the
+        // call with an "Operation aborted" tool result before honoring any
+        // block decision (agent-loop.ts).
+        if hook_result.is_ok() && loop_aborted(config) {
+            return ToolCallPreparation::Immediate(error_tool_execution_outcome(
+                index,
+                tool_call.id,
+                tool_call.name,
+                "Operation aborted".to_owned(),
+            ));
+        }
+        match hook_result {
             Ok(Some(result)) => {
                 if let Some(replacement) = result.input {
                     args = replacement;
@@ -811,6 +832,15 @@ async fn prepare_tool_call(
                 ));
             }
         }
+    }
+
+    if loop_aborted(config) {
+        return ToolCallPreparation::Immediate(error_tool_execution_outcome(
+            index,
+            tool_call.id,
+            tool_call.name,
+            "Operation aborted".to_owned(),
+        ));
     }
 
     ToolCallPreparation::Prepared(PreparedToolCall {

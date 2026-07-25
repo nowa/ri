@@ -159,11 +159,25 @@ fn load_template_from_file(path: &Path) -> Result<PromptTemplate, PromptTemplate
         };
     }
     Ok(PromptTemplate {
-        name: basename_env_path(path).trim_end_matches(".md").to_owned(),
+        name: strip_md_suffix(&basename_env_path(path)),
         description,
         content: parsed.body,
         source: None,
     })
+}
+
+/// pi: `.replace(/\.md$/i, "")` — strip one trailing `.md`, case-insensitive.
+fn strip_md_suffix(name: &str) -> String {
+    let len = name.len();
+    if len >= 3
+        && name
+            .get(len - 3..)
+            .is_some_and(|tail| tail.eq_ignore_ascii_case(".md"))
+    {
+        name[..len - 3].to_owned()
+    } else {
+        name.to_owned()
+    }
 }
 
 struct ParsedFrontmatter {
