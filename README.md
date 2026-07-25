@@ -26,12 +26,14 @@ The workspace contains the Rust implementation and local test coverage for the
 core pi-ai and pi-agent-core behavior that is practical to verify without live
 provider credentials.
 
-As of the latest local verification, `cargo test --workspace` passes 1469
+As of the latest local verification, `cargo test --workspace` passes 1471
 Rust tests with 0 failures. Those numbers are tracked in detail in
-[MIGRATION_STATUS.md](MIGRATION_STATUS.md), and a case-by-case parity audit
+[MIGRATION_STATUS.md](MIGRATION_STATUS.md); a case-by-case parity audit
 against pi HEAD (1179 pi test cases, each classified as covered, gated-live,
 or not-applicable with reasons) lives in
-[docs/TEST_PARITY_AUDIT.md](docs/TEST_PARITY_AUDIT.md).
+[docs/TEST_PARITY_AUDIT.md](docs/TEST_PARITY_AUDIT.md), and a line-by-line
+model-visible prompt-text audit lives in
+[docs/PROMPT_PARITY_AUDIT.md](docs/PROMPT_PARITY_AUDIT.md).
 
 The test suite covers provider metadata, payload generation, streaming parsers,
 SSE and eventstream behavior, abort handling, response IDs, usage accounting,
@@ -169,7 +171,7 @@ tracks the pi release line ri is behavior-compatible with (`0.81` = pi
 0.81.x); the patch component is ri-owned and advances for ri bug fixes and
 small baseline syncs. Each release entry in [CHANGELOG.md](CHANGELOG.md)
 records the exact pi baseline (version and commit), and releases are tagged
-(`v0.81.1`) with matching
+(`v0.81.2`) with matching
 [GitHub Releases](https://github.com/nowa/ri/releases). The crates are not
 published to crates.io yet; consume them as Git dependencies.
 
@@ -183,8 +185,8 @@ dependencies pinned to a release tag:
 
 ```toml
 [dependencies]
-ri-llm-provider = { git = "https://github.com/nowa/ri.git", tag = "v0.81.1" }
-ri-agent-core = { git = "https://github.com/nowa/ri.git", tag = "v0.81.1" }
+ri-llm-provider = { git = "https://github.com/nowa/ri.git", tag = "v0.81.2" }
+ri-agent-core = { git = "https://github.com/nowa/ri.git", tag = "v0.81.2" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

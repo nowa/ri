@@ -16,6 +16,11 @@ When ri syncs to a new pi minor line, the version jumps accordingly
 
 ## [Unreleased]
 
+## [0.81.2] - 2026-07-25
+
+Pi baseline: unchanged (v0.81.1, commit
+`dd6bea41efa8caa7a10fe5a6401676dc5699f83f`).
+
 ### Fixed
 
 - Prompt-text parity audit (156 model-visible strings vs pi v0.81.1; see
@@ -79,6 +84,7 @@ Pi baseline: v0.81.1, commit `dd6bea41efa8caa7a10fe5a6401676dc5699f83f`
   per-case verdicts (`docs/TEST_PARITY_AUDIT.md`,
   `docs/test-parity-audit-2026-07-23.tsv`).
 
-[Unreleased]: https://github.com/nowa/ri/compare/v0.81.1...HEAD
+[Unreleased]: https://github.com/nowa/ri/compare/v0.81.2...HEAD
+[0.81.2]: https://github.com/nowa/ri/compare/v0.81.1...v0.81.2
 [0.81.1]: https://github.com/nowa/ri/compare/v0.81.0...v0.81.1
 [0.81.0]: https://github.com/nowa/ri/releases/tag/v0.81.0
