@@ -1,6 +1,8 @@
 use crate::{
     anthropic_oauth::{OAuthCredentials, refresh_anthropic_token_at},
-    github_copilot_oauth::{GitHubCopilotCredentials, refresh_github_copilot_token_at},
+    github_copilot_oauth::{
+        GitHubCopilotCredentials, refresh_github_copilot_token_with_entitlements_at,
+    },
     openai_codex_oauth::refresh_openai_codex_token_at,
     types::now_millis,
 };
@@ -107,11 +109,23 @@ impl From<OAuthCredentials> for StoredOAuthCredentials {
 
 impl From<GitHubCopilotCredentials> for StoredOAuthCredentials {
     fn from(credentials: GitHubCopilotCredentials) -> Self {
+        let mut extra = BTreeMap::new();
+        if let Some(available_model_ids) = credentials.available_model_ids {
+            extra.insert(
+                "availableModelIds".to_owned(),
+                serde_json::Value::Array(
+                    available_model_ids
+                        .into_iter()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
         StoredOAuthCredentials {
             refresh: credentials.refresh,
             access: credentials.access,
             expires: credentials.expires,
-            extra: BTreeMap::new(),
+            extra,
         }
         .with_enterprise_domain(credentials.enterprise_url)
     }
@@ -191,7 +205,7 @@ impl OAuthTokenRefresher for BuiltInOAuthTokenRefresher {
                 .await
                 .map(StoredOAuthCredentials::from),
             "github-copilot" => {
-                let refreshed = refresh_github_copilot_token_at(
+                let refreshed = refresh_github_copilot_token_with_entitlements_at(
                     &credentials.refresh,
                     credentials.enterprise_domain(),
                     now_millis,

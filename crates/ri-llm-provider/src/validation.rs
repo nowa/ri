@@ -244,10 +244,6 @@ fn render_schema_type(schema_type: &Value) -> String {
     }
 }
 
-fn render_json_value(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "<unprintable>".to_owned())
-}
-
 fn validate_scalar_constraints(
     value: &Value,
     schema: &Value,

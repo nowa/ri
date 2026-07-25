@@ -2474,6 +2474,13 @@ Alignment; the following upstream increments remain open:
   timeout), and canonicalized temp dirs in the execution-env tests — which
   fixes the long-standing macOS-only `/var -> /private/var` failure; the
   workspace suite now passes 1325/1325 locally.
+- Behavior-parity feature gaps closed (2026-07-25): Copilot `/models`
+  entitlement fetch + `availableModelIds` filtering via the provider
+  `filter_models` hook; Bedrock and Vertex interactive logins plus pi's full
+  credential-source resolution chains; SDK-contract `maxRetries` retries on
+  the anthropic/completions/responses/azure/openrouter-images paths (shared
+  helpers in `retry.rs`, defaults still one attempt). Workspace 1541 passed
+  / 0 failed.
 - Behavior-parity audit (2026-07-25): constants sweep (662+137 rows),
   function-level walk of retry/error-body/SSE/estimate utils (121 rows),
   and a 57-case live payload differential harness (pi bun dumper vs ri

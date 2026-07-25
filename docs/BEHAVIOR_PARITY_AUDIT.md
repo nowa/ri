@@ -84,10 +84,8 @@ Highest-impact fixes (the audit's justification):
   with a `JSON Parse error`; ri drops the corrupted reasoning item and sends
   the rest (fail-loud alignment needs Result plumbing through the payload
   builders — deferred).
-- **Feature gaps** (backlog): Copilot `/models` entitlement fetch +
-  `availableModelIds` filtering (ri's `filter_models` hook exists, unwired);
-  Bedrock/Vertex interactive logins; `maxRetries > 0` SDK-style retries on
-  non-codex chat paths (pi delegates to provider SDKs; defaults of 0 match).
+- ~~**Feature gaps**~~ — all three were implemented after the audit; see
+  "Feature gaps closed" below.
 - **Runtime-inherent**: UTF-16 vs char counts in three truncation helpers
   (astral-plane only); `sanitize_surrogates` as identity (Rust strings cannot
   hold lone surrogates; U+FFFD at JSON ingestion); JS local-time parsing of
@@ -97,6 +95,36 @@ Highest-impact fixes (the audit's justification):
 - **ri-only hardening kept**: agent-loop max-turn cap, WS frame/handshake
   caps, OAuth callback limits, JSON repair on SSE frames (pi throws),
   lazy idle-TTL check instead of a release-armed timer.
+
+## Feature gaps closed (2026-07-25, after the audit)
+
+The three gaps the audit deferred are now implemented:
+
+- **GitHub Copilot entitlement filtering** — the `/models` listing is fetched
+  at login and on every token refresh (`X-GitHub-Api-Version: 2026-06-01`,
+  5s timeout, pi's `model_picker_enabled` / `policy.state` /
+  `capabilities.supports.tool_calls` selectability rules), stored as
+  `availableModelIds` on the credential, and applied through the provider's
+  `filter_models` hook. As in pi, a listing failure fails the login/refresh,
+  and a missing or malformed listing leaves the catalog unfiltered.
+- **Bedrock and Vertex interactive logins** — pi's prompt sequences
+  (Bedrock: bearer token / AWS profile / existing credential chain; Vertex:
+  API key / ADC / service-account file, with project and location), including
+  the informational notices and links. Both providers' `resolve()` now
+  mirrors pi's full source chain, so env-only credentials from those logins
+  resolve and report pi's source labels (`AWS_PROFILE`, `ECS task role`,
+  `web identity token`, `gcloud application default credentials`, …).
+- **`maxRetries` SDK-style retries** — a shared retry loop reproduces the
+  openai-node / @anthropic-ai/sdk contract on the paths where pi forwards
+  `options.maxRetries` (anthropic-messages, openai-completions,
+  openai-responses, azure-openai-responses, openrouter-images):
+  `x-should-retry` override, 408/409/429/5xx, connection-error retries, and
+  the `retry-after-ms` → `retry-after` → `min(0.5s·2ⁿ, 8s)` minus up to 25%
+  jitter delay ladder. Defaults are unchanged (0 retries = one attempt).
+  Header parsing follows the SDKs' `parseFloat`, which reads an ISO-8601
+  retry-after as *seconds* and never reaches `Date.parse` — pi's own codex
+  loop uses `Number()` and does fall through to dates, so the two paths
+  differ on that input in pi too.
 
 ## Empirical confirmations worth recording
 

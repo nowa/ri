@@ -13,7 +13,6 @@ use crate::{
     },
 };
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -23,7 +22,6 @@ use std::{
 };
 
 const BUILTIN_IMAGES_API_PROVIDER_SOURCE_ID: &str = "builtin-http";
-const OPENROUTER_IMAGES_BASE_RETRY_DELAY_MS: u64 = 1000;
 
 pub fn ensure_builtin_images_api_providers() {
     register_builtin_images_api_provider_if_missing(
@@ -109,11 +107,9 @@ impl ImagesApiProvider for OpenRouterImagesHttpProvider {
                 Some(Ok(response)) => response,
                 Some(Err(error)) => {
                     let error = error.to_string();
-                    if let Some(delay_ms) = openrouter_images_request_retry_delay_ms(
-                        attempt,
-                        max_retries,
-                        options.max_retry_delay_ms,
-                    ) {
+                    if let Some(delay_ms) =
+                        openrouter_images_request_retry_delay_ms(attempt, max_retries)
+                    {
                         if !sleep_openrouter_images_retry(delay_ms, &options).await {
                             return Ok(openrouter_images_error(model, "Request was aborted", true));
                         }
@@ -140,6 +136,8 @@ impl ImagesApiProvider for OpenRouterImagesHttpProvider {
             let retry_after_ms =
                 header_value(&response_headers, "retry-after-ms").map(str::to_owned);
             let retry_after = header_value(&response_headers, "retry-after").map(str::to_owned);
+            let x_should_retry =
+                header_value(&response_headers, "x-should-retry").map(str::to_owned);
             if let Err(error) = options
                 .emit_response_hooks(
                     model,
@@ -155,11 +153,9 @@ impl ImagesApiProvider for OpenRouterImagesHttpProvider {
             let body = match await_openrouter_images_abortable(response.text(), &options).await {
                 Some(Ok(body)) => body,
                 Some(Err(error)) => {
-                    if let Some(delay_ms) = openrouter_images_request_retry_delay_ms(
-                        attempt,
-                        max_retries,
-                        options.max_retry_delay_ms,
-                    ) {
+                    if let Some(delay_ms) =
+                        openrouter_images_request_retry_delay_ms(attempt, max_retries)
+                    {
                         if !sleep_openrouter_images_retry(delay_ms, &options).await {
                             return Ok(openrouter_images_error(model, "Request was aborted", true));
                         }
@@ -173,13 +169,13 @@ impl ImagesApiProvider for OpenRouterImagesHttpProvider {
                 let error = provider_error_from_body(status.as_u16(), &body);
                 if let Some(delay_ms) = openrouter_images_retry_delay_ms(
                     status.as_u16(),
-                    &error,
+                    x_should_retry.as_deref(),
                     retry_after_ms.as_deref(),
                     retry_after.as_deref(),
                     attempt,
                     max_retries as u32,
-                    options.max_retry_delay_ms,
                     now_millis() as i64,
+                    crate::retry::sdk_retry_jitter_sample(),
                 ) {
                     if !sleep_openrouter_images_retry(delay_ms, &options).await {
                         return Ok(openrouter_images_error(model, "Request was aborted", true));
@@ -421,83 +417,45 @@ fn provider_error_from_body(status: u16, body: &str) -> String {
         .unwrap_or_else(|| format!("Provider returned HTTP {status}: {body}"))
 }
 
+/// pi delegates the images path to the OpenAI SDK, so retry decisions and
+/// delays follow the SDK contract: `x-should-retry`, 408/409/429/5xx, and the
+/// `retry-after-ms`/`retry-after`/jittered-exponential delay ladder.
+#[allow(clippy::too_many_arguments)]
 pub fn openrouter_images_retry_delay_ms(
     status: u16,
-    error_text: &str,
+    x_should_retry: Option<&str>,
     retry_after_ms: Option<&str>,
     retry_after: Option<&str>,
     attempt: usize,
     max_retries: u32,
-    max_retry_delay_ms: Option<u64>,
     now_ms: i64,
+    jitter_fraction: f64,
 ) -> Option<u64> {
-    if attempt >= max_retries as usize || !is_openrouter_images_retryable_error(status, error_text)
+    if attempt >= max_retries as usize
+        || !crate::retry::sdk_should_retry_status(status, x_should_retry)
     {
         return None;
     }
-
     let attempt = u32::try_from(attempt).unwrap_or(u32::MAX);
-    let mut delay_ms =
-        OPENROUTER_IMAGES_BASE_RETRY_DELAY_MS.saturating_mul(2_u64.saturating_pow(attempt));
-    if let Some(retry_after_ms) = retry_after_ms {
-        if let Ok(millis) = retry_after_ms.parse::<f64>()
-            && millis.is_finite()
-        {
-            delay_ms = millis.max(0.0) as u64;
-        }
-    } else if let Some(retry_after) = retry_after {
-        if let Ok(seconds) = retry_after.parse::<f64>()
-            && seconds.is_finite()
-        {
-            delay_ms = (seconds.max(0.0) * 1000.0) as u64;
-        } else if let Ok(date) = DateTime::parse_from_rfc2822(retry_after) {
-            delay_ms = date
-                .with_timezone(&Utc)
-                .timestamp_millis()
-                .saturating_sub(now_ms)
-                .max(0) as u64;
-        }
-    }
-
-    Some(cap_openrouter_images_retry_delay(
-        delay_ms,
-        max_retry_delay_ms,
+    Some(crate::retry::sdk_retry_delay_ms(
+        attempt,
+        retry_after_ms,
+        retry_after,
+        now_ms,
+        jitter_fraction,
     ))
 }
 
-fn openrouter_images_request_retry_delay_ms(
-    attempt: usize,
-    max_retries: usize,
-    max_retry_delay_ms: Option<u64>,
-) -> Option<u64> {
+/// Transport failures retry on the SDK's default backoff (no headers).
+fn openrouter_images_request_retry_delay_ms(attempt: usize, max_retries: usize) -> Option<u64> {
     if attempt >= max_retries {
         return None;
     }
     let attempt = u32::try_from(attempt).unwrap_or(u32::MAX);
-    Some(cap_openrouter_images_retry_delay(
-        OPENROUTER_IMAGES_BASE_RETRY_DELAY_MS.saturating_mul(2_u64.saturating_pow(attempt)),
-        max_retry_delay_ms,
+    Some(crate::retry::sdk_default_retry_delay_ms(
+        attempt,
+        crate::retry::sdk_retry_jitter_sample(),
     ))
-}
-
-fn cap_openrouter_images_retry_delay(delay_ms: u64, max_retry_delay_ms: Option<u64>) -> u64 {
-    max_retry_delay_ms.map_or(delay_ms, |max| delay_ms.min(max))
-}
-
-fn is_openrouter_images_retryable_error(status: u16, error_text: &str) -> bool {
-    if matches!(status, 408 | 409 | 425 | 429 | 500 | 502 | 503 | 504) {
-        return true;
-    }
-    let normalized = error_text
-        .chars()
-        .flat_map(char::to_lowercase)
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .collect::<String>();
-    normalized.contains("ratelimit")
-        || normalized.contains("overloaded")
-        || normalized.contains("serviceunavailable")
-        || normalized.contains("upstreamconnect")
-        || normalized.contains("connectionrefused")
 }
 
 async fn await_openrouter_images_abortable<T, E, F>(

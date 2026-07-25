@@ -32,6 +32,17 @@ When ri syncs to a new pi minor line, the version jumps accordingly
 
 ### Added
 
+- GitHub Copilot entitlement filtering: the `/models` listing is fetched at
+  login and refresh and applied through the provider `filter_models` hook, so
+  only models the account may use are offered.
+- Interactive logins for Amazon Bedrock (bearer token / AWS profile /
+  credential chain) and Google Vertex AI (API key / ADC / service account),
+  with pi's full credential-source resolution chains behind them.
+- `maxRetries` support on the anthropic, openai-completions,
+  openai-responses, azure, and openrouter-images paths, reproducing the
+  provider SDKs' retry contract (`x-should-retry`, 408/409/429/5xx,
+  connection errors, retry-after headers, jittered exponential backoff).
+  Defaults are unchanged: one attempt.
 - Reusable differential-testing harness (`tools/differential/` +
   `tests/differential.rs`): replays a shared case matrix through pi's and
   ri's real streaming pipelines and diffs the captured payloads.

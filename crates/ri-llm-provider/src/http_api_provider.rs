@@ -50,12 +50,10 @@ use crate::{
     openai_completions::{
         OpenAICompletionsPayloadOptions, OpenAICompletionsStreamProcessor,
         build_openai_completions_default_headers_with_context, build_openai_completions_payload,
-        resolve_openai_completions_cache_retention,
     },
     openai_responses::{
         OpenAIResponsesPayloadOptions, OpenAIResponsesStreamProcessor,
         build_openai_responses_default_headers_with_context, build_openai_responses_payload,
-        resolve_openai_responses_cache_retention,
     },
     types::{
         AssistantMessage, AssistantMessageEvent, Context, Model, ProviderResponse,
@@ -1688,7 +1686,9 @@ async fn stream_openai_completions_sse_json(
     }
 
     let request = build_json_request(model, options, url, headers, payload)?;
-    let response = request.send().await.map_err(|error| error.to_string())?;
+    let Some(response) = send_with_sdk_retries(request, options, sender, output).await? else {
+        return Ok(());
+    };
     emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
@@ -1751,7 +1751,9 @@ async fn stream_openai_responses_sse_json(
     }
 
     let request = build_json_request(model, options, url, headers, payload)?;
-    let response = request.send().await.map_err(|error| error.to_string())?;
+    let Some(response) = send_with_sdk_retries(request, options, sender, output).await? else {
+        return Ok(());
+    };
     emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
@@ -1922,6 +1924,86 @@ async fn wait_for_abort_flag(options: &SimpleStreamOptions) {
             }
         }
         None => std::future::pending::<()>().await,
+    }
+}
+
+/// Provider-SDK retry loop for the paths where pi forwards
+/// `options.maxRetries` to the OpenAI/Anthropic SDKs (anthropic-messages,
+/// openai-completions, openai-responses, azure-openai-responses). Defaults to
+/// a single attempt (`maxRetries` unset = 0), matching pi.
+///
+/// Returns `Ok(None)` when the abort flag fired during a retry wait; the
+/// caller emits the abort event and stops, mirroring the codex loop.
+async fn send_with_sdk_retries(
+    request: reqwest::RequestBuilder,
+    options: &SimpleStreamOptions,
+    sender: &crate::AssistantMessageEventSender,
+    output: &mut AssistantMessage,
+) -> Result<Option<reqwest::Response>, String> {
+    fn header_value(response: &reqwest::Response, name: &str) -> Option<String> {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    }
+
+    let max_retries = options.stream.max_retries.unwrap_or(0);
+    let mut pending = Some(request);
+    let mut attempt: u32 = 0;
+    loop {
+        let current = pending.take().ok_or("request builder consumed")?;
+        // Keep a clone for the next attempt while retries remain; a
+        // non-cloneable body (streaming) simply cannot be retried.
+        let (attempt_request, next_request) = if attempt < max_retries {
+            match current.try_clone() {
+                Some(clone) => (clone, Some(current)),
+                None => (current, None),
+            }
+        } else {
+            (current, None)
+        };
+        let can_retry = next_request.is_some();
+
+        let delay_ms = match attempt_request.send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() || !can_retry {
+                    return Ok(Some(response));
+                }
+                if !crate::retry::sdk_should_retry_status(
+                    status.as_u16(),
+                    header_value(&response, "x-should-retry").as_deref(),
+                ) {
+                    return Ok(Some(response));
+                }
+                crate::retry::sdk_retry_delay_ms(
+                    attempt,
+                    header_value(&response, "retry-after-ms").as_deref(),
+                    header_value(&response, "retry-after").as_deref(),
+                    now_millis(),
+                    crate::retry::sdk_retry_jitter_sample(),
+                )
+            }
+            Err(error) => {
+                if !can_retry {
+                    return Err(error.to_string());
+                }
+                // Connection failures and timeouts retry on the default
+                // backoff (no response headers to consult).
+                crate::retry::sdk_default_retry_delay_ms(
+                    attempt,
+                    crate::retry::sdk_retry_jitter_sample(),
+                )
+            }
+        };
+
+        if !sleep_observing_abort(delay_ms, options).await {
+            push_abort_if_requested(sender, options, output);
+            return Ok(None);
+        }
+        pending = next_request;
+        attempt += 1;
     }
 }
 
@@ -2287,7 +2369,9 @@ async fn stream_anthropic_sse_json(
     }
 
     let request = build_json_request_without_default_auth(options, url, headers, payload)?;
-    let response = request.send().await.map_err(|error| error.to_string())?;
+    let Some(response) = send_with_sdk_retries(request, options, sender, output).await? else {
+        return Ok(());
+    };
     emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {

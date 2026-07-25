@@ -5985,37 +5985,50 @@ fn openrouter_images_usage_and_error_mapping_match_provider() {
 
 #[test]
 fn openrouter_images_retry_delay_respects_headers_and_backoff() {
+    // pi runs the images path through the OpenAI SDK: header-provided delays
+    // are obeyed as-is, and the default ladder is min(0.5s * 2^n, 8s) with up
+    // to 25% jitter shaved off.
     assert_eq!(
-        openrouter_images_retry_delay_ms(429, "rate limit", Some("1500"), None, 0, 3, None, 0),
+        openrouter_images_retry_delay_ms(429, None, Some("1500"), None, 0, 3, 0, 0.0),
         Some(1500)
     );
     assert_eq!(
-        openrouter_images_retry_delay_ms(503, "overloaded", None, Some("2.5"), 0, 3, None, 0),
+        openrouter_images_retry_delay_ms(503, None, None, Some("2.5"), 0, 3, 0, 0.0),
         Some(2500)
     );
     assert_eq!(
-        openrouter_images_retry_delay_ms(500, "server error", None, None, 1, 3, Some(100), 0),
-        Some(100)
+        openrouter_images_retry_delay_ms(500, None, None, None, 0, 3, 0, 0.0),
+        Some(500)
     );
     assert_eq!(
-        openrouter_images_retry_delay_ms(
-            400,
-            "upstream connect refused",
-            None,
-            None,
-            0,
-            3,
-            None,
-            0,
-        ),
+        openrouter_images_retry_delay_ms(500, None, None, None, 1, 3, 0, 0.0),
         Some(1000)
     );
+    // The exponential ladder saturates at 8s and jitter only reduces it.
     assert_eq!(
-        openrouter_images_retry_delay_ms(429, "rate limit", None, None, 3, 3, None, 0),
+        openrouter_images_retry_delay_ms(500, None, None, None, 9, 12, 0, 0.0),
+        Some(8000)
+    );
+    assert_eq!(
+        openrouter_images_retry_delay_ms(500, None, None, None, 0, 3, 0, 0.25),
+        Some(375)
+    );
+    // `x-should-retry` overrides the status decision in both directions.
+    assert_eq!(
+        openrouter_images_retry_delay_ms(400, Some("true"), None, None, 0, 3, 0, 0.0),
+        Some(500)
+    );
+    assert_eq!(
+        openrouter_images_retry_delay_ms(429, Some("false"), None, None, 0, 3, 0, 0.0),
+        None
+    );
+    // Retries stop at the budget, and non-retryable statuses never retry.
+    assert_eq!(
+        openrouter_images_retry_delay_ms(429, None, None, None, 3, 3, 0, 0.0),
         None
     );
     assert_eq!(
-        openrouter_images_retry_delay_ms(400, "bad request", None, None, 0, 3, None, 0),
+        openrouter_images_retry_delay_ms(400, None, None, None, 0, 3, 0, 0.0),
         None
     );
 }
@@ -27340,16 +27353,34 @@ mod interactive_oauth_login {
             access_token_url: poll_url,
             copilot_token_url: refresh_url,
         };
+        // pi fetches the `/models` entitlement listing after login; point it at
+        // a mock (policy enablement stays off).
+        let (models_url, _models_task) = mock_json_server(
+            r#"{"data":[{"id":"gpt-5.2-codex","model_picker_enabled":true},{"id":"hidden","model_picker_enabled":false}]}"#,
+        )
+        .await;
         let interaction = ScriptedAuthInteraction::new(&[]);
 
         let credential = login_github_copilot_with_urls(
             &urls,
             Some("ghe.example.com"),
             &interaction,
-            &GitHubCopilotModelPolicyOptions::disabled(),
+            &GitHubCopilotModelPolicyOptions {
+                enabled: false,
+                base_url: Some(models_url),
+                model_ids: None,
+            },
         )
         .await
         .expect("copilot login");
+        assert_eq!(
+            credential
+                .extra
+                .get("availableModelIds")
+                .and_then(|value| value.as_array())
+                .map(|ids| ids.iter().filter_map(|id| id.as_str()).collect::<Vec<_>>()),
+            Some(vec!["gpt-5.2-codex"])
+        );
 
         assert_eq!(credential.access, token);
         assert_eq!(credential.refresh, "ghu_refresh_token");

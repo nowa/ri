@@ -567,8 +567,18 @@ pub fn parse_anthropic_oauth_token_response(
     })
 }
 
+/// pi aborts OAuth token requests after 30s (AbortSignal.timeout).
+pub const OAUTH_HTTP_REQUEST_TIMEOUT_MS: u64 = 30_000;
+
 pub async fn send_oauth_http_request(
     request: &OAuthHttpRequest,
+) -> Result<OAuthHttpResponse, String> {
+    send_oauth_http_request_with_timeout(request, OAUTH_HTTP_REQUEST_TIMEOUT_MS).await
+}
+
+pub async fn send_oauth_http_request_with_timeout(
+    request: &OAuthHttpRequest,
+    timeout_ms: u64,
 ) -> Result<OAuthHttpResponse, String> {
     let client = reqwest_client_for_target(&request.url)?;
     let method = request
@@ -577,8 +587,7 @@ pub async fn send_oauth_http_request(
         .map_err(|error| format!("Unsupported OAuth HTTP method {}: {error}", request.method))?;
     let mut builder = client
         .request(method.clone(), &request.url)
-        // pi aborts OAuth token requests after 30s (AbortSignal.timeout).
-        .timeout(std::time::Duration::from_secs(30));
+        .timeout(std::time::Duration::from_millis(timeout_ms));
     for (name, value) in &request.headers {
         builder = builder.header(name, value);
     }

@@ -93,6 +93,132 @@ static RETRYABLE_PROVIDER_ERROR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 /// (pi `NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN`). Shared with the OpenAI
 /// Codex inner retry loop, whose terminal rate-limit gate uses the same
 /// pattern (pi openai-codex-responses.ts `isTerminalRateLimitError`).
+/// Provider-SDK retry semantics (openai-node / @anthropic-ai/sdk share one
+/// implementation). pi forwards `options.maxRetries` to these SDKs, so the
+/// backoff shape below is what pi actually performs on the anthropic,
+/// openai-completions, openai-responses, azure, and openrouter-images paths.
+pub const SDK_INITIAL_RETRY_DELAY_MS: f64 = 500.0;
+pub const SDK_MAX_RETRY_DELAY_MS: f64 = 8_000.0;
+/// The SDKs shave up to 25% off each delay as jitter.
+pub const SDK_RETRY_JITTER_FRACTION: f64 = 0.25;
+
+/// SDK `shouldRetry`: an explicit `x-should-retry` header wins, then request
+/// timeouts (408), lock timeouts (409), rate limits (429), and server errors.
+pub fn sdk_should_retry_status(status: u16, x_should_retry: Option<&str>) -> bool {
+    match x_should_retry {
+        Some("true") => return true,
+        Some("false") => return false,
+        _ => {}
+    }
+    status == 408 || status == 409 || status == 429 || status >= 500
+}
+
+/// JS `parseFloat`: leading numeric prefix, ignoring trailing garbage.
+fn js_parse_float(text: &str) -> Option<f64> {
+    let trimmed = text.trim_start();
+    let bytes = trimmed.as_bytes();
+    let mut end = 0;
+    let mut seen_digit = false;
+    let mut seen_dot = false;
+    let mut seen_exponent = false;
+    while end < bytes.len() {
+        let byte = bytes[end];
+        match byte {
+            b'+' | b'-' if end == 0 => {}
+            b'+' | b'-' if seen_exponent && matches!(bytes[end - 1], b'e' | b'E') => {}
+            b'0'..=b'9' => seen_digit = true,
+            b'.' if !seen_dot && !seen_exponent => seen_dot = true,
+            b'e' | b'E' if seen_digit && !seen_exponent => seen_exponent = true,
+            _ => break,
+        }
+        end += 1;
+    }
+    if !seen_digit {
+        return None;
+    }
+    trimmed[..end]
+        .parse::<f64>()
+        .ok()
+        .filter(|value| !value.is_nan())
+}
+
+/// JS `Date.parse` for retry-after headers: IMF-fixdate (RFC 2822) and
+/// ISO-8601 forms. Timezone-less datetimes are read as UTC (JS uses local
+/// time, but real retry-after dates always carry a zone).
+pub(crate) fn parse_http_retry_after_date_ms(text: &str) -> Option<i64> {
+    use chrono::{DateTime, Utc};
+    if let Ok(date) = DateTime::parse_from_rfc2822(text) {
+        return Some(date.with_timezone(&Utc).timestamp_millis());
+    }
+    if let Ok(date) = DateTime::parse_from_rfc3339(text) {
+        return Some(date.with_timezone(&Utc).timestamp_millis());
+    }
+    if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f") {
+        return Some(datetime.and_utc().timestamp_millis());
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d") {
+        return Some(date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis());
+    }
+    None
+}
+
+/// SDK `retryRequest` header handling: `retry-after-ms` wins when it parses,
+/// then `retry-after` as seconds, then as an HTTP date. The SDKs apply no cap
+/// or floor to header-provided delays.
+pub fn sdk_retry_after_delay_ms(
+    retry_after_ms: Option<&str>,
+    retry_after: Option<&str>,
+    now_ms: i64,
+) -> Option<f64> {
+    if let Some(value) = retry_after_ms.filter(|value| !value.is_empty())
+        && let Some(millis) = js_parse_float(value)
+    {
+        return Some(millis);
+    }
+    let retry_after = retry_after.filter(|value| !value.is_empty())?;
+    if let Some(seconds) = js_parse_float(retry_after) {
+        return Some(seconds * 1000.0);
+    }
+    let date_ms = parse_http_retry_after_date_ms(retry_after)?;
+    Some((date_ms - now_ms) as f64)
+}
+
+/// SDK `calculateDefaultRetryTimeoutMillis`: `min(0.5s * 2^attempt, 8s)` with
+/// up to 25% jitter shaved off. `attempt` is 0-based (the first retry uses
+/// 500ms before jitter); `jitter_fraction` is the SDK's
+/// `Math.random() * 0.25` sample.
+pub fn sdk_default_retry_delay_ms(attempt: u32, jitter_fraction: f64) -> u64 {
+    let base = (SDK_INITIAL_RETRY_DELAY_MS * 2f64.powi(attempt as i32)).min(SDK_MAX_RETRY_DELAY_MS);
+    let jitter = jitter_fraction.clamp(0.0, SDK_RETRY_JITTER_FRACTION);
+    (base * (1.0 - jitter)).max(0.0) as u64
+}
+
+/// Full SDK delay for one retry: header-provided delay when present,
+/// otherwise the jittered exponential default. Negative header delays (a
+/// retry-after date in the past) collapse to no wait.
+pub fn sdk_retry_delay_ms(
+    attempt: u32,
+    retry_after_ms: Option<&str>,
+    retry_after: Option<&str>,
+    now_ms: i64,
+    jitter_fraction: f64,
+) -> u64 {
+    match sdk_retry_after_delay_ms(retry_after_ms, retry_after, now_ms) {
+        Some(delay_ms) => delay_ms.max(0.0) as u64,
+        None => sdk_default_retry_delay_ms(attempt, jitter_fraction),
+    }
+}
+
+/// A jitter sample in `[0, 0.25)` standing in for the SDKs'
+/// `Math.random() * 0.25`.
+pub fn sdk_retry_jitter_sample() -> f64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(0);
+    let sample = (hasher.finish() >> 11) as f64 / (1u64 << 53) as f64;
+    sample * SDK_RETRY_JITTER_FRACTION
+}
+
 pub fn is_non_retryable_provider_limit_error(error_message: &str) -> bool {
     NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.is_match(error_message)
 }

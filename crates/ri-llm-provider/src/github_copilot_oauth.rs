@@ -1,5 +1,7 @@
 use crate::{
-    anthropic_oauth::{OAuthHttpRequest, send_oauth_http_request},
+    anthropic_oauth::{
+        OAuthHttpRequest, send_oauth_http_request, send_oauth_http_request_with_timeout,
+    },
     device_code::{
         DeviceCodePollConfig, DeviceCodePollProgress, DeviceCodePollResponse, DeviceCodePollState,
         poll_device_code_flow_with_sleeper_and_abort,
@@ -31,6 +33,9 @@ pub struct GitHubCopilotCredentials {
     pub access: String,
     pub expires: i64,
     pub enterprise_url: Option<String>,
+    /// Model ids the account may actually use, from the Copilot `/models`
+    /// entitlement listing. `None` when the listing was not fetched.
+    pub available_model_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +57,9 @@ pub struct GitHubCopilotLoginResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitHubCopilotModelPolicyOptions {
     pub enabled: bool,
+    /// Base URL for the Copilot account APIs used around login (model policy
+    /// enablement and the `/models` entitlement listing). `None` derives it
+    /// from the token's `proxy-ep`, as pi does.
     pub base_url: Option<String>,
     pub model_ids: Option<Vec<String>>,
 }
@@ -588,6 +596,21 @@ pub async fn refresh_github_copilot_token_at(
         .await
 }
 
+/// pi `refreshGitHubCopilotToken`: the token refresh is followed by an
+/// entitlement listing fetch, and a listing failure fails the refresh.
+pub async fn refresh_github_copilot_token_with_entitlements_at(
+    refresh_token: &str,
+    enterprise_domain: Option<&str>,
+    now_millis: i64,
+) -> Result<GitHubCopilotCredentials, String> {
+    let mut credentials =
+        refresh_github_copilot_token_at(refresh_token, enterprise_domain, now_millis).await?;
+    credentials.available_model_ids = Some(
+        fetch_available_github_copilot_model_ids(&credentials.access, enterprise_domain).await?,
+    );
+    Ok(credentials)
+}
+
 pub async fn refresh_github_copilot_token_for_urls_at(
     refresh_token: &str,
     urls: &GitHubCopilotUrls,
@@ -620,6 +643,89 @@ pub async fn refresh_github_copilot_token(
     enterprise_domain: Option<&str>,
 ) -> Result<GitHubCopilotCredentials, String> {
     refresh_github_copilot_token_at(refresh_token, enterprise_domain, now_millis() as i64).await
+}
+
+/// Copilot entitlement listing API version header (pi `COPILOT_API_VERSION`).
+pub const GITHUB_COPILOT_API_VERSION: &str = "2026-06-01";
+/// pi bounds the entitlement fetch at 5 seconds.
+pub const GITHUB_COPILOT_MODELS_TIMEOUT_MS: u64 = 5_000;
+
+pub fn build_github_copilot_models_request(
+    token: &str,
+    enterprise_domain: Option<&str>,
+    base_url: Option<&str>,
+) -> OAuthHttpRequest {
+    let base_url = base_url
+        .map(str::to_owned)
+        .unwrap_or_else(|| github_copilot_base_url(Some(token), enterprise_domain));
+    let mut headers = copilot_headers();
+    headers.insert("Accept".to_owned(), "application/json".to_owned());
+    headers.insert("Authorization".to_owned(), format!("Bearer {token}"));
+    headers.insert(
+        "X-GitHub-Api-Version".to_owned(),
+        GITHUB_COPILOT_API_VERSION.to_owned(),
+    );
+    OAuthHttpRequest {
+        url: format!("{}/models", base_url.trim_end_matches('/')),
+        method: "GET".to_owned(),
+        headers,
+        body: String::new(),
+    }
+}
+
+/// pi `isSelectableCopilotModel`: the picker must expose the model, its policy
+/// must not be disabled, and tool calls must not be explicitly unsupported.
+fn is_selectable_github_copilot_model(item: &Value) -> bool {
+    let picker_enabled = item.get("model_picker_enabled") == Some(&Value::Bool(true));
+    let policy_disabled = item
+        .pointer("/policy/state")
+        .and_then(Value::as_str)
+        .is_some_and(|state| state == "disabled");
+    let tool_calls_unsupported =
+        item.pointer("/capabilities/supports/tool_calls") == Some(&Value::Bool(false));
+    picker_enabled && !policy_disabled && !tool_calls_unsupported
+}
+
+/// pi `parseAvailableCopilotModelIds`: a non-array `data` is a protocol error.
+pub fn parse_available_github_copilot_model_ids(
+    response_body: &str,
+) -> Result<Vec<String>, String> {
+    let data: Value = serde_json::from_str(response_body)
+        .map_err(|_| "Invalid Copilot models response".to_owned())?;
+    let items = data
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Invalid Copilot models response".to_owned())?;
+    Ok(items
+        .iter()
+        .filter(|item| is_selectable_github_copilot_model(item))
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect())
+}
+
+pub async fn fetch_available_github_copilot_model_ids(
+    token: &str,
+    enterprise_domain: Option<&str>,
+) -> Result<Vec<String>, String> {
+    fetch_available_github_copilot_model_ids_with_base_url(token, enterprise_domain, None).await
+}
+
+pub async fn fetch_available_github_copilot_model_ids_with_base_url(
+    token: &str,
+    enterprise_domain: Option<&str>,
+    base_url: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let request = build_github_copilot_models_request(token, enterprise_domain, base_url);
+    let response =
+        send_oauth_http_request_with_timeout(&request, GITHUB_COPILOT_MODELS_TIMEOUT_MS).await?;
+    if response.status / 100 != 2 {
+        return Err(format!(
+            "{} {}: {}",
+            response.status, response.status_text, response.body
+        ));
+    }
+    parse_available_github_copilot_model_ids(&response.body)
 }
 
 pub fn build_github_copilot_model_policy_request(
@@ -761,6 +867,7 @@ pub fn parse_github_copilot_token_response(
         access: token.to_owned(),
         expires: expires_at_seconds * 1000 - 5 * 60 * 1000,
         enterprise_url: enterprise_domain.map(str::to_owned),
+        available_model_ids: None,
     }
 }
 

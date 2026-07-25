@@ -17,7 +17,8 @@ use crate::{
     github_copilot_oauth::{
         GitHubCopilotCredentials, GitHubCopilotModelPolicyOptions, GitHubCopilotUrls,
         complete_github_copilot_device_flow_for_urls,
-        enable_all_github_copilot_model_policies_with_options, github_copilot_urls,
+        enable_all_github_copilot_model_policies_with_options,
+        fetch_available_github_copilot_model_ids_with_base_url, github_copilot_urls,
         normalize_github_domain, refresh_github_copilot_token_for_urls_at,
         request_github_copilot_device_code_for_urls,
     },
@@ -132,6 +133,17 @@ pub async fn login_github_copilot_with_urls(
         policy_options,
     )
     .await;
+    // pi stores the entitlement listing on the credential after enabling
+    // policies, and a listing failure fails the login.
+    let mut credentials = credentials;
+    credentials.available_model_ids = Some(
+        fetch_available_github_copilot_model_ids_with_base_url(
+            &credentials.access,
+            enterprise_domain,
+            policy_options.base_url.as_deref(),
+        )
+        .await?,
+    );
     Ok(copilot_credentials_to_credential(credentials))
 }
 

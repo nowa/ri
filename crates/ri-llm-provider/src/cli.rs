@@ -5,8 +5,8 @@ use crate::{
         start_anthropic_oauth_login_flow,
     },
     github_copilot_oauth::{
-        GitHubCopilotCredentials, GitHubDeviceCode, github_copilot_urls,
-        login_github_copilot_device_flow_for_urls, normalize_github_domain,
+        GitHubCopilotCredentials, GitHubDeviceCode, fetch_available_github_copilot_model_ids,
+        github_copilot_urls, login_github_copilot_device_flow_for_urls, normalize_github_domain,
     },
     oauth_auth_storage::{
         AuthCredential, AuthStorage, OAuthProviderInfo, StoredOAuthCredentials, get_oauth_provider,
@@ -223,7 +223,13 @@ async fn login_github_copilot_cli() -> Result<GitHubCopilotCredentials, String> 
         print_github_device_code,
     )
     .await?;
-    Ok(result.credentials)
+    // pi stores the `/models` entitlement listing on the credential at login.
+    let mut credentials = result.credentials;
+    credentials.available_model_ids = Some(
+        fetch_available_github_copilot_model_ids(&credentials.access, enterprise_domain.as_deref())
+            .await?,
+    );
+    Ok(credentials)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
