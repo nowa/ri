@@ -1160,15 +1160,13 @@ fn apply_bedrock_stream_metadata(output: &mut AssistantMessage, model: &Model, e
         .get("cacheWriteInputTokens")
         .and_then(Value::as_u64)
         .unwrap_or_default();
+    // pi: `event.usage.totalTokens || input + output` — cache tokens are not
+    // folded into the fallback, and a zero totalTokens falls through.
     let total_tokens = usage
         .get("totalTokens")
         .and_then(Value::as_u64)
-        .unwrap_or_else(|| {
-            input
-                .saturating_add(output_tokens)
-                .saturating_add(cache_read)
-                .saturating_add(cache_write)
-        });
+        .filter(|total| *total != 0)
+        .unwrap_or_else(|| input.saturating_add(output_tokens));
     output.usage = Usage {
         input,
         output: output_tokens,
@@ -1212,6 +1210,111 @@ fn finish_bedrock_stream_with_error(
         error: output.clone(),
     });
     Err(message)
+}
+
+/// Human-readable prefixes for Bedrock SDK exception names (pi
+/// BEDROCK_ERROR_PREFIXES); unknown names pass through unchanged.
+fn bedrock_error_prefix(name: &str) -> &str {
+    match name {
+        "InternalServerException" => "Internal server error",
+        "ModelStreamErrorException" => "Model stream error",
+        "ValidationException" => "Validation error",
+        "ThrottlingException" => "Throttling error",
+        "ServiceUnavailableException" => "Service unavailable",
+        other => other,
+    }
+}
+
+pub const BEDROCK_DATA_RETENTION_DOCS_URL: &str =
+    "https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html";
+
+/// AWS restJson error-code sanitization: drop a "," or ":" suffix and keep
+/// the segment after a "#" namespace prefix.
+fn sanitize_bedrock_error_code(raw: &str) -> &str {
+    let mut clean = raw;
+    if let Some((head, _)) = clean.split_once(',') {
+        clean = head;
+    }
+    if let Some((head, _)) = clean.split_once(':') {
+        clean = head;
+    }
+    if let Some((_, tail)) = clean.split_once('#') {
+        clean = tail;
+    }
+    clean
+}
+
+/// Mirrors pi `formatBedrockError` for the non-2xx HTTP path: the AWS SDK
+/// deserializes the exception name (x-amzn-errortype header, body `code`,
+/// body `__type`; "Unknown" otherwise) and message (`message`/`Message`;
+/// "UnknownError" otherwise), and pi prefixes the mapped name onto either the
+/// message or `"<status>: <body>"` when the message does not carry the body.
+pub fn format_bedrock_http_error(
+    status: u16,
+    error_type_header: Option<&str>,
+    body: &str,
+) -> String {
+    static DATA_RETENTION_PATTERN: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| {
+            regex::Regex::new("(?i)data retention mode").expect("valid data retention pattern")
+        });
+
+    let parsed = serde_json::from_str::<Value>(body).ok();
+    let data = parsed.as_ref().and_then(Value::as_object);
+    let code = error_type_header
+        .map(str::to_owned)
+        .or_else(|| {
+            data.and_then(|data| data.get("code"))
+                .and_then(bedrock_error_code_text)
+        })
+        .or_else(|| {
+            data.and_then(|data| data.get("__type"))
+                .and_then(bedrock_error_code_text)
+        });
+    let name = code
+        .as_deref()
+        .map(sanitize_bedrock_error_code)
+        .unwrap_or("Unknown")
+        .to_owned();
+    let message = data
+        .and_then(|data| data.get("message").or_else(|| data.get("Message")))
+        .and_then(bedrock_error_code_text)
+        .unwrap_or_else(|| "UnknownError".to_owned());
+
+    // pi normalizeProviderError: surface the raw HTTP body (with status) when
+    // the SDK did not fold it into the message; trimmed and truncated.
+    let body_text = {
+        let trimmed = body.trim();
+        (!trimmed.is_empty()).then(|| {
+            crate::http_api_provider::truncate_provider_error_text(
+                trimmed,
+                crate::http_api_provider::MAX_PROVIDER_ERROR_BODY_CHARS,
+            )
+        })
+    };
+    let core = match &body_text {
+        Some(body_text) if !message.contains(body_text.as_str()) => {
+            format!("{status}: {body_text}")
+        }
+        _ => message,
+    };
+    let hint = if DATA_RETENTION_PATTERN.is_match(&core) {
+        format!(" See {BEDROCK_DATA_RETENTION_DOCS_URL} for supported data retention modes.")
+    } else {
+        String::new()
+    };
+    format!("{}: {core}{hint}", bedrock_error_prefix(&name))
+}
+
+/// JS string coercion for AWS error code/message fields (numbers appear in
+/// the wild for gateway responses).
+fn bedrock_error_code_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
 }
 
 fn bedrock_stream_exception_message(event: &Value) -> Option<String> {
@@ -1510,7 +1613,11 @@ pub fn supports_bedrock_prompt_caching(model: &Model) -> bool {
         return std::env::var("AWS_BEDROCK_FORCE_CACHE").ok().as_deref() == Some("1");
     }
     candidates.iter().any(|candidate| {
-        candidate.contains("-4-")
+        // Claude 5 (fable-5, sonnet-5), Claude 4.x, Claude 3.7 Sonnet, and
+        // Claude 3.5 Haiku support explicit cache points.
+        candidate.contains("fable-5")
+            || candidate.contains("sonnet-5")
+            || candidate.contains("-4-")
             || candidate.contains("claude-3-7-sonnet")
             || candidate.contains("claude-3-5-haiku")
     })
@@ -1539,10 +1646,19 @@ fn append_bedrock_cache_point_to_last_user(
 }
 
 fn resolve_bedrock_cache_retention(cache_retention: Option<CacheRetention>) -> CacheRetention {
+    resolve_bedrock_cache_retention_scoped(cache_retention, &std::collections::BTreeMap::new())
+}
+
+/// pi resolves PI_CACHE_RETENTION through the request-scoped provider env
+/// before the process environment.
+pub fn resolve_bedrock_cache_retention_scoped(
+    cache_retention: Option<CacheRetention>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> CacheRetention {
     if let Some(cache_retention) = cache_retention {
         return cache_retention;
     }
-    if std::env::var("PI_CACHE_RETENTION").ok().as_deref() == Some("long") {
+    if crate::get_provider_env_value("PI_CACHE_RETENTION", env).as_deref() == Some("long") {
         CacheRetention::Long
     } else {
         CacheRetention::Short
@@ -1552,7 +1668,8 @@ fn resolve_bedrock_cache_retention(cache_retention: Option<CacheRetention>) -> C
 fn bedrock_cache_point(cache_retention: CacheRetention) -> Value {
     let mut cache_point = json!({ "type": "default" });
     if cache_retention == CacheRetention::Long {
-        cache_point["ttl"] = Value::String("ONE_HOUR".to_owned());
+        // AWS CacheTTL.ONE_HOUR wire value.
+        cache_point["ttl"] = Value::String("1h".to_owned());
     }
     json!({ "cachePoint": cache_point })
 }
@@ -1588,21 +1705,23 @@ fn normalize_bedrock_tool_call_id(id: &str) -> String {
         .collect()
 }
 
-fn is_bedrock_anthropic_claude_model(model: &Model) -> bool {
-    bedrock_model_match_candidates(model)
-        .iter()
-        .any(|candidate| {
-            candidate.contains("anthropic-claude")
-                || candidate.contains("anthropic/claude")
-                || candidate.contains("claude")
-        })
+/// pi `isAnthropicClaudeModel`: bare "claude" only matches the user-facing
+/// model NAME; the model id must carry an explicit anthropic prefix.
+pub fn is_bedrock_anthropic_claude_model(model: &Model) -> bool {
+    let id = model.id.to_lowercase();
+    let name = model.name.to_lowercase();
+    id.contains("anthropic.claude")
+        || id.contains("anthropic/claude")
+        || name.contains("anthropic.claude")
+        || name.contains("anthropic/claude")
+        || name.contains("claude")
 }
 
 fn supports_bedrock_thinking_signature(model: &Model) -> bool {
     is_bedrock_anthropic_claude_model(model)
 }
 
-fn supports_bedrock_adaptive_thinking(model: &Model) -> bool {
+pub fn supports_bedrock_adaptive_thinking(model: &Model) -> bool {
     bedrock_model_match_candidates(model)
         .iter()
         .any(|candidate| {
@@ -1678,17 +1797,21 @@ fn bedrock_model_match_candidates(model: &Model) -> Vec<String> {
     [model.id.as_str(), model.name.as_str()]
         .into_iter()
         .flat_map(|value| {
-            let lower = value.to_ascii_lowercase();
-            let normalized = lower
-                .chars()
-                .map(|ch| {
-                    if matches!(ch, ' ' | '_' | '.' | ':') {
-                        '-'
-                    } else {
-                        ch
+            let lower = value.to_lowercase();
+            // pi replaces separator RUNS with a single dash: /[\s_.:]+/g.
+            let mut normalized = String::with_capacity(lower.len());
+            let mut in_separator = false;
+            for ch in lower.chars() {
+                if ch.is_whitespace() || matches!(ch, '_' | '.' | ':') {
+                    if !in_separator {
+                        normalized.push('-');
                     }
-                })
-                .collect::<String>();
+                    in_separator = true;
+                } else {
+                    normalized.push(ch);
+                    in_separator = false;
+                }
+            }
             [lower, normalized]
         })
         .collect()

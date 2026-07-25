@@ -341,15 +341,25 @@ fn apply_mistral_chunk_metadata(output: &mut AssistantMessage, model: &Model, ch
 }
 
 fn parse_mistral_usage(model: &Model, usage: &Value) -> Usage {
-    let input = usage_u64(usage, "promptTokens", "prompt_tokens").unwrap_or(0);
+    let prompt_tokens = usage_u64(usage, "promptTokens", "prompt_tokens").unwrap_or(0);
+    let cached_prompt_tokens = mistral_cached_prompt_tokens(usage, prompt_tokens);
+    let input = prompt_tokens.saturating_sub(cached_prompt_tokens);
     let output_tokens = usage_u64(usage, "completionTokens", "completion_tokens").unwrap_or(0);
+    let cache_read = cached_prompt_tokens;
+    let cache_write = 0;
     let total_tokens = usage_u64(usage, "totalTokens", "total_tokens")
-        .unwrap_or_else(|| input.saturating_add(output_tokens));
+        .filter(|total| *total != 0)
+        .unwrap_or_else(|| {
+            input
+                .saturating_add(output_tokens)
+                .saturating_add(cache_read)
+                .saturating_add(cache_write)
+        });
     let mut usage = Usage {
         input,
         output: output_tokens,
-        cache_read: 0,
-        cache_write: 0,
+        cache_read,
+        cache_write,
         cache_write_1h: None,
         reasoning: None,
         total_tokens,
@@ -357,6 +367,35 @@ fn parse_mistral_usage(model: &Model, usage: &Value) -> Usage {
     };
     calculate_cost(model, &mut usage);
     usage
+}
+
+/// Cached prompt tokens from the usage payload, reading the six field aliases
+/// pi accepts (pi `mistral-conversations.ts` `getMistralCachedPromptTokens`),
+/// clamped to `[0, prompt_tokens]`.
+fn mistral_cached_prompt_tokens(usage: &Value, prompt_tokens: u64) -> u64 {
+    let raw_cached_tokens = [
+        usage.pointer("/promptTokensDetails/cachedTokens"),
+        usage.pointer("/prompt_tokens_details/cached_tokens"),
+        usage.pointer("/promptTokenDetails/cachedTokens"),
+        usage.pointer("/prompt_token_details/cached_tokens"),
+        usage.get("numCachedTokens"),
+        usage.get("num_cached_tokens"),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|value| !value.is_null());
+    let cached_tokens = raw_cached_tokens
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+        .unwrap_or(0.0);
+    cached_tokens.max(0.0).min(prompt_tokens as f64) as u64
+}
+
+/// Chat-completions request URL for a Mistral server URL. pi's Mistral SDK
+/// always appends `/v1/chat/completions` to the (trailing-slash trimmed)
+/// server URL, doubling the segment when a custom base already ends in `/v1`.
+pub fn mistral_chat_completions_url(base_url: &str) -> String {
+    format!("{}/v1/chat/completions", base_url.trim_end_matches('/'))
 }
 
 fn usage_u64(usage: &Value, camel: &str, snake: &str) -> Option<u64> {

@@ -74,6 +74,15 @@ impl ImagesApiProvider for OpenRouterImagesHttpProvider {
         if abort_requested(&options) {
             return Ok(openrouter_images_error(model, "Request was aborted", true));
         }
+        // pi fails fast without options.apiKey — no header/env fallback on
+        // the images path.
+        if options.api_key.as_deref().unwrap_or_default().is_empty() {
+            return Ok(openrouter_images_error(
+                model,
+                format!("No API key for provider: {}", model.provider),
+                false,
+            ));
+        }
 
         let payload = match options
             .apply_payload_hooks(model, build_openrouter_images_payload(model, &context))
@@ -559,6 +568,11 @@ fn openrouter_image_url(image: &Value) -> Option<&str> {
 fn parse_data_image_url(image_url: &str) -> Option<ImageContent> {
     let payload = image_url.strip_prefix("data:")?;
     let (mime_type, data) = payload.split_once(";base64,")?;
+    // pi: /^data:([^;]+);base64,(.+)$/ — the mime has no parameters and the
+    // data segment is non-empty.
+    if mime_type.is_empty() || mime_type.contains(';') || data.is_empty() {
+        return None;
+    }
     if mime_type.is_empty() || data.is_empty() {
         return None;
     }

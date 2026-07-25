@@ -1,0 +1,662 @@
+api/openai-prompt-cache.ts:1	OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH (prompt_cache_key clamp)	64 chars	MATCH	openai_codex_responses.rs:213	clamp_openai_prompt_cache_key takes 64 chars (char-based both sides)
+api/openai-completions.ts:63	missing-API-key handling + auth bypass header names	throw "No API key" unless apiKey or non-empty authorization/cf-aig-authorization header; then apiKey="unused"	DRIFT	http_api_provider.rs:2442	ri never fail-fasts for openai-completions/openai-responses: build_json_request adds default bearer only when no authorization/api-key/x-api-key header, and cf-aig-authorization Bearer for cloudflare-ai-gateway; with no key and no header the request is sent unauthenticated and fails via HTTP instead of pi's local error. Also pi sends "Authorization: Bearer unused" when bypassing via cf-aig-authorization; ri sends no Authorization header at all
+api/openai-completions.ts:176	cache retention env var and values	PI_CACHE_RETENTION=="long" -> long, else "short" (checks request-scoped options.env first)	DRIFT	openai_completions.rs:430	name and values identical, but ri reads std::env only (also openai_responses.rs:161); a request-scoped env override of PI_CACHE_RETENTION is honored by pi and ignored by ri for these two APIs (pi_messages.rs:37 does use scoped lookup)
+api/openai-completions.ts:222	SDK maxRetries default	options.maxRetries ?? 0 (OpenAI SDK retries when caller sets >0)	DRIFT	http_api_provider.rs:2442	default matches (single attempt) but ri has no retry loop for openai-completions/openai-responses/azure-openai-responses; a caller-provided maxRetries>0 retries in pi (SDK backoff) and is silently ignored by ri (codex path is the only one honoring max_retries)
+api/openai-completions.ts:398	reasoning delta field precedence	["reasoning_content","reasoning","reasoning_text"] first non-empty	MATCH	openai_completions.rs:904	identical order
+api/openai-completions.ts:413	opencode-go thinking signature rewrite	provider=="opencode-go" && field=="reasoning" -> signature "reasoning_content"	MATCH	openai_completions.rs:910	identical; replay side openai_completions.rs:272 also matches pi:1010
+api/openai-completions.ts:552	session affinity headers + format	openrouter->x-session-id; else session_id (only format=="openai") + x-client-request-id + x-session-affinity; gated on compat.sendSessionAffinityHeaders (default false) and retention!=none	MATCH	openai_completions.rs:465	identical incl. "openai-nosession" dropping session_id and cache_retention None gate
+api/openai-completions.ts:590	prompt_cache_key gate	baseUrl contains "api.openai.com" && retention!=none, or long&&supportsLongCacheRetention; value clamp(sessionId)	MATCH	openai_completions.rs:1364	identical
+api/openai-completions.ts:595	prompt_cache_retention long value	"24h"	MATCH	openai_completions.rs:93	identical
+api/openai-completions.ts:599	stream_options	{include_usage:true} unless supportsUsageInStreaming===false	MATCH	openai_completions.rs:40	identical incl. compat gate (!=Some(false))
+api/openai-completions.ts:603	store	false when supportsStore	MATCH	openai_completions.rs:43	identical
+api/openai-completions.ts:607	max tokens field selection	compat.maxTokensField "max_tokens" else "max_completion_tokens"	MATCH	openai_completions.rs:1350	identical incl. detection fallback and >0 gate
+api/openai-completions.ts:628	tools=[] when tool history present	empty array	MATCH	openai_completions.rs:74	identical
+api/openai-completions.ts:623	zai tool_stream flag	tool_stream=true when compat.zaiToolStream && tools non-empty	MATCH	openai_completions.rs:109	identical (default false)
+api/openai-completions.ts:644	zai thinking payload	{type:"enabled",clear_thinking:false} / {type:"disabled"}	MATCH	openai_completions.rs:1403	identical
+api/openai-completions.ts:645	zai reasoning_effort mapping	map[level]; undefined->raw level; non-string(null)->omit	MATCH	openai_completions.rs:1413	identical tri-state
+api/openai-completions.ts:653	qwen thinking	enable_thinking=!!effort	MATCH	openai_completions.rs:1424	identical
+api/openai-completions.ts:655	qwen-chat-template kwargs	{enable_thinking:!!effort, preserve_thinking:true}	MATCH	openai_completions.rs:1427	identical
+api/openai-completions.ts:734	chat-template kwargs resolution	scalar passthrough; omitWhenOff; $var "thinking.enabled"; map tri-state	MATCH	openai_completions.rs:1514	identical
+api/openai-completions.ts:664	deepseek thinking	{type:"enabled"} / {type:"disabled"} unless map.off===null; reasoning_effort map??raw	MATCH	openai_completions.rs:1439	identical
+api/openai-completions.ts:674	openrouter thinking	reasoning:{effort:map??raw}; off -> map.off ?? "none" unless off===null	MATCH	openai_completions.rs:1473	identical
+api/openai-completions.ts:684	ant-ling thinking	reasoning:{effort} only when map[level] is a string	MATCH	openai_completions.rs:1452	identical
+api/openai-completions.ts:689	together thinking	reasoning:{enabled:!!effort}; reasoning_effort map??raw	MATCH	openai_completions.rs:1486	identical
+api/openai-completions.ts:698	string-thinking	thinking=map??raw; off -> map.off ?? "none" unless off===null	MATCH	openai_completions.rs:1461	identical (prior audit claimed missing arm; the arm exists)
+api/openai-completions.ts:705	openai default reasoning_effort	map??raw when effort set; off -> map.off only when string	MATCH	openai_completions.rs:1495	identical
+api/openai-completions.ts:716	openRouterRouting passthrough	params.provider = compat.openRouterRouting when set	MATCH	openai_completions.rs:1607	identical; no URL gating on either side (prior audit claim of an openrouter.ai gate is false)
+api/openai-completions.ts:721	vercelGatewayRouting passthrough	providerOptions.gateway {only,order} when either set	MATCH	openai_completions.rs:1613	identical; no URL gating (prior audit claim false)
+api/openai-completions.ts:776	anthropic-format cache control	type "ephemeral"; ttl "1h" when long && supportsLongCacheRetention; skip when retention none	MATCH	openai_completions.rs:1285	identical
+api/openai-completions.ts:784	cache control placement	system prompt text, last tool, last user/assistant text part	MATCH	openai_completions.rs:30,69,415	identical placement
+api/openai-completions.ts:1291	detected cacheControlFormat gate	provider=="openrouter" && id startsWith "anthropic/"	MATCH	openai_completions.rs:1282	starts_with (prior audit claim of contains() is false)
+api/openai-completions.ts:894	pipe tool-call id normalization	sanitize [^a-zA-Z0-9_-]->_, callId_itemId, 40 cap, overflow prefix+"_"+shortHash[0..8], prefix len max(1,40-9)	MATCH	message_transform.rs:44	identical algorithm incl. rest-after-first-pipe semantics (prior audit claim of dropped item-id/hash is false)
+api/openai-completions.ts:916	openai bare id truncation	provider=="openai" -> slice to 40	MATCH	message_transform.rs:76	identical
+api/openai-completions.ts:923	system prompt role	developer when model.reasoning && supportsDeveloperRole else system	MATCH	openai_completions.rs:159	identical
+api/openai-completions.ts:937	synthetic assistant bridge text	"I have processed the tool results."	MATCH	openai_completions.rs:185	identical (also image-batch variant pi:1123 = ri:378)
+api/openai-completions.ts:958	image data URL format	data:{mime};base64,{data}	MATCH	openai_completions.rs:364,1045	identical
+api/openai-completions.ts:973	assistant null-content compat	"" when requiresAssistantAfterToolResult else null	MATCH	openai_completions.rs:255	identical
+api/openai-completions.ts:1050	deepseek reasoning_content backfill	"" when requiresReasoningContentOnAssistantMessages && reasoning && absent	MATCH	openai_completions.rs:292	identical incl. deepseek default (ri:1321)
+api/openai-completions.ts:1087	tool-result placeholder texts	"(see attached image)" / "(no tool output)"	MATCH	openai_completions.rs:341	identical
+api/openai-completions.ts:1134	image batch user text	"Attached image(s) from tool result:"	MATCH	openai_completions.rs:383	identical
+api/openai-completions.ts:1094	tool result name field	name=toolName when requiresToolResultName	MATCH	openai_completions.rs:346	identical
+api/openai-completions.ts:1147	kimi deferred system tools message	{role:"system",tools:[...]} no content; deferredToolsMode=="kimi"	MATCH	openai_completions.rs:396	identical incl. per-batch accumulator and placement after image user message
+api/openai-completions.ts:1175	tool strict flag	strict:false included unless supportsStrictMode===false	MATCH	openai_completions.rs:1125	value identical; see supportsStrictMode detection row for gate drift
+api/openai-completions.ts:1319	detected supportsStrictMode	!moonshot && !together && !cloudflareAiGateway && !nvidia	DRIFT	openai_completions.rs:1159	ri omits the nvidia check: !(moonshot||together||cloudflare_ai_gateway). Custom nvidia-URL models without explicit compat get strict:false included by ri where pi omits the strict field (catalog nvidia models are unaffected only if nvidia.json sets supportsStrictMode explicitly)
+api/openai-completions.ts:1324	detected supportsLongCacheRetention	!(together||cloudflareWorkers||cloudflareGateway||nvidia||antLing)	DRIFT	openai_completions.rs:1375	ri omits nvidia and ant-ling: !(together||cf_workers||cf_gateway). Custom nvidia/ant-ling models with cacheRetention long get prompt_cache_retention "24h" + long prompt_cache_key gate in ri where pi suppresses them
+api/openai-completions.ts:1180	usage parsing fields	prompt_tokens; cached_tokens ?? prompt_cache_hit_tokens; cache_write_tokens; completion_tokens; reasoning_tokens; input=max(0,prompt-read-write); total=input+out+read+write	MATCH	openai_completions.rs:992	identical incl. fallback order
+api/openai-completions.ts:365	choice.usage fallback (Moonshot)	choices[0].usage when chunk.usage absent	MATCH	openai_completions.rs:513	identical
+api/openai-completions.ts:352	responseId/responseModel capture	chunk.id; chunk.model when != model.id	MATCH	openai_completions.rs:493	identical
+api/openai-completions.ts:1218	finish_reason mapping	stop|end->stop; length->length; function_call|tool_calls->toolUse; content_filter/network_error->error(+msg); default->error	MATCH	openai_completions.rs:972	identical
+api/openai-completions.ts:1253	zai detection set	provider zai|zai-coding-cn or url api.z.ai|open.bigmodel.cn	MATCH	openai_completions.rs:1224	identical (prior audit claim of missing members is false)
+api/openai-completions.ts:1258	together detection	provider together or api.together.ai|api.together.xyz	MATCH	openai_completions.rs:1218	identical
+api/openai-completions.ts:1260	moonshot detection	provider moonshotai|moonshotai-cn or url "api.moonshot."	MATCH	openai_completions.rs:1243	identical
+api/openai-completions.ts:1261	openrouter detection	provider openrouter or url openrouter.ai	MATCH	openai_completions.rs:1239	identical
+api/openai-completions.ts:1262	cloudflare workers detection	provider cloudflare-workers-ai or url api.cloudflare.com	MATCH	openai_completions.rs:1249	identical
+api/openai-completions.ts:1263	cloudflare gateway detection	provider cloudflare-ai-gateway or url gateway.ai.cloudflare.com	MATCH	openai_completions.rs:1253	identical
+api/openai-completions.ts:1264	nvidia detection	provider nvidia or url integrate.api.nvidia.com	MATCH	openai_completions.rs:1231	exists and used in nonstandard/maxTokens/reasoningEffort (prior audit MISSING claim false); only strict/longCache gates omit it (see those rows)
+api/openai-completions.ts:1265	ant-ling detection	provider ant-ling or url api.ant-ling.com	MATCH	openai_completions.rs:1235	exists incl. thinkingFormat arm (prior audit MISSING claim false); only longCache gate omits it
+api/openai-completions.ts:1267	nonstandard provider set	nvidia,cerebras(+cerebras.ai),xai(+api.x.ai),together,chutes.ai,deepseek.com,zai,moonshot,opencode(+opencode.ai),cfWorkers,cfGateway,antLing	MATCH	openai_completions.rs:1197	identical membership
+api/openai-completions.ts:1284	useMaxTokens set	chutes.ai,moonshot,cfGateway,together,nvidia,antLing	MATCH	openai_completions.rs:1266	identical
+api/openai-completions.ts:1287	grok detection	provider xai or url api.x.ai	MATCH	openai_completions.rs:1258	identical
+api/openai-completions.ts:1288	deepseek detection	provider deepseek or url deepseek.com	MATCH	openai_completions.rs:1262	identical
+api/openai-completions.ts:1289	openrouter developer-role gate	openrouter && id startsWith anthropic/|openai/; else !nonstandard && !openrouter	MATCH	openai_completions.rs:1182	identical (prior audit MISSING claim false)
+api/openai-completions.ts:1296	supportsReasoningEffort detection	!grok&&!zai&&!moonshot&&!together&&!cfGateway&&!nvidia&&!antLing	MATCH	openai_completions.rs:1560	identical incl. nvidia and ant-ling
+api/openai-completions.ts:1304	thinkingFormat detection order	deepseek>zai>together>ant-ling>openrouter>openai	MATCH	openai_completions.rs:1587	identical order
+api/openai-completions.ts:1323	sessionAffinityFormat detection	openrouter->"openrouter" else "openai"	MATCH	openai_completions.rs:1334	identical
+-	groq qwen3 hardcoded reasoning_effort	-	EXTRA_IN_RI	openai_completions.rs:1396	provider=="groq" && id starts_with "qwen/qwen3" -> reasoning_effort "default" for any non-off level, bypassing thinkingLevelMap. pi openai-completions.ts has no groq branch: pi sends map[level] ?? raw (null maps coalesce to the RAW level). For groq catalog models with map {high:"default",minimal/low/medium:null}: pi sends "minimal"/"low"/"medium"/"default", ri always "default"
+api/openai-responses.ts:28	responses tool-call provider allowlist	{"openai","openai-codex","opencode"}	MATCH	openai_responses.rs:51	identical
+api/openai-responses.ts:30	OPENAI_RESPONSES_MIN_OUTPUT_TOKENS	16 (max(maxTokens,16))	MATCH	openai_responses.rs:36	identical
+api/openai-responses.ts:44	missing-API-key handling (responses)	throw "No API key" unless key or authorization/cf-aig-authorization header	DRIFT	http_api_provider.rs:2442	same gap as completions row: no local fail-fast in ri; unauthenticated request sent
+api/openai-responses.ts:67	compat defaults	supportsDeveloperRole true; sessionAffinityFormat detect; supportsLongCacheRetention true; supportsToolSearch false	MATCH	openai_responses.rs:25,214,223,308	identical defaults
+api/openai-responses.ts:78	responses prompt_cache_retention	"24h" when long && supportsLongCacheRetention	MATCH	openai_responses.rs:73	identical
+api/openai-responses.ts:245	prompt_cache_key	clamp(sessionId), omitted when retention "none"	MATCH	openai_responses.rs:63	identical
+api/openai-responses.ts:247	store	false always	MATCH	openai_responses.rs:60	identical
+api/openai-responses.ts:209	responses session affinity headers	x-session-id (openrouter) / session_id+x-client-request-id (openai); no x-session-affinity; no compat send-gate; suppressed when retention none via cacheSessionId	MATCH	openai_responses.rs:196	identical incl. retention gate placement
+-	responses compat knob sendSessionIdHeader	-	EXTRA_IN_RI	openai_responses.rs:239	extra compat key (default true) that can drop the session_id header; pi expresses this only via sessionAffinityFormat "openai-nosession". Parity holds unless a catalog/custom compat sets it
+api/openai-responses.ts:270	reasoning effort/summary defaults	effort map??raw, "medium" when only summary set; summary reasoningSummary||"auto"; include ["reasoning.encrypted_content"]	MATCH	openai_responses.rs:92	identical
+api/openai-responses.ts:280	reasoning off branch	skip github-copilot; map.off===null -> omit; effort map.off ?? "none"	MATCH	openai_responses.rs:106	identical
+api/openai-responses.ts:285	xai encrypted-content include forcing	provider=="xai" -> include always when model.reasoning	MATCH	openai_responses.rs:119	identical (prior audit MISSING claim false)
+api/openai-responses.ts:291	service tier cost multipliers	flex 0.5; priority 2.5 for gpt-5.5 else 2; default 1	MATCH	openai_responses.rs:1273	identical
+api/openai-responses.ts:305	service tier pricing application	multiply input/output/cacheRead/cacheWrite, recompute total	MATCH	openai_responses.rs:1249	identical
+api/openai-responses-shared.ts:42	text signature format	JSON {v:1,id,phase?}, phase whitelist commentary|final_answer, legacy plain-string fallback	MATCH	openai_responses.rs:598	identical
+api/openai-responses-shared.ts:105	normalizeIdPart	[^a-zA-Z0-9_-]->_, 64 cap, strip trailing _	MATCH	openai_responses.rs:572	identical
+api/openai-responses-shared.ts:111	foreign item id	fc_${shortHash(itemId)}, 64 cap	MATCH	openai_responses.rs:563	identical
+api/openai-responses-shared.ts:119	pipe id split semantics	const [callId, itemId] = id.split("|") (second segment only)	DRIFT	openai_responses.rs:591	ri split_once keeps the full remainder after the first pipe as item_id ("a|b|c" -> pi itemId "b", ri "b|c" -> sanitized "b_c"). Only affects malformed ids containing two or more pipes; single-pipe ids identical
+api/openai-responses-shared.ts:124	fc_ prefix requirement	item id must start with fc_, else normalize fc_${id}	MATCH	openai_responses.rs:557	identical
+api/openai-responses-shared.ts:188	fallback message ids	msg_pi_{index} / msg_pi_{index}_{textBlockIndex}	MATCH	openai_responses.rs:371	identical
+api/openai-responses-shared.ts:195	message id 64-char cap	>64 -> msg_${shortHash(id)}	MATCH	openai_responses.rs:382	identical (ri byte-length vs pi UTF-16 length; ids are ASCII in practice)
+api/openai-responses-shared.ts:198	assistant message replay shape	type message, status completed, annotations [], phase passthrough	MATCH	openai_responses.rs:385	identical
+api/openai-responses-shared.ts:173	isDifferentModel + fc_ id omission	same provider+api, different model id -> drop fc_-prefixed item id	MATCH	openai_responses.rs:353,405	identical
+api/openai-responses-shared.ts:218	function_call replay	id omitted when undefined; call_id/name/arguments JSON	MATCH	openai_responses.rs:417	identical
+api/openai-responses-shared.ts:236	tool result call id	split "|" first segment	MATCH	openai_responses.rs:452	identical
+api/openai-responses-shared.ts:261	tool-result placeholders	"(see attached image)" / "(no tool output)"	MATCH	openai_responses.rs:470	identical
+api/openai-responses-shared.ts:158	input_image detail	"auto" + data URL	MATCH	openai_responses.rs:340	identical
+api/openai-responses-shared.ts:279	deferred tool search call id	pi_tool_load_${shortHash(`${toolCallId}:${names.join(",")}`)}	MATCH	openai_responses.rs:505	identical
+api/openai-responses-shared.ts:280	tool_search_call/output items	execution client, status completed, arguments {query:names.join(" "),limit:names.length}	MATCH	openai_responses.rs:509	identical
+api/openai-responses-shared.ts:315	defer_loading flag	true on deferred tool defs	MATCH	openai_responses.rs:147	identical
+api/openai-responses-shared.ts:307	tools strict default	false (null passthrough allowed)	MATCH	openai_responses.rs:136	identical
+api/openai-responses-shared.ts:339	stream slots keyed by output_index	Map keyed by possibly-undefined index	MATCH	openai_responses.rs:676	identical incl. Option<u64> None key
+api/openai-responses-shared.ts:464	reasoning_summary_part.done separator	append "\n\n"	MATCH	openai_responses.rs:735	identical
+api/openai-responses-shared.ts:494	refusal delta routed to text block	response.refusal.delta -> text	MATCH	openai_responses.rs:740	identical
+api/openai-responses-shared.ts:515	arguments.done suffix delta	replace partialJson; emit suffix delta only when startsWith(previous)	MATCH	openai_responses.rs:774	identical
+api/openai-responses-shared.ts:537	reasoning item done	summary/content joined "\n\n"; thinking = summary || content || existing; signature = JSON of item	MATCH	openai_responses.rs:812	identical
+api/openai-responses-shared.ts:550	message item done	join output_text/refusal parts; textSignature v1 encode	MATCH	openai_responses.rs:842	identical
+api/openai-responses-shared.ts:560	function_call done arguments	item.arguments || partialJson || "{}"	MATCH	openai_responses.rs:882	identical
+api/openai-responses-shared.ts:396	Azure encrypted_content backfill	from response.completed output when item.done omitted it	MATCH	openai_responses.rs:1088	identical
+api/openai-responses-shared.ts:418	responses usage parsing	input=max(0,input-cached-cache_write); cacheRead/cacheWrite from input_tokens_details; reasoning_tokens; totalTokens = total_tokens || 0	MATCH	openai_responses.rs:1204	identical incl. no computed total fallback (prior audit DRIFT claim false)
+api/openai-responses-shared.ts:594	status -> stop reason	completed->stop; incomplete->length; failed|cancelled->error; in_progress|queued->stop	MATCH	openai_responses.rs:940	identical
+api/openai-responses-shared.ts:444	toolUse override	stop + toolCall present -> toolUse	MATCH	openai_responses.rs:946	identical
+api/openai-responses-shared.ts:589	terminal event required	throw when stream ends without response.completed/incomplete/failed	MATCH	http_api_provider.rs:2037	identical guard
+-	response.done accepted as terminal in shared responses processor	-	EXTRA_IN_RI	openai_responses.rs:921	ri treats "response.done" as terminal for ALL responses APIs; pi only maps response.done->response.completed inside the codex adapter, so a plain openai-responses stream emitting response.done would error in pi ("ended before terminal") but finalize in ri
+-	azure response service_tier pricing	-	EXTRA_IN_RI	openai_responses.rs:930	ri's shared processor applies the service-tier cost multiplier from response.service_tier for every responses API incl. azure-openai-responses; pi wires applyServiceTierPricing only for openai-responses and codex (azure-openai-responses.ts:116 passes no pricing hook), so an azure response carrying service_tier "flex"/"priority" scales cost in ri but not pi
+api/openai-codex-responses.ts:58	default codex base URL	https://chatgpt.com/backend-api	MATCH	openai_codex_responses.rs:21	identical
+api/openai-codex-responses.ts:59	JWT claim path + account field	https://api.openai.com/auth -> chatgpt_account_id	MATCH	openai_codex_responses.rs:83,296	identical
+api/openai-codex-responses.ts:60	DEFAULT_MAX_RETRIES	0	MATCH	openai_codex_responses.rs:74	identical (prior audit claim of 3 is false); wired at http_api_provider.rs:1971
+api/openai-codex-responses.ts:61	BASE_DELAY_MS	1000, backoff base*2^attempt	MATCH	openai_codex_responses.rs:75	identical (http_api_provider.rs:1979 network path, openai_codex_responses.rs:1193 HTTP path)
+api/openai-codex-responses.ts:62	DEFAULT_MAX_RETRY_DELAY_MS	60000; cap<=0 disables; cap applies only to 429 retry-after delays	MATCH	openai_codex_responses.rs:78,1142,1183	identical semantics (prior audit MISSING claim false)
+api/openai-codex-responses.ts:63	websocket connect timeout default	15000 ms; 0 disables	MATCH	http_api_provider.rs:1935	identical
+api/openai-codex-responses.ts:66	zstd compression level + header	level 3; content-encoding: zstd on SSE path only	MATCH	openai_codex_responses.rs:46; http_api_provider.rs:1796	identical; ws frame stays uncompressed both sides
+api/openai-codex-responses.ts:67	codex tool-call provider allowlist	{"openai","openai-codex","opencode"}	MATCH	openai_codex_responses.rs:235	identical
+api/openai-codex-responses.ts:68	WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE	1009 -> synthetic " message too big" reason	MATCH	openai_codex_responses.rs:81,419	identical (prior audit MISSING claim false)
+api/openai-codex-responses.ts:69	connection-limit error code + single retry	"websocket_connection_limit_reached"; retry once before stream start	MATCH	openai_codex_responses.rs:23; http_api_provider.rs:1171	identical
+api/openai-codex-responses.ts:117	terminal rate-limit pattern	GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota exceeded|billing (case-insensitive, raw body)	MATCH	openai_codex_responses.rs:1033; retry.rs:14	identical 8 alternatives; gates 429 retryability identically (prior audit MISSING claim false)
+api/openai-codex-responses.ts:123	retryable statuses + text pattern	429/500/502/503/504; rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused	MATCH	openai_codex_responses.rs:1037	identical
+api/openai-codex-responses.ts:133	retry-after header parsing	retry-after-ms finite ms wins; retry-after numeric seconds*1000; HTTP date fallback; max(0)	MATCH	openai_codex_responses.rs:1120	identical incl. JS Number() semantics emulation
+api/openai-codex-responses.ts:418	network-error retry gate	retry unless message contains "usage limit"; delay base*2^attempt uncapped	MATCH	http_api_provider.rs:1830	identical
+api/openai-codex-responses.ts:498	instructions default	systemPrompt || "You are a helpful assistant."	MATCH	openai_codex_responses.rs:243	identical incl. empty-string fallthrough
+api/openai-codex-responses.ts:500	text verbosity default	"low"	MATCH	openai_codex_responses.rs:249	identical
+api/openai-codex-responses.ts:501	include	["reasoning.encrypted_content"] always	MATCH	openai_codex_responses.rs:250	identical
+api/openai-codex-responses.ts:503	tool_choice default	"auto"	MATCH	openai_codex_responses.rs:251	identical
+api/openai-codex-responses.ts:504	parallel_tool_calls	true	MATCH	openai_codex_responses.rs:252	identical
+api/openai-codex-responses.ts:496	store/stream	store false, stream true	MATCH	openai_codex_responses.rs:241	identical
+api/openai-codex-responses.ts:516	codex tools strict value	strict: null	MATCH	openai_codex_responses.rs:1301	identical
+api/openai-codex-responses.ts:519	codex reasoning effort mapping	"none"->map.off ?? "none"; else map[level] ?? raw (JS ??: null-mapped levels coalesce to the RAW level; reasoning object always sent when reasoningEffort defined)	DRIFT	openai_codex_responses.rs:1305	ri omits the reasoning object entirely when thinkingLevelMap maps the level (or off) to null (Some(None)->None). pi never omits: null map entries fall back to the raw level name via ??. For a codex model with a null-mapped level, pi sends reasoning:{effort:"<level>"}, ri sends no reasoning field
+api/openai-codex-responses.ts:527	reasoning summary default	reasoningSummary ?? "auto"	MATCH	openai_codex_responses.rs:278	identical
+api/openai-codex-responses.ts:564	codex service tier resolution	response "default" + request flex/priority -> request; else response ?? request	MATCH	openai_codex_responses.rs:370	identical
+api/openai-codex-responses.ts:535	codex service tier multipliers	flex 0.5; priority 2.5 gpt-5.5 else 2	MATCH	openai_responses.rs:1273	shared implementation, identical
+api/openai-codex-responses.ts:574	codex URL suffix resolution	/codex/responses kept; /codex -> +/responses; else +/codex/responses; trailing / stripped; empty baseUrl -> default	MATCH	openai_codex_responses.rs:344	identical
+api/openai-codex-responses.ts:582	websocket URL scheme	https->wss, http->ws	MATCH	openai_codex_responses.rs:359	identical
+api/openai-codex-responses.ts:694	SSE parsing	events split on blank line; "data:" prefix; join "\n"; skip "[DONE]"	MATCH	http_api_provider.rs:2745	identical framing incl. BOM/CR handling
+api/openai-codex-responses.ts:729	invalid SSE/WS JSON handling	strict JSON.parse; invalid -> CodexProtocolError (stream fails)	DRIFT	http_api_provider.rs:2883; openai_codex_responses.rs:484	ri parses with parse_json_with_repair: SSE events that fail even repair are silently dropped (push_sse_event ignores Err) and repairable-but-malformed payloads are accepted; pi fails the stream on any invalid JSON. WS path errors like pi but only after repair fails
+api/openai-codex-responses.ts:757	OpenAI-Beta websocket value	responses_websockets=2026-02-06	MATCH	openai_codex_responses.rs:22	identical
+api/openai-codex-responses.ts:758	SESSION_WEBSOCKET_CACHE_TTL_MS	5*60*1000 idle	MATCH	openai_codex_responses.rs:31	value identical; enforcement differs benignly (pi timer closes the idle socket at 5min, ri closes lazily on next acquire) — socket lingers open in ri but is never reused past the TTL
+api/openai-codex-responses.ts:759	SESSION_WEBSOCKET_MAX_AGE_MS	55*60*1000	MATCH	openai_codex_responses.rs:28	identical
+api/openai-codex-responses.ts:949	websocket close frames	close(1000, "done"/"idle_timeout"/"connection_age_limit"/"debug_close"/"aborted"/"connect_timeout")	DRIFT	openai_codex_responses.rs:489	ri always sends a bare close frame (opcode 0x8, no status code/reason). Wire-visible only; server sees 1000+reason from pi, no-status close from ri
+api/openai-codex-responses.ts:1276	websocket idle timeout	options.timeoutMs as inter-event idle timeout; "WebSocket idle timeout after {ms}ms"	MATCH	http_api_provider.rs:1528	identical
+api/openai-codex-responses.ts:1295	premature close guard	"WebSocket stream closed before response.completed"	MATCH	http_api_provider.rs:1591	identical
+api/openai-codex-responses.ts:374	SSE header timeout	timeoutMs guards response-header arrival only; "Codex SSE response headers timed out after {ms}ms"	MATCH	http_api_provider.rs:1781	identical incl. stripping whole-request timeout
+api/openai-codex-responses.ts:1477	usage-limit friendly message	codes usage_limit_reached|usage_not_included|rate_limit_exceeded or status 429; plan lowercased; mins=max(0,round((resets_at*1000-now)/60000))	MATCH	openai_codex_responses.rs:1198	identical incl. raw||statusText||"Request failed" base
+api/openai-codex-responses.ts:1523	codex auth headers	Authorization Bearer; chatgpt-account-id; originator "pi"	MATCH	openai_codex_responses.rs:1272	identical
+api/openai-codex-responses.ts:1526	User-Agent	pi ({platform} {release}; {arch}) on node/bun; "pi (browser)" otherwise	DRIFT	openai_codex_responses.rs:1275	ri always sends "pi (browser)"; the OS-specific UA string is never produced by the native binary, so server-side fingerprinting sees the browser variant for every ri request
+api/openai-codex-responses.ts:1539	SSE headers	OpenAI-Beta responses=experimental; accept text/event-stream; content-type application/json; session-id + x-client-request-id = clamped sessionId	MATCH	openai_codex_responses.rs:304	identical
+api/openai-codex-responses.ts:1551	websocket headers	delete accept/content-type/OpenAI-Beta(both cases); set beta; x-client-request-id + session-id = requestId (sessionId||uuidv7)	MATCH	openai_codex_responses.rs:326; http_api_provider.rs:940	identical
+api/openai-codex-responses.ts:275	transport default + cached-context gate	transport||"auto"; cached context for auto|websocket-cached; per-session SSE fallback set	MATCH	http_api_provider.rs:1147,1457	identical
+api/openai-codex-responses.ts:322	transport failure diagnostic	provider_transport_failure {configuredTransport,fallbackTransport,eventsEmitted,phase,requestBytes}	MATCH	http_api_provider.rs:2392	identical fields incl. phase strings
+api/openai-codex-responses.ts:806	websocket debug stats fields	requests/created/reused/cachedContext/storeTrue/fullContext/delta/lastInputItems/lastDelta/lastPrevId/failures/sseFallbacks/fallbackActive/lastError	MATCH	openai_codex_responses.rs:117,979	identical semantics
+api/openai-codex-responses.ts:1305	continuation delta computation	compare body sans input/previous_response_id; baseline=lastInput+lastResponseItems; prefix equality; delta=suffix	MATCH	openai_codex_responses.rs:916	identical
+api/openai-codex-responses.ts:1441	continuation response items filter	exclude function_call_output items	MATCH	openai_codex_responses.rs:912	identical
+api/openai-codex-responses.ts:1421	websocket request type	{"type":"response.create", ...body}	MATCH	http_api_provider.rs:1512	identical
+-	codex websocket Sec-WebSocket-Key	-	EXTRA_IN_RI	openai_codex_responses.rs:816	hand-rolled handshake uses constant key base64("ri-codex-ws-key!") and clock-derived mask; pi's runtime WebSocket uses RFC6455 random nonces. Protocol-visible fingerprint difference, no functional impact against compliant servers
+-	codex websocket inbound frame cap	-	EXTRA_IN_RI	openai_codex_responses.rs:636	32 MiB frame limit errors the stream; pi has no client-side cap (runtime-dependent)
+-	codex websocket handshake/proxy response caps	-	EXTRA_IN_RI	openai_codex_responses.rs:546,796	16 KiB caps on the 101 handshake response and proxy CONNECT response; no pi counterpart (runtime-managed)
+-	abort-flag poll interval	-	EXTRA_IN_RI	http_api_provider.rs:1895	ABORT_FLAG_POLL_INTERVAL_MS=10 polling for aborts/sleeps; pi is event-driven via AbortSignal. Worst case +10ms abort latency
+api/azure-openai-responses.ts:21	DEFAULT_AZURE_API_VERSION	"v1"	MATCH	azure_openai.rs:8	identical
+api/azure-openai-responses.ts:22	azure tool-call provider allowlist	{"openai","openai-codex","opencode","azure-openai-responses"}	MATCH	azure_openai.rs:9	identical
+api/azure-openai-responses.ts:24	azure MIN_OUTPUT_TOKENS	16	MATCH	azure_openai.rs:119	identical
+api/azure-openai-responses.ts:26	deployment map parsing	AZURE_OPENAI_DEPLOYMENT_NAME_MAP, comma entries, "id=deployment", trimmed	MATCH	azure_openai.rs:41	identical (request-scoped env honored: azure_openai.rs:88 + http_api_provider.rs:558)
+api/azure-openai-responses.ts:97	azure missing-API-key fail-fast	throw "No API key for provider: X" when apiKey option absent	DRIFT	http_api_provider.rs:605	ri inserts the api-key header only when a key resolves (option or env) and otherwise sends the request without credentials; pi errors locally before any request
+api/azure-openai-responses.ts:110	azure SDK maxRetries default	options.maxRetries ?? 0	DRIFT	http_api_provider.rs:614	covered by the shared no-retry-loop drift row (caller-set maxRetries ignored)
+api/azure-openai-responses.ts:173	azure host suffixes	.openai.azure.com / .cognitiveservices.azure.com / .ai.azure.com	MATCH	azure_openai.rs:185	identical
+api/azure-openai-responses.ts:181	azure path normalization	path in {"","/","/openai","/openai/v1/responses"} -> /openai/v1, query cleared	MATCH	azure_openai.rs:194	identical
+api/azure-openai-responses.ts:195	default azure base URL	https://{resource}.openai.azure.com/openai/v1	MATCH	azure_openai.rs:203	identical
+api/azure-openai-responses.ts:203	api version resolution	azureApiVersion || AZURE_OPENAI_API_VERSION || "v1"	MATCH	azure_openai.rs:211	identical incl. request-scoped env
+api/azure-openai-responses.ts:208	base URL resolution order	azureBaseUrl(trim) || AZURE_OPENAI_BASE_URL(trim) || resourceName-URL || model.baseUrl || error	MATCH	azure_openai.rs:217	identical order and env names (AZURE_OPENAI_RESOURCE_NAME honored from request-scoped env too — prior audit DRIFT claim no longer holds)
+api/azure-openai-responses.ts:243	azure request URL + auth header	SDK: {base}/responses?api-version={v}; api-key header	MATCH	http_api_provider.rs:2529,612	identical
+api/azure-openai-responses.ts:264	azure prompt_cache_key	clamp(sessionId), no retention gate	MATCH	azure_openai.rs:112	identical
+api/azure-openai-responses.ts:280	azure reasoning branches	effort/summary defaults medium/auto + include; off branch without github-copilot gate	MATCH	azure_openai.rs:127	identical
+api/azure-openai-responses.ts:276	azure tools	all context tools, strict false, no deferred-tool split	MATCH	azure_openai.rs:124	identical
+api/anthropic-messages.ts:51	cache retention env gate PI_CACHE_RETENTION=="long", default "short"	long/short	DRIFT	anthropic.rs:1446	same env name+values, but ri reads process env only (std::env::var); pi consults request-scoped options.env first (getProviderEnvValue) — per-request PI_CACHE_RETENTION override ignored in ri
+api/anthropic-messages.ts:66	long cache retention ttl	"1h"	MATCH	anthropic.rs:1458-1459	"1h" when Long && supportsLongCacheRetention
+api/anthropic-messages.ts:69	cache_control type	"ephemeral"	MATCH	anthropic.rs:1457	same
+api/anthropic-messages.ts:74	claudeCodeVersion (user-agent)	2.1.75	MATCH	anthropic_compat.rs:3	CLAUDE_CODE_VERSION "2.1.75"; used at anthropic.rs:998
+api/anthropic-messages.ts:79-97	claudeCodeTools canonical list	17 names Read..WebSearch	MATCH	anthropic_compat.rs:5-23	identical 17 entries, same order
+api/anthropic-messages.ts:99-110	CC tool-name mapping case-insensitive both directions	lowercase lookup	MATCH	anthropic_compat.rs:25-39	eq_ignore_ascii_case
+api/anthropic-messages.ts:131	tool-result text blocks joined with	"\n"	MATCH	anthropic.rs:1305	join("\n")
+api/anthropic-messages.ts:157	image-only tool result placeholder	(see attached image)	MATCH	anthropic.rs:1331	same, inserted at index 0
+api/anthropic-messages.ts:168	fine-grained tool streaming beta flag	fine-grained-tool-streaming-2025-05-14	MATCH	anthropic.rs:1052	also build_anthropic_default_headers:1039
+api/anthropic-messages.ts:169	interleaved thinking beta flag	interleaved-thinking-2025-05-14	MATCH	anthropic.rs:1055	gated on !forceAdaptiveThinking, same as pi:842
+api/anthropic-messages.ts:175	compat default supportsEagerToolInputStreaming	true	MATCH	anthropic.rs:1473-1480	unwrap_or(true)
+api/anthropic-messages.ts:176	compat default supportsLongCacheRetention	true	MATCH	anthropic.rs:1464-1471	unwrap_or(true)
+api/anthropic-messages.ts:177	compat default sendSessionAffinityHeaders	false	MATCH	anthropic.rs:1084-1091	unwrap_or(false)
+api/anthropic-messages.ts:178	compat default supportsCacheControlOnTools	true	MATCH	anthropic.rs:1482-1489	unwrap_or(true)
+api/anthropic-messages.ts:179	compat default supportsTemperature	true	MATCH	anthropic.rs:1521-1528	unwrap_or(true)
+api/anthropic-messages.ts:180	compat default allowEmptySignature	false	MATCH	anthropic.rs:1510-1517	unwrap_or(false)
+api/anthropic-messages.ts:190-197	supportsToolReferences default: provider=="anthropic", !haiku, regex ^claude-(?:opus|sonnet|fable)-(\d+)(?:-(\d+))?(?:-|$), minor len<8, major>4||(major==4&&minor>=5)	as listed	MATCH	anthropic.rs:757-778	identical regex and version rules
+api/anthropic-messages.ts:304-311	ANTHROPIC_MESSAGE_EVENTS set	6 events message_start..content_block_stop	MATCH	anthropic.rs:19-26	identical
+api/anthropic-messages.ts:280-290	assertRequestAuth accepted headers (fail-fast)	authorization, x-api-key, cf-aig-authorization (non-blank)	MATCH	http_api_provider.rs:659,721-728	headers_carry_request_auth identical trio + non-blank check, error before request
+api/anthropic-messages.ts:536	interleavedThinking option default	true	MATCH	http_api_provider.rs:679	unwrap_or(true); AnthropicClientOptions default anthropic.rs:640
+api/anthropic-messages.ts:553	request maxRetries default	0	MATCH	http_api_provider.rs:705	ri anthropic path makes exactly one attempt; note: a caller-set maxRetries>0 is honored by pi's SDK but ignored by ri (default behavior identical)
+api/anthropic-messages.ts:567-574	message_start usage fields incl cache_creation.ephemeral_1h_input_tokens; totalTokens computed input+output+cacheRead+cacheWrite	as listed	MATCH	anthropic.rs:546-586	identical fields and total formula
+api/anthropic-messages.ts:597	redacted thinking placeholder	[Reasoning redacted]	MATCH	anthropic.rs:332	same
+api/anthropic-messages.ts:722	reasoning tokens usage path	output_tokens_details.thinking_tokens	MATCH	anthropic.rs:565-568	same pointer
+api/anthropic-messages.ts:766-784	mapThinkingLevelToEffort: thinkingLevelMap value passthrough; unmapped minimal/low→low, medium→medium, high/default→high	passthrough	DRIFT	anthropic.rs:1530-1548	ri whitelists mapped values {low,medium,high,xhigh,max} and coerces any other mapped string to "high"; pi sends the mapped string verbatim. Only differs for custom models whose thinkingLevelMap holds a non-standard effort string
+api/anthropic-messages.ts:800,842,1006	forceAdaptiveThinking gate: only compat===true enables adaptive	strict true	MATCH	anthropic.rs:1495-1505	as_bool().unwrap_or(false); no id-based fallback
+api/anthropic-messages.ts:811-825	simple thinking budget path: adjustMaxTokensForThinking + clampMaxTokensToContext + budget=min(adjusted, maxTokens-1024)	1024 floor	MATCH	anthropic.rs:719-731	identical incl saturating_sub(1024)
+api/anthropic-messages.ts:1022	budget_tokens default when thinkingBudgetTokens falsy	|| 1024	DRIFT	anthropic.rs:918	pi `options.thinkingBudgetTokens || 1024` maps an explicit 0 to 1024; ri unwrap_or(1_024) keeps Some(0) as 0. Differs only when a caller passes budget 0 (or the simple path computes 0 for tiny maxTokens)
+api/anthropic-messages.ts:828-830	OAuth token detection	apiKey includes "sk-ant-oat"	MATCH	anthropic.rs:1080-1082	contains
+api/anthropic-messages.ts:860-903	browser headers: accept application/json, anthropic-dangerous-direct-browser-access true, anthropic-beta joined ","	as listed	MATCH	anthropic.rs:1060-1071	identical
+api/anthropic-messages.ts:884	OAuth beta list prefix	claude-code-20250219, oauth-2025-04-20 (+ betas)	MATCH	anthropic.rs:988-997	same order, joined ","
+api/anthropic-messages.ts:885	OAuth user-agent	claude-cli/2.1.75	MATCH	anthropic.rs:998	same
+api/anthropic-messages.ts:886	OAuth x-app header	cli	MATCH	anthropic.rs:999	same
+api/anthropic-messages.ts:897-898	session affinity header (gated on compat + cacheRetention!=none sessionId)	x-session-affinity	MATCH	anthropic.rs:1013-1018	same gate and header
+api/anthropic-messages.ts:(SDK)	anthropic-version default header	2023-06-01	MATCH	http_api_provider.rs:691-693	pi gets it from @anthropic-ai SDK; ri sets explicitly
+api/anthropic-messages.ts:(SDK)	messages endpoint	POST {baseUrl}/v1/messages	MATCH	http_api_provider.rs:710	endpoint_url(base, "v1/messages")
+api/anthropic-messages.ts:952	max_tokens payload default	model.maxTokens	MATCH	anthropic.rs:833	unwrap_or(model.max_tokens)
+api/anthropic-messages.ts:961	OAuth Claude Code identity system block	You are Claude Code, Anthropic's official CLI for Claude.	MATCH	anthropic.rs:848	same text, cache_control applied, prepended before systemPrompt
+api/anthropic-messages.ts:984	temperature gate: omit when thinkingEnabled or !supportsTemperature	as listed	MATCH	anthropic.rs:837-842	thinking_enabled != Some(true)
+api/anthropic-messages.ts:1005	thinkingDisplay default	summarized	MATCH	anthropic.rs:907-909	unwrap_or "summarized"
+api/anthropic-messages.ts:1008-1017	adaptive thinking payload {type:"adaptive",display} + output_config.effort	as listed	MATCH	anthropic.rs:910-914	identical
+api/anthropic-messages.ts:1026-1028	thinking {type:"disabled"} unless thinkingLevelMap.off===null	disabled	MATCH	anthropic.rs:923-928	get(Off) != Some(&None)
+api/anthropic-messages.ts:1038-1044	tool_choice string → {type: s}; object passthrough	as listed	MATCH	anthropic.rs:1411-1418	empty string dropped in both (falsy / Some(""))
+api/anthropic-messages.ts:1050-1052	tool call id normalization	[^a-zA-Z0-9_-]→_, max 64	MATCH	anthropic.rs:1279-1290	identical
+api/anthropic-messages.ts:1230-1251	cache_control appended to last USER message (only when the final message is a user message); block types text|image|tool_result; string content wrapped as text block	final-message-only	DRIFT	anthropic.rs:1337-1373	ri searches backwards for the last user-role message (rev().find) and tags it even when an assistant message is final; pi tags only when params[last] is user. Differs for histories ending in an assistant turn (e.g. prefill) — ri caches one extra breakpoint, pi none
+api/anthropic-messages.ts:1275	eager_input_streaming flag on tools	true	MATCH	anthropic.rs:1402-1404	same
+api/anthropic-messages.ts:1281	defer_loading flag on deferred tools	true	MATCH	anthropic.rs:892	same
+api/anthropic-messages.ts:1282	cache_control on last immediate tool only (when supportsCacheControlOnTools)	index==len-1	MATCH	anthropic.rs:869-884	last_tool_index gate identical; deferred tools never cached
+api/anthropic-messages.ts:1287-1313	stop reason map: end_turn/pause_turn/stop_sequence→stop, max_tokens→length, tool_use→toolUse, refusal→error(+explanation fallback "The model refused to complete the request"), sensitive→error, unknown→throw	as listed	MATCH	anthropic.rs:588-609	identical incl empty-explanation fallback and unknown→Err
+api/anthropic-messages.ts:794-795	streamSimple without reasoning sends thinkingEnabled:false	false	MATCH	anthropic.rs:733-735	thinking_enabled Some(false)
+api/anthropic-messages.ts:852-871	copilot client: Bearer auth (authToken), browser headers + betas, dynamic copilot headers, header merge order model.headers→dynamic→options	as listed	MATCH	anthropic.rs:948-960	identical order and auth scheme
+api/github-copilot-headers.ts:5-8	X-Initiator value	"agent" if last message not user else "user"	MATCH	github_copilot_headers.rs:4-9	identical incl empty→user
+api/github-copilot-headers.ts:29	Openai-Intent header value	conversation-edits	MATCH	github_copilot_headers.rs:33	same
+api/github-copilot-headers.ts:33	Copilot-Vision-Request header value	"true" when images present	MATCH	github_copilot_headers.rs:35-37	same
+api/github-copilot-headers.ts:11-21	vision detection scans user + toolResult image blocks	as listed	MATCH	github_copilot_headers.rs:11-25	identical
+api/simple-options.ts:12	CONTEXT_SAFETY_TOKENS	4096	MATCH	simple_options.rs:3	4_096
+api/simple-options.ts:13	MIN_MAX_TOKENS	1	MATCH	simple_options.rs:4	1
+api/simple-options.ts:15-19	clampMaxTokensToContext: contextWindow<=0→max(1,x); else min(x, max(1, cw-estimate-4096))	as listed	MATCH	simple_options.rs:13-21	identical
+api/simple-options.ts:58-63	default thinking budgets	minimal 1024, low 2048, medium 8192, high 16384	MATCH	simple_options.rs:50-61	identical
+api/simple-options.ts:47-49	clampReasoning xhigh/max→high	high	MATCH	simple_options.rs:36-42	identical
+api/simple-options.ts:66	minOutputTokens (budget shrink floor)	1024	MATCH	simple_options.rs:5,79	MIN_OUTPUT_TOKENS_WITH_THINKING
+api/simple-options.ts:69-76	adjust formula: maxTokens=min(base+budget, modelMax); if maxTokens<=budget → budget=max(0,maxTokens-1024)	as listed	MATCH	simple_options.rs:67-86	identical (saturating)
+api/simple-options.ts:29	buildBaseOptions default maxTokens = clamp(options.maxTokens ?? model.maxTokens)	model cap	MATCH	simple_options.rs:23-34	apply_simple_stream_defaults; 0→None mirrors pi falsy omission
+api/transform-messages.ts:12	non-vision user image placeholder	(image omitted: model does not support images)	MATCH	message_transform.rs:7-8	same
+api/transform-messages.ts:13	non-vision tool image placeholder	(tool image omitted: model does not support images)	MATCH	message_transform.rs:9-10	same
+api/transform-messages.ts:15-33	consecutive-image placeholder dedup (previousWasPlaceholder incl. text==placeholder)	as listed	MATCH	message_transform.rs:249-293	identical for user and tool blocks
+api/transform-messages.ts:95-98	same-model check	provider && api && model triple	MATCH	message_transform.rs:119-121	identical
+api/transform-messages.ts:101-117	thinking transform: redacted kept same-model only; signed kept same-model even if empty; empty dropped; cross-model→plain text	as listed	MATCH	message_transform.rs:127-147	identical incl non-empty signature check
+api/transform-messages.ts:131-134	thoughtSignature dropped cross-model	drop	MATCH	message_transform.rs:155-157	same
+api/transform-messages.ts:167-174	synthetic tool result for orphaned calls	"No result provided", isError:true	MATCH	message_transform.rs:235-244	same text and flag
+api/transform-messages.ts:194-197	skip assistant messages with stopReason error/aborted	skip	MATCH	message_transform.rs:186-189	same
+api/cloudflare.ts:2-3	CLOUDFLARE_WORKERS_AI_BASE_URL	https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1	MATCH	models.rs:10	identical
+api/cloudflare.ts:6-7	CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL	https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat	MATCH	models.rs:12	identical
+api/cloudflare.ts:10-11	CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL	.../{CLOUDFLARE_GATEWAY_ID}/openai	MATCH	models.rs:14	identical
+api/cloudflare.ts:14-15	CLOUDFLARE_AI_GATEWAY_ANTHROPIC_BASE_URL	.../{CLOUDFLARE_GATEWAY_ID}/anthropic	MATCH	models.rs:15	identical
+api/google-generative-ai.ts:186	generated tool call id format	`${name}_${Date.now()}_${++counter}`	MATCH	google_shared.rs:599-605	format!("{name}_{now_millis}_{counter}") with pre-increment; duplicate/missing-id gate identical (587-599)
+api/google-generative-ai.ts:218-226	usage: input=prompt−cached, output=candidates+thoughts, cacheRead=cached, cacheWrite=0, reasoning=thoughts, totalTokens=totalTokenCount||0	as listed	MATCH	google_shared.rs:652-689	identical incl totalTokens literal-0 fallback
+api/google-generative-ai.ts:295-297	streamSimple without reasoning sends thinking {enabled:false}	false	MATCH	google_shared.rs:121-127	only when model.reasoning
+api/google-generative-ai.ts:299-300	clamped "off" reasoning maps to effort	high	MATCH	google_shared.rs:93-98	identical
+api/google-generative-ai.ts:303	level-based thinking gate: gemini3-pro | gemini3-flash | gemma4	as listed	MATCH	google_shared.rs:101-104	gemma4 arm correctly gated to non-vertex api
+api/google-generative-ai.ts:330	SDK apiVersion "" when baseUrl set (URL {base}/models/{id}:streamGenerateContent?alt=sse)	""	MATCH	http_api_provider.rs:2552	ri builds the SDK-equivalent URL directly
+api/google-generative-ai.ts:375	thinkingConfig includeThoughts	true	MATCH	google_shared.rs:202-203	same
+api/google-generative-ai.ts:405-407	gemma4 detection	/gemma-?4/ lowercase	MATCH	google_shared.rs:725-728	contains gemma4|gemma-4 — equivalent
+api/google-generative-ai.ts:409-411	gemini3 pro detection	/gemini-3(?:\.\d+)?-pro/	MATCH	google_shared.rs:708-713	identical regex
+api/google-generative-ai.ts:413-416	gemini3 flash detection	regex + exact ids gemini-flash-latest, gemini-flash-lite-latest	MATCH	google_shared.rs:715-723	identical incl both exact ids
+api/google-generative-ai.ts:418-434	disabled thinking config: pro→LOW, flash→MINIMAL, gemma4→MINIMAL, else thinkingBudget 0	as listed	MATCH	google_shared.rs:223-233	identical (gemma4 non-vertex only, matching pi)
+api/google-generative-ai.ts:436-467	thinking level tables: pro{min/low→LOW, med/high→HIGH}; gemma4{min/low→MINIMAL, med/high→HIGH}; default{MINIMAL,LOW,MEDIUM,HIGH}	as listed	MATCH	google_shared.rs:235-265	identical
+api/google-generative-ai.ts:469-509	budget tables: 2.5-pro{128,2048,8192,32768}; 2.5-flash-lite{512,2048,8192,24576}; 2.5-flash{128,2048,8192,24576}; default -1; custom override per level	as listed	MATCH	google_shared.rs:283-334	identical (flash-lite branch non-vertex, matching pi vertex table)
+api/google-generative-ai.ts:210-214	stopReason override to toolUse when any toolCall block	toolUse	MATCH	google_shared.rs:419-428	same
+api/google-generative-ai.ts:(mapStopReason)	finish reason mapping STOP→stop, MAX_TOKENS→length, all other enum values→error	as listed	MATCH	google_shared.rs:691-697	ri collapses to catch-all error — same classification for every value pi enumerates
+api/google-shared.ts:52-58	thought signature base64 validation	/^[A-Za-z0-9+/]+={0,2}$/ and len%4==0, non-empty	MATCH	google_shared.rs:982-994	equivalent charset/padding/length rules
+api/google-shared.ts:63-65	signature replay gate	same provider AND model (api not compared)	MATCH	google_shared.rs:764-765,971-980	identical pair
+api/google-shared.ts:70-72	requiresToolCallId model prefixes	claude-, gpt-oss-	MATCH	google_shared.rs:745-747	starts_with same
+api/google-shared.ts:74-78	gemini major version parse	/^gemini(?:-live)?-(\d+)/	MATCH	google_shared.rs:1027-1039	prefix-strip equivalent
+api/google-shared.ts:80-86	multimodal functionResponse support	version>=3; unknown→true	MATCH	google_shared.rs:1021-1025	identical
+api/google-shared.ts:93-96	google tool call id normalization (only when requiresToolCallId)	[^a-zA-Z0-9_-]→_, max 64	MATCH	google_shared.rs:1005-1019	identical
+api/google-shared.ts:193	tool result response value	text | "(see attached image)" | ""	MATCH	google_shared.rs:801-807	identical
+api/google-shared.ts:206	tool result response key	error/output by isError	MATCH	google_shared.rs:812-816	same
+api/google-shared.ts:214-222	merge consecutive functionResponses into last user turn	as listed	MATCH	google_shared.rs:833-859	identical
+api/google-shared.ts:228	pre-Gemini-3 image turn prefix text	Tool result image:	MATCH	google_shared.rs:861-867	same
+api/google-shared.ts:237-246	JSON_SCHEMA_META_DECLARATIONS	$schema,$id,$anchor,$dynamicAnchor,$vocabulary,$comment,$defs,definitions	MATCH	google_shared.rs:11-20	identical 8 entries
+api/google-shared.ts:272-288	convertTools: parametersJsonSchema default, parameters+sanitize when useParameters	as listed	MATCH	google_shared.rs:38-62	identical
+api/google-shared.ts:293-304	mapToolChoice auto→AUTO none→NONE any→ANY default AUTO	as listed	MATCH	google_shared.rs:699-706	identical
+api/google-shared.ts:33-35	isThinkingPart	thought===true only	MATCH	google_shared.rs:730-732	signature ignored, same
+api/google-shared.ts:46-49	retainThoughtSignature: non-empty incoming replaces, else keep existing	as listed	MATCH	google_shared.rs:734-743	identical
+api/google-vertex.ts:54	Vertex API_VERSION	v1	MATCH	google_vertex.rs:10	same
+api/google-vertex.ts:55	GCP_VERTEX_CREDENTIALS_MARKER	gcp-vertex-credentials	MATCH	google_vertex.rs:11,85	same sentinel, same skip-to-ADC behavior
+api/google-vertex.ts:417-419	placeholder api key pattern	/^<[^>]+>$/	MATCH	google_vertex.rs:381-386	equivalent
+api/google-vertex.ts:421-432	project resolution	options.project || GOOGLE_CLOUD_PROJECT || GCLOUD_PROJECT	MATCH	google_vertex.rs:359-368	same order
+api/google-vertex.ts:434-440	location resolution	options.location || GOOGLE_CLOUD_LOCATION	MATCH	google_vertex.rs:370-379	same
+api/google-vertex.ts:404-407	service account key file env	GOOGLE_APPLICATION_CREDENTIALS	MATCH	google_vertex.rs:150	pi passes keyFilename to SDK; ri reads the file itself
+api/google-vertex.ts:387-393	custom baseUrl ignored when blank or contains "{location}"	{location}	MATCH	google_vertex.rs:92-99	identical
+api/google-vertex.ts:395-402	baseUrl api-version segment detection	/^v\d+(?:beta\d*)?$/ per path segment	MATCH	google_vertex.rs:319-329,392-407	equivalent incl beta suffix
+api/google-vertex.ts:373	baseUrlResourceScope	COLLECTION	MATCH	google_vertex.rs:353	same
+api/google-vertex.ts:318	vertex level-based gate: gemini3 pro/flash only (no gemma4)	as listed	MATCH	google_shared.rs:99-104	ri gates gemma4 on api!="google-vertex"
+api/google-vertex.ts:528-552	vertex getGemini3ThinkingLevel has no gemma4 branch	as listed	MATCH	google_shared.rs:246-256	gemma4 table skipped on vertex
+api/google-vertex.ts:512-526	vertex disabled thinking: pro→LOW, flash→MINIMAL, else budget 0 (no gemma4)	as listed	MATCH	google_shared.rs:223-233	gemma4 arm non-vertex only
+api/google-vertex.ts:554-584	vertex budget tables: 2.5-pro{128,2048,8192,32768}, 2.5-flash{128,2048,8192,24576}, no flash-lite branch, default -1	as listed	MATCH	google_shared.rs:301-334	flash-lite branch disabled on vertex, matching pi
+api/google-vertex.ts:409-415	api key resolution trims + rejects marker/placeholder	as listed	MATCH	google_vertex.rs:67-90	ri additionally falls back to GOOGLE_CLOUD_API_KEY env — in pi that fallback lives in env-api-keys.ts (auth layer), net behavior equal
+-	Google ADC token chain: env GOOGLE_OAUTH_ACCESS_TOKEN/GOOGLE_ACCESS_TOKEN/CLOUDSDK_AUTH_ACCESS_TOKEN, gcloud application_default_credentials.json (APPDATA + HOME/.config), token URI https://oauth2.googleapis.com/token, scope cloud-platform, RS256 JWT exp now+3600	-	EXTRA_IN_RI	google_vertex.rs:101-317	re-implements google-auth-library internals that pi gets from the SDK; no pi literals in packages/ai/src. Values match Google's documented defaults
+api/bedrock-converse-stream.ts:103	EMPTY_TEXT_PLACEHOLDER	<empty>	MATCH	bedrock.rs:1344	same, used for blank user/tool-result content
+api/bedrock-converse-stream.ts:134	profile resolution	options.profile || AWS_PROFILE (request-scoped)	MATCH	bedrock.rs:72-75	get_provider_env_value with scoped env
+api/bedrock-converse-stream.ts:137	ambient profile gate reads process env AWS_PROFILE only	process env	MATCH	bedrock.rs:51-54	explicitly process-env, matching pi getProviderEnvValue("AWS_PROFILE") without options.env
+api/bedrock-converse-stream.ts:166	ARN region extraction	/^arn:aws(?:-[a-z0-9-]+)?:bedrock:([a-z0-9-]+):/	MATCH	bedrock.rs:122-131	identical regex
+api/bedrock-converse-stream.ts:169-175	region order ARN > option/env > endpoint(when pinned) > "us-east-1" unless ambient profile	us-east-1	MATCH	bedrock.rs:45-71	identical
+api/bedrock-converse-stream.ts:954-960	configured region envs	AWS_REGION then AWS_DEFAULT_REGION	MATCH	bedrock.rs:133-140	same order, scoped env
+api/bedrock-converse-stream.ts:977-989	standard endpoint region pattern	bedrock-runtime(-fips).{region}.amazonaws.com(.cn)	MATCH	bedrock.rs:92-109	equivalent host parsing
+api/bedrock-converse-stream.ts:991-1002	explicit endpoint rule: non-standard host always; standard only when no region and no ambient profile	as listed	MATCH	bedrock.rs:111-120	identical
+api/bedrock-converse-stream.ts:153,178-188	AWS_BEDROCK_SKIP_AUTH=="1" (dummy creds "dummy-access-key"/"dummy-secret-key") and explicit AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN creds — pi resolves all via request-scoped options.env	scoped env	DRIFT	bedrock.rs:150-171, http_api_provider.rs:1055	values identical, but ri's credential resolver reads process env only: a request-scoped AWS_BEDROCK_SKIP_AUTH=1 suppresses the bearer (http:1055, scoped) yet never injects dummy creds, and request-scoped AWS_ACCESS_KEY_ID overrides are ignored. Only affects callers using options.env
+api/bedrock-converse-stream.ts:154-158	bearer precedence	options.bearerToken || options.apiKey || AWS_BEARER_TOKEN_BEDROCK (scoped)	MATCH	http_api_provider.rs:1058-1068	api_key || scoped env; Bearer header only when no authorization header present (pi: authSchemePreference httpBearerAuth). Standalone `bearerToken` option key is not read in ri but pi's simple path never sets it
+api/bedrock-converse-stream.ts:199	force HTTP/1.1 escape hatch	AWS_BEDROCK_FORCE_HTTP1=="1"	MATCH	http_api_provider.rs:2201-2205	same name/value, request-scoped, reqwest Version::HTTP_11
+api/bedrock-converse-stream.ts:222	stream() inferenceConfig.maxTokens default	options.maxTokens ?? (Claude ? model.maxTokens (unclamped) : omit)	DRIFT	http_api_provider.rs:984-997,1087-1097	ri routes stream() through stream_simple defaults: ALL models get maxTokens = clampToContext(model.maxTokens) when unset. pi raw stream(): Claude gets unclamped model cap, non-Claude omits the field (Bedrock server default). pi's own streamSimple matches ri; differs only for direct stream() callers
+api/bedrock-converse-stream.ts:245	response metadata surfaced as	x-amzn-requestid	MATCH	http_api_provider.rs:2207	ri passes raw HTTP response headers, which carry AWS's x-amzn-requestid natively; pi synthesizes it from SDK $metadata
+api/bedrock-converse-stream.ts:362-366	reserved caller headers never overridden	authorization, host exact; x-amz-* prefix (case-insensitive)	MATCH	http_api_provider.rs:1039-1047	identical filter
+api/bedrock-converse-stream.ts:392-438	streamSimple: clamped model-cap default maxTokens; non-adaptive Claude → adjustMaxTokensForThinking + clamp + budgets[level]=min(adjusted, max(0, maxTokens-1024))	1024	MATCH	http_api_provider.rs:1084-1130	apply_bedrock_simple_stream_defaults identical incl clamp_reasoning level key
+api/bedrock-converse-stream.ts:577-588	adaptive thinking model set	opus-4-6, opus-4-7, opus-4-8, sonnet-4-6, sonnet-5, fable-5	MATCH	bedrock.rs:1715-1726	identical
+api/bedrock-converse-stream.ts:590-595	native xhigh effort set	opus-4-7, opus-4-8, sonnet-5, fable-5	MATCH	bedrock.rs:1728-1737	identical
+api/bedrock-converse-stream.ts:569-575	match candidates: lowercase + separator runs [\s_.:]+ → "-", id and name	as listed	MATCH	bedrock.rs:1787-1809	run-collapsing normalization identical
+api/bedrock-converse-stream.ts:597-617	mapThinkingLevelToEffort: xhigh+native→xhigh; thinkingLevelMap passthrough; minimal/low→low, medium→medium, high/default→high	passthrough	DRIFT	bedrock.rs:1739-1760	same structure but ri whitelists mapped strings {low,medium,high,xhigh,max}, coercing other mapped values to "high"; pi passes them verbatim (custom-model edge only)
+api/bedrock-converse-stream.ts:623-631	PI_CACHE_RETENTION long/short defaults	long/short	DRIFT	bedrock.rs:1648-1656	same values; ri reads process env only, pi consults request-scoped options.env first
+api/bedrock-converse-stream.ts:638-648	isAnthropicClaudeModel: id needs anthropic.claude|anthropic/claude; name also matches bare "claude"	as listed	MATCH	bedrock.rs:1699-1709	identical (bare claude only via name)
+api/bedrock-converse-stream.ts:662-681	supportsPromptCaching: claude ref required else AWS_BEDROCK_FORCE_CACHE=="1"; fable-5|sonnet-5; "-4-"; claude-3-7-sonnet; claude-3-5-haiku	5 rules	MATCH	bedrock.rs:1607-1624	identical rules incl Claude 5 ids; FORCE_CACHE read from process env in ri vs scoped in pi (covered by env-scoping DRIFT row)
+api/bedrock-converse-stream.ts:708,899	cachePoint	type "default"; ttl "1h" for long retention	MATCH	bedrock.rs:1659-1666	wire values identical (CachePointType.DEFAULT="default", CacheTTL.ONE_HOUR="1h")
+api/bedrock-converse-stream.ts:893-903	cache point appended to last message only when it is a user message	strictly-last	MATCH	bedrock.rs:1626-1646	last_mut + role check, same semantics
+api/bedrock-converse-stream.ts:715-718	tool call id normalization	[^a-zA-Z0-9_-]→_, max 64	MATCH	bedrock.rs:1686-1697	identical
+api/bedrock-converse-stream.ts:853-885	consecutive toolResults merged into one user message; status error/success	as listed	MATCH	bedrock.rs:1439-1471	identical
+api/bedrock-converse-stream.ts:804-833	thinking replay: signature only for Claude; unsigned → plain text; non-Claude → reasoningText without signature	as listed	MATCH	bedrock.rs:1404-1430	identical
+api/bedrock-converse-stream.ts:939-952	stop reasons: end_turn|stop_sequence→stop; max_tokens|model_context_window_exceeded→length; tool_use→toolUse; other→error(reason); empty→error	as listed	MATCH	bedrock.rs:1183-1192	identical
+api/bedrock-converse-stream.ts:531	usage totalTokens fallback	totalTokens || input+output (cache not added)	MATCH	bedrock.rs:1163-1169	zero filtered like || ; fallback excludes cache tokens, mirroring pi
+api/bedrock-converse-stream.ts:270-280	stream exception events	internalServerException, modelStreamErrorException, validationException, throttlingException, serviceUnavailableException	MATCH	bedrock.rs:1320-1342	same five, same human prefixes
+api/bedrock-converse-stream.ts:1064-1082	image formats	image/jpeg|jpg→jpeg, png, gif, webp; unknown→throw	DRIFT	bedrock.rs:1672-1679	ri maps unknown mime by stripping "image/" prefix instead of erroring; e.g. image/bmp → format "bmp" sent to Bedrock where pi fails the request locally
+api/bedrock-converse-stream.ts:1004-1012	govcloud detection	configured region us-gov-* prefix; model id us-gov. | arn:aws-us-gov:	DRIFT	bedrock.rs:1776-1785, http_api_provider.rs:1023	same literals, but ri tests the fully-resolved region (incl ARN/endpoint-derived/us-east-1 default) while pi tests only option/env region; a us-gov endpoint without region env omits thinking.display in ri but not pi
+api/bedrock-converse-stream.ts:1025	thinking display default	summarized (omitted on govcloud)	MATCH	bedrock.rs:1567-1576	identical
+api/bedrock-converse-stream.ts:1026-1052	adaptive: thinking{type adaptive,display}+output_config.effort; budget: thinking{type enabled,budget_tokens,display}; defaults 1024/2048/8192/16384, xhigh/max→16384, custom budgets clamped to high	as listed	MATCH	bedrock.rs:1578-1605,1762-1774	identical
+api/bedrock-converse-stream.ts:1054-1056	anthropic_beta for non-adaptive thinking	["interleaved-thinking-2025-05-14"] when interleavedThinking??true	MATCH	bedrock.rs:1600-1602	!= Some(false)
+api/bedrock-converse-stream.ts:908-936	toolConfig: omit when no tools or toolChoice "none"; auto→{auto:{}}, any→{any:{}}, tool→{tool:{name}}	as listed	MATCH	bedrock.rs:748-801	identical
+api/bedrock-converse-stream.ts:251-254	messageStart role must be assistant	assistant	MATCH	bedrock.rs:845-861	same check
+-	AWS SDK-replacement wire constants: shared credentials/config INI (AWS_SHARED_CREDENTIALS_FILE/AWS_CONFIG_FILE, "profile X" sections), AWS_SECURITY_TOKEN alias, web identity STS AssumeRoleWithWebIdentity Version 2011-06-15 + session name "ri-bedrock-web-identity" + AWS_ENDPOINT_URL_STS/AWS_ENDPOINT_URL + sts.amazonaws.com + 5s timeout, container creds 169.254.170.2 + AWS_CONTAINER_* + 2s timeout, SigV4 AWS4-HMAC-SHA256/aws4_request/x-amz-date/x-amz-content-sha256/x-amz-security-token, accept application/vnd.amazon.eventstream + POST {base}/model/{id}/converse-stream	-	EXTRA_IN_RI	bedrock.rs:149-535,426-476; http_api_provider.rs:1049-1054,2601	replaces @aws-sdk default credential chain/signer/Smithy transport that pi links as a dependency; values follow AWS documented behavior, no pi-source literals to compare
+-	bedrock default base URL by model prefix (eu.* → bedrock-runtime.eu-central-1, else us-east-1)	-	EXTRA_IN_RI	bedrock.rs:84-90	pi encodes this mapping at catalog build time (scripts/generate-models.ts); ri also exposes it at runtime for custom models — consistent with pi's generated output
+api/mistral-conversations.ts:31	MISTRAL_TOOL_CALL_ID_LENGTH	9	MATCH	mistral.rs:17	same
+api/mistral-conversations.ts:32	MAX_MISTRAL_ERROR_BODY_CHARS + truncation suffix	4000; "... [truncated N chars]"	MATCH	mistral.rs:18,187-196	identical
+api/mistral-conversations.ts:153-183	tool id normalizer: strip non-alnum; keep if len==9; else shortHash(seed[:attempt suffix ":n"]) alnum-filtered first 9; collision retry	as listed	MATCH	mistral.rs:664-717	identical algorithm
+api/mistral-conversations.ts:219	SDK retries disabled	{strategy:"none"}	MATCH	http_api_provider.rs (mistral path)	ri makes a single attempt; no retry loop
+api/mistral-conversations.ts:229-231	prompt-cache affinity header x-affinity = sessionId, only when cacheRetention!=="none"	retention-gated	DRIFT	http_api_provider.rs:512-516, mistral.rs:159-174	ri sets x-affinity whenever a sessionId exists, ignoring cacheRetention "none"; pi omits the header when caching is disabled
+api/mistral-conversations.ts:258,270-272	promptCacheKey = sessionId when cacheRetention!=="none"	retention-gated	MATCH	mistral.rs:146-157	identical gate
+api/mistral-conversations.ts:621-627	reasoning model routing: reasoningEffort ids mistral-small-2603, mistral-small-latest, mistral-medium-3.5; else promptMode "reasoning"	as listed	MATCH	mistral.rs:947-956,78-87	identical
+api/mistral-conversations.ts:629-634	mapReasoningEffort	thinkingLevelMap[level] ?? "high"	MATCH	mistral.rs:958-964	identical incl null→high
+api/mistral-conversations.ts:636-647	toolChoice values	auto|none|any|required|{type function,name}	MATCH	mistral.rs:884-917	identical
+api/mistral-conversations.ts:649-664	stop reasons: stop→stop, length|model_length→length, tool_calls→toolUse, error→error, default→stop	as listed	MATCH	mistral.rs:966-974	identical
+api/mistral-conversations.ts:274-293	cached prompt tokens: 6 field aliases, first non-null, clamp [0, promptTokens]	as listed	MATCH	mistral.rs:375-392	all six aliases, same order and clamp
+api/mistral-conversations.ts:333-344	usage: input=prompt−cached, cacheRead=cached, cacheWrite=0, totalTokens=totalTokens||sum(all four)	as listed	MATCH	mistral.rs:343-370	identical incl camel/snake fallbacks
+api/mistral-conversations.ts:485-494	tools: type function, strict:false, stripSymbolKeys(parameters)	strict false	MATCH	mistral.rs:861-882	identical
+api/mistral-conversations.ts:600-618	tool result text: "[tool error] " prefix; "(see attached image)"; "(no tool output)"; "(image omitted: ...)"; "\n[tool image omitted: ...]" suffix	as listed	MATCH	mistral.rs:919-945	identical strings and branch order
+api/mistral-conversations.ts:533-535	user message all-images-unsupported placeholder	(image omitted: model does not support images)	MATCH	mistral.rs:849-853	same
+api/mistral-conversations.ts:424-428	fallback tool call id seed	id "null" or empty → deriveMistralToolCallId(`toolcall:${index}`, 0)	MATCH	mistral.rs:578-583	identical incl "null" sentinel
+api/mistral-conversations.ts:527,586	image data URL format	data:{mime};base64,{data}	MATCH	mistral.rs:805,842	same
+api/mistral-conversations.ts:(SDK)	chat endpoint	{serverURL}/v1/chat/completions	MATCH	mistral.rs:394-399	documented SDK-parity incl trailing-slash trim
+api/pi-messages.ts:360-363	request URL	{base minus trailing /}/messages, "?debug=1" when debug	MATCH	pi_messages.rs:61-68	identical
+api/pi-messages.ts:365-376	payload option keys temperature/maxTokens/reasoning/cacheRetention/sessionId/toolChoice	as listed	MATCH	pi_messages.rs:22-52	identical
+api/pi-messages.ts:337-343	cache retention: only "long" env opt-in mapped, else unset (backend default)	PI_CACHE_RETENTION	MATCH	pi_messages.rs:35-40	request-scoped env consulted like pi
+api/pi-messages.ts:384-388	request headers	authorization Bearer, accept text/event-stream, content-type application/json; options.headers override	MATCH	http_api_provider.rs:296-303	identical incl override order (.json() sets content-type)
+api/pi-messages.ts:310	SSE data sentinel skipped	[DONE]	MATCH	http_api_provider.rs:2880	same
+api/pi-messages.ts:116-119	diagnostic body truncation	8192 chars + "…"	MATCH	pi_messages.rs:301,313-323	identical
+api/pi-messages.ts:142	response-failure diagnostic version	1	MATCH	pi_messages.rs:380	same
+api/pi-messages.ts:330	diagnostic type marker	pi_messages_response_failure	MATCH	pi_messages.rs:403	same
+api/pi-messages.ts:170	rewrite diagnostic type marker	pi_messages_rewrite	MATCH	pi_messages.rs:264	same
+api/pi-messages.ts:106-114	error body accepted only when .error is non-null non-array object	as listed	MATCH	pi_messages.rs:305-311	is_object() excludes arrays/null
+api/pi-messages.ts:190-207	terminal event mapping: done length/toolUse/else stop; error aborted/else error	as listed	MATCH	pi_messages.rs:269-292	identical
+api/openrouter-images.ts:67	maxRetries default	0	MATCH	openrouter_images.rs:90	unwrap_or(0)
+api/openrouter-images.ts:150	modalities	["image","text"] when model.output has text, else ["image"]	MATCH	openrouter_images.rs:247-251	identical
+api/openrouter-images.ts:149	stream flag	false	MATCH	openrouter_images.rs:261	same
+api/openrouter-images.ts:88-96	generated image parsing: image_url string|{url}, must start "data:", regex ^data:([^;]+);base64,(.+)$	as listed	DRIFT	openrouter_images.rs:551-569	ri splits on the first ";base64," so a data URL with extra mime parameters (data:image/png;foo;base64,..) is accepted with mime "image/png;foo" where pi's regex rejects it; canonical data URLs behave identically
+api/openrouter-images.ts:162-167	usage: cacheRead = cacheWrite>0 ? max(0, cached−cacheWrite) : cached; input = prompt−cacheRead−cacheWrite	as listed	MATCH	openrouter_images.rs:317-342	identical (saturating)
+api/openrouter-images.ts:176-183	cost = (model.cost.X / 1e6) * tokens, total=sum	1e6	MATCH	openrouter_images.rs:354-359	identical
+api/openrouter-images.ts:54-57	missing api key → immediate error	throws before request	DRIFT	openrouter_images.rs:218-224	pi fails fast whenever options.apiKey is absent (headers not considered); ri proceeds when an authorization header is present or an env api key resolves, adding bearer_auth only as fallback — a keyless-but-header-authorized call errors in pi and succeeds in ri
+api/openrouter-images.ts:(SDK)	retry policy when maxRetries>0	OpenAI SDK: initial 500ms, exponential + jitter, cap 8s; retries 408/409/429/>=500 + connection errors; honors retry-after(-ms)	DRIFT	openrouter_images.rs:26,415-492	ri hand-rolls: base 1000ms doubling, no jitter, no built-in 8s cap (cap only via maxRetryDelayMs option), statuses 408/409/425/429/500/502/503/504 plus text patterns ratelimit/overloaded/serviceunavailable/upstreamconnect/connectionrefused, honors retry-after(-ms)/RFC2822. Defaults identical (0 retries); differs only when caller opts into retries
+-	abort poll granularity in images request/sleep loops	-	EXTRA_IN_RI	openrouter_images.rs:511,532	10ms poll while awaiting response/retry sleep; pi aborts via AbortSignal events. Worst case +10ms abort latency
+api/lazy.ts	lazy stream/api plumbing	no behavior-affecting literals	MATCH	-	setup-error forwarding only; nothing to compare
+auth/context.ts:34	fileExists leading "~" home-dir expansion	"~" prefix -> homedir	MATCH	auth/context.rs:21	strip_prefix('~') + HOME/USERPROFILE
+auth/context.ts:27	env(): empty/whitespace-only value treated as unset	value.trim().length > 0	MATCH	auth/context.rs:17	filter !value.trim().is_empty()
+auth/helpers.ts:13	api-key login secret prompt text	"Enter {name}"	MATCH	auth/helpers.rs:41	format!("Enter {}", name)
+auth/helpers.ts:18	auth source label for stored key	"stored credential"	MATCH	auth/helpers.rs:63	"stored credential"
+auth/helpers.ts:22	auth source label for env resolution	env var name	MATCH	auth/helpers.rs:74	env_var.clone()
+auth/resolve.ts:92	OAuth expiry check at resolution (no skew)	Date.now() >= credential.expires	MATCH	auth/resolve.rs:178	now_millis() >= credential.expires
+auth/resolve.ts:114	auth source label for OAuth	"OAuth"	MATCH	auth/resolve.rs:233	"OAuth"
+auth/types.ts:18	credential type tags	"api_key" / "oauth"	MATCH	auth/types.rs:48	serde tag="type" snake_case + rename "oauth"
+auth/oauth/anthropic.ts:29	Anthropic OAuth client id (base64-decoded)	9d1c250a-e61b-44d9-88ed-5944d1962f5e	MATCH	anthropic_oauth.rs:13	identical plaintext
+auth/oauth/anthropic.ts:30	authorize URL	https://claude.ai/oauth/authorize	MATCH	anthropic_oauth.rs:14	identical
+auth/oauth/anthropic.ts:31	token URL	https://platform.claude.com/v1/oauth/token	MATCH	anthropic_oauth.rs:15	identical
+auth/oauth/anthropic.ts:32	callback host env var + default	PI_OAUTH_CALLBACK_HOST / "127.0.0.1"	MATCH	anthropic_oauth.rs:920	identical
+auth/oauth/anthropic.ts:33	callback port	53692	MATCH	anthropic_oauth.rs:16	53692
+auth/oauth/anthropic.ts:34	callback path	/callback	MATCH	anthropic_oauth.rs:17	identical
+auth/oauth/anthropic.ts:35	redirect URI	http://localhost:53692/callback	MATCH	anthropic_oauth.rs:18	identical
+auth/oauth/anthropic.ts:36	OAuth scopes	org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload	MATCH	anthropic_oauth.rs:19	identical
+auth/oauth/anthropic.ts:178	token-endpoint HTTP timeout	AbortSignal.timeout(30000) ms	MISSING_IN_RI	anthropic_oauth.rs:570	send_oauth_http_request has no request timeout (reqwest default none; node_http_proxy.rs only sets pool_idle_timeout 50s)
+auth/oauth/anthropic.ts:225	token expiry skew (login + refresh)	expires_in*1000 - 5*60*1000 ms	MATCH	anthropic_oauth.rs:565	identical
+auth/oauth/anthropic.ts:240	authorize query param	code=true	MATCH	anthropic_oauth.rs:245	("code","true")
+auth/oauth/anthropic.ts:246	PKCE challenge method	S256	MATCH	anthropic_oauth.rs:251	identical
+auth/oauth/anthropic.ts:247	OAuth state value = PKCE verifier	state=verifier	MATCH	anthropic_oauth.rs:295	state: verifier
+auth/oauth/anthropic.ts:199	token grant types	authorization_code / refresh_token	MATCH	anthropic_oauth.rs:419	identical (json body incl code/state/redirect_uri/code_verifier)
+auth/oauth/anthropic.ts:174	token request headers	Content-Type+Accept application/json	MATCH	anthropic_oauth.rs:600	identical
+auth/oauth/anthropic.ts:145	callback success message	"Anthropic authentication completed. You can close this window."	MATCH	anthropic_oauth.rs:149	identical
+auth/oauth/pkce.ts:23	PKCE verifier entropy	32 random bytes base64url	MATCH	anthropic_oauth.rs:124	[0u8;32] URL_SAFE_NO_PAD
+auth/oauth/pkce.ts:30	PKCE challenge algorithm	SHA-256 base64url	MATCH	anthropic_oauth.rs:128	identical
+auth/oauth/device-code.ts:5	minimum poll interval	1000 ms	MATCH	device_code.rs:19	1000
+auth/oauth/device-code.ts:7	default poll interval (RFC 8628)	5 s	MATCH	device_code.rs:22	5
+auth/oauth/device-code.ts:9	slow_down interval increment	5000 ms	MATCH	device_code.rs:25	5000
+auth/oauth/device-code.ts:1	cancel/timeout/slow_down-timeout messages	"Login cancelled" / "Device flow timed out" / WSL clock-drift message	MATCH	device_code.rs:15	identical strings
+auth/oauth/github-copilot.ts:10	Copilot OAuth client id (base64-decoded)	Iv1.b507a08c87ecfe98	MATCH	github_copilot_oauth.rs:15	identical plaintext
+auth/oauth/github-copilot.ts:13	User-Agent header	GitHubCopilotChat/0.35.0	MATCH	github_copilot_oauth.rs:16	identical
+auth/oauth/github-copilot.ts:14	Editor-Version header	vscode/1.107.0	MATCH	github_copilot_oauth.rs:17	identical
+auth/oauth/github-copilot.ts:15	Editor-Plugin-Version header	copilot-chat/0.35.0	MATCH	github_copilot_oauth.rs:18	identical
+auth/oauth/github-copilot.ts:16	Copilot-Integration-Id header	vscode-chat	MATCH	github_copilot_oauth.rs:19	identical
+auth/oauth/github-copilot.ts:18	X-GitHub-Api-Version header value for /models listing	2026-06-01	MISSING_IN_RI	-	ri never calls GET {base}/models; header+value absent from crate
+auth/oauth/github-copilot.ts:57	device/access-token/copilot-token URL templates	https://{d}/login/device/code, https://{d}/login/oauth/access_token, https://api.{d}/copilot_internal/v2/token	MATCH	github_copilot_oauth.rs:229	identical
+auth/oauth/github-copilot.ts:85	default Copilot API base	https://api.individual.githubcopilot.com	MATCH	github_copilot_oauth.rs:775	identical
+auth/oauth/github-copilot.ts:84	enterprise fallback base	https://copilot-api.{enterpriseDomain}	MATCH	github_copilot_oauth.rs:773	identical
+auth/oauth/github-copilot.ts:69	proxy-ep token parsing + proxy.->api. rewrite	/proxy-ep=([^;]+)/ ; ^proxy\. -> api.	MATCH	github_copilot_oauth.rs:779	split_once("proxy-ep=") + strip_prefix("proxy.")
+auth/oauth/github-copilot.ts:125	available-models fetch timeout	AbortSignal.timeout(5000) ms	MISSING_IN_RI	-	models listing not implemented in ri
+auth/oauth/github-copilot.ts:96	selectable model filter	model_picker_enabled===true && policy.state!=="disabled" && supports.tool_calls!==false	MISSING_IN_RI	-	models listing not implemented in ri
+auth/oauth/github-copilot.ts:286	availableModelIds stored on credential (login + refresh)	fetchAvailableGitHubCopilotModelIds()	MISSING_IN_RI	github_copilot_oauth.rs:590	ri refresh/login never populate availableModelIds; downstream model filtering by account availability cannot happen
+auth/oauth/github-copilot.ts:150	device flow scope	read:user	MATCH	github_copilot_oauth.rs:259	identical
+auth/oauth/github-copilot.ts:217	device grant type	urn:ietf:params:oauth:grant-type:device_code	MATCH	github_copilot_oauth.rs:353	identical
+auth/oauth/github-copilot.ts:227	poll error codes	authorization_pending / slow_down(+interval)	MATCH	github_copilot_oauth.rs:541	identical
+auth/oauth/github-copilot.ts:204	waitBeforeFirstPoll	true	MATCH	github_copilot_oauth.rs:111	true
+auth/oauth/github-copilot.ts:248	default domain	github.com	MATCH	github_copilot_oauth.rs:556	identical
+auth/oauth/github-copilot.ts:274	copilot token expiry skew	expires_at*1000 - 5*60*1000 ms	MATCH	github_copilot_oauth.rs:761	identical
+auth/oauth/github-copilot.ts:296	model policy URL	{base}/models/{modelId}/policy	MATCH	github_copilot_oauth.rs:652	identical
+auth/oauth/github-copilot.ts:305	policy request headers	openai-intent: chat-policy; x-interaction-type: chat-policy	MATCH	github_copilot_oauth.rs:649	identical
+auth/oauth/github-copilot.ts:308	policy request body	{"state":"enabled"}	MATCH	github_copilot_oauth.rs:658	identical
+auth/oauth/github-copilot.ts:161	device-code response: interval optional (default 5s poller fallback)	interval?: number	DRIFT	github_copilot_oauth.rs:306	ri required_u64("interval") errors when GitHub omits interval; pi falls back to RFC 8628 default 5s
+auth/oauth/github-copilot.ts:176	verification_uri scheme allowlist	https:/http: only	MATCH	github_copilot_oauth.rs:315	identical
+auth/oauth/github-copilot.ts:332	enterprise prompt text/placeholder	"GitHub Enterprise URL/domain (blank for github.com)" / company.ghe.com	MATCH	auth/interactive.rs:80	identical
+auth/oauth/openai-codex.ts:26	Codex OAuth client id	app_EMoamEEZ73f0CkXaXp7hrann	MATCH	openai_codex_oauth.rs:14	identical
+auth/oauth/openai-codex.ts:27	auth base / authorize / token URLs	https://auth.openai.com{,/oauth/authorize,/oauth/token}	MATCH	openai_codex_oauth.rs:15	identical
+auth/oauth/openai-codex.ts:30	redirect URI (port 1455, /auth/callback)	http://localhost:1455/auth/callback	MATCH	openai_codex_oauth.rs:17	identical
+auth/oauth/openai-codex.ts:31	device endpoints	/api/accounts/deviceauth/usercode, /api/accounts/deviceauth/token, /codex/device, /deviceauth/callback	MATCH	openai_codex_oauth.rs:413	identical
+auth/oauth/openai-codex.ts:35	device code timeout	15*60 s	MATCH	openai_codex_oauth.rs:419	15*60
+auth/oauth/openai-codex.ts:36	login method ids	"browser" / "device_code"	MATCH	auth/interactive.rs:34	identical (labels identical too)
+auth/oauth/openai-codex.ts:38	scope	openid profile email offline_access	MATCH	openai_codex_oauth.rs:20	identical
+auth/oauth/openai-codex.ts:39	JWT claim path + account claim	https://api.openai.com/auth . chatgpt_account_id	MATCH	openai_codex_responses.rs:65	identical
+auth/oauth/openai-codex.ts:70	OAuth state entropy	randomBytes(16) hex	MATCH	openai_codex_oauth.rs:24	16 bytes hex
+auth/oauth/openai-codex.ts:145	token expiry (no skew)	Date.now() + expires_in*1000	MATCH	openai_codex_oauth.rs:358	identical (no skew)
+auth/oauth/openai-codex.ts:157	token request content type	application/x-www-form-urlencoded	MATCH	openai_codex_oauth.rs:380	identical
+auth/oauth/openai-codex.ts:306	authorize extras	id_token_add_organizations=true; codex_cli_simplified_flow=true; originator=pi	MATCH	openai_codex_oauth.rs:57	identical incl default originator "pi"
+auth/oauth/openai-codex.ts:265	poll HTTP 403/404 treated as pending	403|404 -> pending	MATCH	openai_codex_oauth.rs:561	identical
+auth/oauth/openai-codex.ts:277	poll error codes	deviceauth_authorization_pending / slow_down	MATCH	openai_codex_oauth.rs:578	identical
+auth/oauth/openai-codex.ts:199	device usercode 404 special-case message	device code login not enabled	MATCH	openai_codex_oauth.rs:451	identical
+auth/oauth/openai-codex.ts:216	interval accepts numeric string	Number(json.interval.trim())	MATCH	openai_codex_oauth.rs:477	string parsed as f64
+auth/oauth/openai-codex.ts:462	manual-code prompt + placeholder	"Complete login in your browser, or paste..." / REDIRECT_URI	MATCH	auth/interactive.rs:36	identical
+auth/oauth/radius.ts:25	callback host	127.0.0.1 (no env override)	MATCH	radius.rs:23	identical
+auth/oauth/radius.ts:26	callback port	1456	MATCH	radius.rs:24	1456
+auth/oauth/radius.ts:27	callback path	/oauth/callback	MATCH	radius.rs:25	identical
+auth/oauth/radius.ts:29	token expiry skew	60000 ms	MATCH	radius.rs:26	60_000
+auth/oauth/radius.ts:30	login method ids	"browser" / "device-code"	MATCH	radius.rs:27	identical (hyphenated)
+auth/oauth/radius.ts:55	OAuth config discovery path	GET {gateway}/v1/oauth	MATCH	radius.rs:151	identical
+auth/oauth/radius.ts:225	browser-flow OAuth state format	crypto.randomUUID() (36-char UUID)	DRIFT	radius.rs:290	ri reuses generate_openai_codex_oauth_state() = 16 random bytes hex (32 chars); opaque to server, entropy comparable, but state format differs from pi
+auth/oauth/radius.ts:234	authorize param	handoff=url	MATCH	radius.rs:300	identical
+auth/oauth/radius.ts:233	PKCE challenge method	S256	MATCH	radius.rs:299	identical
+auth/oauth/radius.ts:339	device poll error codes	authorization_pending / slow_down / expired_token / access_denied	MATCH	radius.rs:437	identical incl failure messages
+auth/oauth/radius.ts:201	callback success message	"Signed in to Radius. You may now close this page."	MATCH	radius.rs:310	identical
+auth/oauth/radius.ts:279	device authorization request body	client_id + scope form-encoded	MATCH	radius.rs:353	identical
+auth/oauth/xai.ts:8	xAI OAuth client id	b1a00492-073a-47ea-816f-4c329264a828	MATCH	xai_oauth.rs:24	identical
+auth/oauth/xai.ts:9	xAI scope	openid profile email offline_access grok-cli:access api:access	MATCH	xai_oauth.rs:25	identical
+auth/oauth/xai.ts:10	device code URL	https://auth.x.ai/oauth2/device/code	MATCH	xai_oauth.rs:26	identical
+auth/oauth/xai.ts:11	token URL	https://auth.x.ai/oauth2/token	MATCH	xai_oauth.rs:27	identical
+auth/oauth/xai.ts:13	refresh skew	5*60*1000 ms	MATCH	xai_oauth.rs:33	identical
+auth/oauth/xai.ts:14	default token lifetime when expires_in omitted	3600 s	MATCH	xai_oauth.rs:34	3600.0
+auth/oauth/xai.ts:151	device request extra param	referrer=pi	MATCH	xai_oauth.rs:189	identical
+auth/oauth/xai.ts:165	waitBeforeFirstPoll	true	MATCH	xai_oauth.rs:334	true
+auth/oauth/xai.ts:183	poll error codes	authorization_pending / slow_down(+interval) / access_denied|authorization_denied / expired_token	MATCH	xai_oauth.rs:274	identical incl messages
+auth/oauth/xai.ts:58	verification URI scheme allowlist	https: only	MATCH	xai_oauth.rs:98	identical
+auth/oauth/xai.ts:131	refresh-token retention when server omits rotation	keep previous refresh_token	MATCH	xai_oauth.rs:127	identical
+auth/oauth/xai.ts:230	OAuth display name / login label	"xAI (Grok/X subscription)" / "Sign in with SuperGrok or X Premium"	MATCH	xai_oauth.rs:28	identical
+-	ri OAuth callback connection read timeout	-	EXTRA_IN_RI	anthropic_oauth.rs:689	5s per-read timeout; pi Node http server has none (harmless hardening; slow callback request could be dropped in ri but not pi)
+-	ri OAuth callback request size cap	-	EXTRA_IN_RI	anthropic_oauth.rs:697	8192-byte header cap; no pi counterpart
+-	ri OAuth callback rejects non-GET with 405	-	EXTRA_IN_RI	anthropic_oauth.rs:707	pi serves any method on the callback path
+providers/all.ts:86	builtinProviders registration set (37 catalog providers + radius)	38 providers: amazon-bedrock..zai-coding-cn + radius	MATCH	providers_all.rs:190	seed_provider_ids() (37 catalog, set identical) + radius appended
+providers/all.ts:115	radius position in provider registration order	radius registered in alphabetical position (after qwen-token-plan-cn, before together)	DRIFT	providers_all.rs:195	radius appended last after all catalog providers; iteration/registration order of Models collection differs for radius only
+providers/all.ts:139	builtinImagesProviders set	[openrouterImagesProvider()]	MATCH	providers_all.rs:286-293	single openrouter images provider
+providers/amazon-bedrock.ts:76	provider id	amazon-bedrock	MATCH	providers_all.rs:150	ambient-auth provider set includes "amazon-bedrock"; catalog id matches
+providers/amazon-bedrock.ts:56	bedrock ambient env detect: bearer token	AWS_BEARER_TOKEN_BEDROCK	MATCH	env_api_keys.rs:118	AWS_BEARER_TOKEN_BEDROCK (order within OR-chain differs; only affects pi source label)
+providers/amazon-bedrock.ts:57	bedrock ambient env detect: profile	AWS_PROFILE	MATCH	env_api_keys.rs:116	AWS_PROFILE
+providers/amazon-bedrock.ts:64	bedrock ambient env detect: access keys	AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY	MATCH	env_api_keys.rs:117	same pair
+providers/amazon-bedrock.ts:67	bedrock ambient env detect: ECS relative uri	AWS_CONTAINER_CREDENTIALS_RELATIVE_URI	MATCH	env_api_keys.rs:120	same
+providers/amazon-bedrock.ts:68	bedrock ambient env detect: ECS full uri	AWS_CONTAINER_CREDENTIALS_FULL_URI	MATCH	env_api_keys.rs:121	same
+providers/amazon-bedrock.ts:69	bedrock ambient env detect: web identity	AWS_WEB_IDENTITY_TOKEN_FILE (alone suffices)	DRIFT	env_api_keys.rs:119	ri requires AWS_WEB_IDENTITY_TOKEN_FILE && AWS_ROLE_ARN; with token file but no AWS_ROLE_ARN pi detects ambient bedrock credentials, ri does not
+providers/amazon-bedrock.ts:14-50	bedrock interactive login flow (select ids bearer-token/aws-profile/credential-chain; stores bearer key or AWS_PROFILE env)	3 login methods	MISSING_IN_RI	-	ri AmbientApiKeyAuth has resolve only, no login(); interactive bedrock credential storage flow absent
+providers/ant-ling.ts:10	ant-ling baseUrl	https://api.ant-ling.com/v1	MATCH	models_generated/ant-ling.json	identical
+providers/ant-ling.ts:11	ant-ling api key env	[ANT_LING_API_KEY]	MATCH	env_api_keys.rs:10	identical
+providers/anthropic.ts:11	anthropic baseUrl	https://api.anthropic.com	MATCH	models_generated/anthropic.json	identical (also models_generator.rs)
+providers/anthropic.ts:14	anthropic api key env precedence	[ANTHROPIC_OAUTH_TOKEN, ANTHROPIC_API_KEY]	MATCH	env_api_keys.rs:6	same names, same order
+providers/anthropic.ts:15	anthropic oauth wiring	oauth "Anthropic (Claude Pro/Max)"	MATCH	oauth_auth_storage.rs:122-125	built-in oauth provider id anthropic, same display name
+providers/azure-openai-responses.ts:10	azure api key env	[AZURE_OPENAI_API_KEY]	MATCH	env_api_keys.rs:8	identical (no provider baseUrl in either; models carry url)
+providers/cerebras.ts:10	cerebras baseUrl	https://api.cerebras.ai/v1	MATCH	models.rs / models_generated/cerebras.json	identical
+providers/cerebras.ts:11	cerebras api key env	[CEREBRAS_API_KEY]	MATCH	env_api_keys.rs:19	identical
+providers/cloudflare-ai-gateway.ts:13	provider id + 3 api bindings	cloudflare-ai-gateway: anthropic-messages/openai-completions/openai-responses	MATCH	models_generated/cloudflare-ai-gateway.json	apis per model in catalog; dispatch via registry
+providers/cloudflare-auth.ts:4	cloudflare api key env	CLOUDFLARE_API_KEY	MATCH	env_api_keys.rs:33	same for both cloudflare providers
+providers/cloudflare-auth.ts:5	cloudflare account id env	CLOUDFLARE_ACCOUNT_ID	MATCH	models.rs:10-15 + models.rs:4547	resolved from scoped/process env at request time
+providers/cloudflare-auth.ts:6	cloudflare gateway id env	CLOUDFLARE_GATEWAY_ID	MATCH	models.rs:12-15 + models.rs:4547	same
+providers/cloudflare-auth.ts:86-88	ai-gateway auth headers	cf-aig-authorization: Bearer <key>; Authorization=null; x-api-key=null (suppress defaults)	MATCH	http_api_provider.rs:2249-2255, anthropic.rs:962-970	ri sets cf-aig-authorization Bearer and suppresses default bearer/x-api-key for cloudflare-ai-gateway
+providers/cloudflare-stream.ts:12-13	baseUrl placeholder substitution set	only {CLOUDFLARE_ACCOUNT_ID} and {CLOUDFLARE_GATEWAY_ID}; unresolved placeholder left literally in URL	DRIFT	models.rs:4547-4591	ri substitutes any {UPPERCASE_ENV} placeholder (cloudflare providers only) and returns an error when the env var is unset instead of sending the literal placeholder; same outcome for the two documented vars when set
+providers/cloudflare-workers-ai.ts:9	provider id + api	cloudflare-workers-ai, openai-completions	MATCH	models_generated/cloudflare-workers-ai.json	identical
+providers/deepseek.ts:10	deepseek baseUrl	https://api.deepseek.com	MATCH	models.rs / models_generated/deepseek.json	identical
+providers/deepseek.ts:11	deepseek api key env	[DEEPSEEK_API_KEY]	MATCH	env_api_keys.rs:9	identical
+providers/fireworks.ts:11	fireworks baseUrl	https://api.fireworks.ai/inference	MATCH	models.rs / models_generated/fireworks.json	identical
+providers/fireworks.ts:12	fireworks api key env	[FIREWORKS_API_KEY]	MATCH	env_api_keys.rs:29	identical
+providers/github-copilot.ts:13	github-copilot baseUrl	https://api.individual.githubcopilot.com	MATCH	github_copilot_oauth.rs:775	same default individual endpoint (enterprise domain override in both)
+providers/github-copilot.ts:15	copilot api key env	[COPILOT_GITHUB_TOKEN]	MATCH	env_api_keys.rs:5	identical
+providers/github-copilot.ts:16	copilot oauth wiring	oauth "GitHub Copilot"	MATCH	oauth_auth_storage.rs:126-130	built-in oauth provider id github-copilot
+providers/github-copilot.ts:19-27	filterModels by OAuth credential availableModelIds	models filtered to credential.availableModelIds when present	MISSING_IN_RI	-	ri models_runtime.rs has filter_models hook (models_runtime.rs:188) but providers_all.rs never sets it and nothing reads availableModelIds; ri lists all catalog Copilot models even when the OAuth credential restricts them
+providers/google-vertex.ts:6	vertex ADC default path	~/.config/gcloud/application_default_credentials.json	MATCH	env_api_keys.rs:150-156	HOME (or USERPROFILE)/.config/gcloud/application_default_credentials.json
+providers/google-vertex.ts:63	vertex api key env	GOOGLE_CLOUD_API_KEY	MATCH	env_api_keys.rs:17	identical
+providers/google-vertex.ts:67	vertex ADC file env	GOOGLE_APPLICATION_CREDENTIALS	MATCH	env_api_keys.rs:132	identical
+providers/google-vertex.ts:70-72	vertex project envs	GOOGLE_CLOUD_PROJECT then GCLOUD_PROJECT	MATCH	env_api_keys.rs:125-126	same names/order
+providers/google-vertex.ts:73	vertex location env	GOOGLE_CLOUD_LOCATION	MATCH	env_api_keys.rs:127	identical
+providers/google-vertex.ts:15-61	vertex interactive login flow (select ids api-key/adc/service-account; stores GOOGLE_CLOUD_PROJECT/LOCATION/GOOGLE_APPLICATION_CREDENTIALS)	3 login methods	MISSING_IN_RI	-	ri AmbientApiKeyAuth has resolve only, no login(); interactive vertex credential storage flow absent
+providers/google.ts:10	google baseUrl	https://generativelanguage.googleapis.com/v1beta	MATCH	models_generated/google.json	identical (also models_generator.rs)
+providers/google.ts:11	google api key env	[GEMINI_API_KEY]	MATCH	env_api_keys.rs:16	identical
+providers/groq.ts:10	groq baseUrl	https://api.groq.com/openai/v1	MATCH	models.rs / models_generated/groq.json	identical
+providers/groq.ts:11	groq api key env	[GROQ_API_KEY]	MATCH	env_api_keys.rs:18	identical
+providers/huggingface.ts:10	huggingface baseUrl	https://router.huggingface.co/v1	MATCH	models.rs / models_generated/huggingface.json	identical
+providers/huggingface.ts:11	huggingface api key env	[HF_TOKEN]	MATCH	env_api_keys.rs:28	identical
+providers/images/register-builtins.ts:45	images api id registration	openrouter-images	MATCH	image_models.rs:83 + images_api_registry.rs:3	same api id, registered via ensure_builtin_images_api_providers
+providers/kimi-coding.ts:10	kimi-coding baseUrl	https://api.kimi.com/coding	MATCH	models.rs / models_generated/kimi-coding.json	identical
+providers/kimi-coding.ts:11	kimi-coding api key env	[KIMI_API_KEY]	MATCH	env_api_keys.rs:32	identical
+providers/minimax-cn.ts:10	minimax-cn baseUrl	https://api.minimaxi.com/anthropic	MATCH	models.rs / models_generated/minimax-cn.json	identical
+providers/minimax-cn.ts:11	minimax-cn api key env	[MINIMAX_CN_API_KEY]	MATCH	env_api_keys.rs:26	identical
+providers/minimax.ts:10	minimax baseUrl	https://api.minimax.io/anthropic	MATCH	models.rs / models_generated/minimax.json	identical
+providers/minimax.ts:11	minimax api key env	[MINIMAX_API_KEY]	MATCH	env_api_keys.rs:25	identical
+providers/mistral.ts:10	mistral baseUrl	https://api.mistral.ai	MATCH	models.rs / models_generated/mistral.json	identical
+providers/mistral.ts:11	mistral api key env	[MISTRAL_API_KEY]	MATCH	env_api_keys.rs:24	identical
+providers/moonshotai-cn.ts:10	moonshotai-cn baseUrl	https://api.moonshot.cn/v1	MATCH	models_generated/moonshotai-cn.json	identical
+providers/moonshotai-cn.ts:11	moonshotai-cn api key env	[MOONSHOT_API_KEY]	MATCH	env_api_keys.rs:27	same env var shared by both moonshot providers
+providers/moonshotai.ts:10	moonshotai baseUrl	https://api.moonshot.ai/v1	MATCH	models_generated/moonshotai.json	identical
+providers/moonshotai.ts:11	moonshotai api key env	[MOONSHOT_API_KEY]	MATCH	env_api_keys.rs:27	identical
+providers/nvidia.ts:10	nvidia baseUrl	https://integrate.api.nvidia.com/v1	MATCH	models_generated/nvidia.json	identical
+providers/nvidia.ts:11	nvidia api key env	[NVIDIA_API_KEY]	MATCH	env_api_keys.rs:13	identical
+providers/openai-codex.ts:11	openai-codex baseUrl	https://chatgpt.com/backend-api	MATCH	openai_codex_responses.rs + models_generated/openai-codex.json	identical
+providers/openai-codex.ts:12-14	openai-codex auth: oauth only, no api-key env	oauth "OpenAI (ChatGPT Plus/Pro)"	MATCH	env_api_keys.rs:38 (None) + oauth_auth_storage.rs:131-135	ri api_key_env_vars returns None (ambient fallback resolves nothing) so effectively oauth-only; display name differs (cosmetic)
+providers/openai.ts:10	openai baseUrl	https://api.openai.com/v1	MATCH	models.rs / models_generated/openai.json	identical
+providers/openai.ts:11	openai api key env	[OPENAI_API_KEY]	MATCH	env_api_keys.rs:7	identical
+providers/opencode-go.ts:12	opencode-go api key env	[OPENCODE_API_KEY]	MATCH	env_api_keys.rs:31	shared with opencode; no provider baseUrl in either (models carry urls)
+providers/opencode.ts:15	opencode api key env	[OPENCODE_API_KEY]	MATCH	env_api_keys.rs:31	identical
+providers/openrouter-images.ts:8	images provider id	openrouter	MATCH	providers_all.rs:288	identical
+providers/openrouter-images.ts:10	images api key env	[OPENROUTER_API_KEY]	MATCH	providers_all.rs:289 via env_api_keys.rs:21	builtin_provider_auth("openrouter") resolves OPENROUTER_API_KEY
+providers/openrouter.ts:10	openrouter baseUrl	https://openrouter.ai/api/v1	MATCH	models_generated/openrouter.json (also image_models.rs)	identical
+providers/openrouter.ts:11	openrouter api key env	[OPENROUTER_API_KEY]	MATCH	env_api_keys.rs:21	identical
+providers/qwen-token-plan-cn.ts:10	qwen-token-plan-cn baseUrl	https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1	MATCH	models_generated/qwen-token-plan-cn.json	identical
+providers/qwen-token-plan-cn.ts:11	qwen-token-plan-cn api key env	[QWEN_TOKEN_PLAN_CN_API_KEY]	MATCH	env_api_keys.rs:12	identical
+providers/qwen-token-plan.ts:10	qwen-token-plan baseUrl	https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1	MATCH	models_generated/qwen-token-plan.json	identical
+providers/qwen-token-plan.ts:11	qwen-token-plan api key env	[QWEN_TOKEN_PLAN_API_KEY]	MATCH	env_api_keys.rs:11	identical
+providers/radius-config.ts:4	default radius gateway	https://radius.pi.dev	MATCH	radius.rs:22	identical
+providers/radius-config.ts:53	gateway url scheme normalization	regex /^https?:\/\//i (case-insensitive) else prefix https://	DRIFT	radius.rs:42-46	ri starts_with("http://")/("https://") is case-sensitive; an uppercase-scheme URL (e.g. HTTPS://host) is kept by pi but double-prefixed by ri
+providers/radius-config.ts:54	gateway url trailing-slash strip	replace(/\/+$/, "")	MATCH	radius.rs:47	trim_end_matches('/')
+providers/radius-config.ts:64	radius model api tag	pi-messages	MATCH	radius.rs:73	identical
+providers/radius-config.ts:66	radius model baseUrl override	config.baseUrl applied to every model	MATCH	radius.rs:75	identical
+providers/radius-config.ts:77	HTTP error body truncation	512 chars + "…"	MATCH	radius.rs:88-93	identical value (pi counts UTF-16 units, ri Unicode chars; differs only beyond BMP)
+providers/radius-config.ts:85	config request accept header	accept: application/json	MATCH	radius.rs:97	identical
+providers/radius-config.ts:86	config request auth header	authorization: Bearer <key>	MATCH	radius.rs:99	identical
+providers/radius-config.ts:87	gateway config path	/v1/config	MATCH	radius.rs:116	identical
+providers/radius.ts:21	radius provider id default	radius	MATCH	providers_all.rs:216	identical
+providers/radius.ts:22	radius display name default	Radius	MATCH	providers_all.rs:217	identical
+providers/radius.ts:32	radius api key env	[RADIUS_API_KEY]	MATCH	providers_all.rs:229 / env_api_keys.rs:14	identical
+providers/together.ts:10	together baseUrl	https://api.together.ai/v1	MATCH	models.rs / models_generated/together.json	identical
+providers/together.ts:11	together api key env	[TOGETHER_API_KEY]	MATCH	env_api_keys.rs:30	identical
+providers/vercel-ai-gateway.ts:10	vercel-ai-gateway baseUrl	https://ai-gateway.vercel.sh	MATCH	models.rs / models_generated/vercel-ai-gateway.json	identical
+providers/vercel-ai-gateway.ts:11	vercel-ai-gateway api key env	[AI_GATEWAY_API_KEY]	MATCH	env_api_keys.rs:22	identical
+providers/xai.ts:12	xai baseUrl	https://api.x.ai/v1	MATCH	models.rs / models_generated/xai.json	identical
+providers/xai.ts:14	xai api key env	[XAI_API_KEY]	MATCH	env_api_keys.rs:20	identical
+providers/xai.ts:15-19	xai oauth wiring	oauth "xAI (Grok/X subscription)" via loadXaiOAuth	MATCH	providers_all.rs:138-139	XaiOAuth special-cased for provider id xai (labels cosmetic)
+providers/xiaomi-token-plan-ams.ts:10	xiaomi-token-plan-ams baseUrl	https://token-plan-ams.xiaomimimo.com/v1	MATCH	models.rs / models_generated/xiaomi-token-plan-ams.json	identical
+providers/xiaomi-token-plan-ams.ts:11	xiaomi-token-plan-ams api key env	[XIAOMI_TOKEN_PLAN_AMS_API_KEY]	MATCH	env_api_keys.rs:36	identical
+providers/xiaomi-token-plan-cn.ts:10	xiaomi-token-plan-cn baseUrl	https://token-plan-cn.xiaomimimo.com/v1	MATCH	models.rs / models_generated/xiaomi-token-plan-cn.json	identical
+providers/xiaomi-token-plan-cn.ts:11	xiaomi-token-plan-cn api key env	[XIAOMI_TOKEN_PLAN_CN_API_KEY]	MATCH	env_api_keys.rs:35	identical
+providers/xiaomi-token-plan-sgp.ts:10	xiaomi-token-plan-sgp baseUrl	https://token-plan-sgp.xiaomimimo.com/v1	MATCH	models.rs / models_generated/xiaomi-token-plan-sgp.json	identical
+providers/xiaomi-token-plan-sgp.ts:11	xiaomi-token-plan-sgp api key env	[XIAOMI_TOKEN_PLAN_SGP_API_KEY]	MATCH	env_api_keys.rs:37	identical
+providers/xiaomi.ts:10	xiaomi baseUrl	https://api.xiaomimimo.com/v1	MATCH	models.rs / models_generated/xiaomi.json	identical
+providers/xiaomi.ts:11	xiaomi api key env	[XIAOMI_API_KEY]	MATCH	env_api_keys.rs:34	identical
+providers/zai-coding-cn.ts:10	zai-coding-cn baseUrl	https://open.bigmodel.cn/api/coding/paas/v4	MATCH	models_generated/zai-coding-cn.json	identical
+providers/zai-coding-cn.ts:11	zai-coding-cn api key env	[ZAI_CODING_CN_API_KEY]	MATCH	env_api_keys.rs:15	identical
+providers/zai.ts:10	zai baseUrl	https://api.z.ai/api/coding/paas/v4	MATCH	models.rs / models_generated/zai.json	identical
+providers/zai.ts:11	zai api key env	[ZAI_API_KEY]	MATCH	env_api_keys.rs:23	identical
+providers/faux.ts:20-24	faux defaults: api/provider/model id/model name/base url	faux / faux / faux-1 / Faux Model / http://localhost:0	MATCH	faux.rs:32-36	identical
+providers/faux.ts:25-26	faux token size defaults	min 3 / max 5	MATCH	faux.rs:37-38	identical
+providers/faux.ts:420-427	faux default model params	contextWindow 128000, maxTokens 16384, input [text,image], cost all 0	MATCH	faux.rs:450-461	identical
+providers/faux.ts:141	faux token estimate ratio	ceil(length/4)	MATCH	faux.rs:602-604	same /4 ceil (pi UTF-16 units vs ri chars; differs only beyond BMP)
+providers/faux.ts:145	faux random id format	{prefix}:{Date.now()}:{random base36}	MATCH	faux.rs:606-609	{prefix}:{now_millis}:{counter}; same 3-segment shape, uniqueness source differs (non-behavioral)
+providers/faux.ts:257-258	faux streaming chunk size	random tokenSize in [min,max] per chunk; charSize=max(1,tokenSize*4)	DRIFT	faux.rs:777-794	ri uses fixed char_size = max(min,max,1)*4 for every chunk (no randomness); delta chunk boundaries and event counts differ from pi
+providers/faux.ts:406-410	faux token size clamping	min=max(1,min(min,max)); max=max(min,max)	MATCH	faux.rs:446-447	equivalent clamps
+providers/faux.ts:304	faux pacing delay	estimateTokens(chunk)/tokensPerSecond seconds (ms timer)	MATCH	faux.rs:805	Duration::from_secs_f64(tokens/tps)
+providers/faux.ts:449	faux onResponse status	200	MATCH	faux.rs:346	identical
+providers/faux.ts:190-202	faux context serialization markers	"system:" prefix, "{role}:" per message, "tools:" + JSON, joined by \n\n	MATCH	faux.rs:664-682	identical markers and separator
+providers/faux.ts:157	faux image placeholder	[image:{mimeType}:{data.length}]	MATCH	faux.rs:619	identical (data is base64 string in both)
+utils/retry.ts:7	NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN (8 patterns: GoUsageLimitError, FreeUsageLimitError, Monthly usage limit reached, available balance, insufficient_quota, out of budget, quota exceeded, billing)	8 patterns, joined with |, case-insensitive	MATCH	retry.rs:14	identical 8 patterns, same order
+utils/retry.ts:26	RETRYABLE_PROVIDER_ERROR_PATTERN (37 patterns: overloaded, rate.?limit, 429/500/502/503/504/524, network/connection/socket/timeout family, websocket, premature stream endings, retry guidance, ResourceExhausted)	37 patterns, joined with |, case-insensitive	MATCH	retry.rs:36	identical 37 patterns, same order
+utils/retry.ts:4	provider-error regex case-insensitivity	RegExp flag "i"	MATCH	retry.rs:11	"(?i)" prefix
+utils/retry.ts:192	retry backoff formula	baseDelayMs * 2^(attempt-1)	MATCH	retry.rs:210	base_delay_ms saturating_mul(1<<(attempt-1)), shift capped at 62 (overflow guard only)
+utils/retry.ts:165	max attempts when policy disabled/undefined	0 (maxRetries only when enabled)	MATCH	retry.rs:164	same semantics
+utils/retry.ts:191	fallback retry error message	"Unknown error"	MATCH	retry.rs:208	identical
+utils/estimate.ts:14	CHARS_PER_TOKEN estimation ratio	4	MATCH	estimate.rs:22	4
+utils/estimate.ts:15	ESTIMATED_IMAGE_CHARS per image block	4800	MATCH	estimate.rs:23	4800
+utils/estimate.ts:25	unserializable JSON fallback string	"[unserializable]"	MATCH	estimate.rs:34	identical ("undefined" JS-only branch inapplicable to serde)
+utils/overflow.ts:37	OVERFLOW_PATTERNS list (25 regexes)	25 case-insensitive regexes	MATCH	overflow.rs:4	24 of 25 present, byte-identical patterns (order differs, no effect); 25th flagged separately below
+utils/overflow.ts:58	overflow pattern: /range of input length should be/i (DashScope/Qwen Token Plan HTTP 400)	regex present	MATCH	overflow.rs:28	r"range of input length should be" present in OVERFLOW_PATTERNS, compiled with (?i) matching pi /i flag (corrected after re-verification)
+utils/overflow.ts:74	NON_OVERFLOW_PATTERNS (Throttling error|Service unavailable prefix, rate limit, too many requests)	3 case-insensitive regexes	MATCH	overflow.rs:36	identical 3 patterns
+utils/overflow.ts:143	silent-overflow check (z.ai)	stopReason "stop" && input+cacheRead > contextWindow	MATCH	overflow.rs:63	identical
+utils/overflow.ts:153	length-stop overflow check (Xiaomi MiMo)	stopReason "length" && output==0 && input+cacheRead >= contextWindow*0.99	MATCH	overflow.rs:69	identical incl. 0.99 ratio
+utils/hash.ts:3	shortHash seeds	h1=0xdeadbeef, h2=0x41c6ce57	MATCH	json_repair.rs:270	identical
+utils/hash.ts:7	shortHash multipliers/shifts/output	2654435761, 1597334677, 2246822507, 3266489909; >>>16/>>>13; base36(h2)+base36(h1); UTF-16 code units	MATCH	json_repair.rs:269	identical incl. encode_utf16 and h2-then-h1 base36 concatenation
+utils/uuid.ts:15	uuidv7 format (version nibble 0x7, variant 0x8, 48-bit ms timestamp)	custom monotonic UUIDv7	MATCH	types.rs:887	uuid::Uuid::now_v7() — same v7 wire format; monotonicity via uuid crate counter instead of pi's 30-bit sequence (opaque ids, no parity impact)
+utils/sanitize-unicode.ts:24	sanitizeSurrogates: strip unpaired UTF-16 surrogates (U+D800-DBFF / U+DC00-DFFF)	replace with ""	MATCH	json_repair.rs:284	no-op by construction: Rust String cannot contain unpaired surrogates, so input is always already clean
+utils/json-parse.ts:3	VALID_JSON_ESCAPES	" \\ / b f n r t u (9 chars)	MATCH	json_repair.rs:102	identical set
+utils/json-parse.ts:7	control-character range escaped inside strings	0x00-0x1F	MATCH	json_repair.rs:5	identical
+utils/json-parse.ts:11	named escapes and unicode escape format	\b \f \n \r \t else \uXXXX (lowercase hex, padded to 4)	MATCH	json_repair.rs:8	identical
+utils/json-parse.ts:62	\u escape validation	^[0-9a-fA-F]{4}$	MATCH	json_repair.rs:19	is_ascii_hexdigit x4, equivalent
+utils/json-parse.ts:104	parseStreamingJson fallback chain	strict parse → repair → partial-json parse → partial(repaired) → {}	MATCH	json_repair.rs:139	same chain; ri implements its own partial-JSON completion (complete_partial_json + truncation_candidates) instead of the partial-json npm lib — same intent, empty-object terminal fallback identical
+-	repair_json unpaired-surrogate escape rewriting	-	EXTRA_IN_RI	json_repair.rs:69	\uD800-\uDBFF / \uDC00-\uDFFF escape sequences without a valid pair are rewritten to �. No pi counterpart (JS JSON.parse accepts lone surrogates; serde_json rejects them). Port necessity; changes repaired output only for malformed lone-surrogate escapes
+utils/text.ts:6	contentText join separator default	"\n"	MATCH	text.rs:6	separator is an explicit parameter (no Rust default args); call sites pass "\n"
+utils/provider-env.ts:45	provider env resolution order	scoped env override → process.env	MATCH	env_api_keys.rs:91	identical order; both treat empty string as unset
+utils/provider-env.ts:26	Bun sandbox env fallback path	"/proc/self/environ" parsed on NUL	MISSING_IN_RI	-	intentional: workaround for Bun bug #27802 (empty process.env in Linux sandboxes); native Rust binary always sees real env, fallback inapplicable. No behavioral gap
+utils/diagnostics.ts:22	diagnostic name for non-Error throw	"ThrownValue"	MATCH	diagnostics.rs:20	identical
+utils/error-body.ts:16	MAX_PROVIDER_ERROR_BODY_CHARS	4000	MATCH	http_api_provider.rs:2568	4000 (mistral.rs:18 duplicates 4000 for its path)
+utils/error-body.ts:117	error body truncation suffix	"... [truncated {n} chars]"	MATCH	http_api_provider.rs:2576	identical format
+utils/error-body.ts:106	formatProviderError composition	"<status>: <body>" / "<prefix> (<status>): <body>"	MATCH	http_api_provider.rs:2584	identical formats
+utils/error-body.ts:61	SDK status/body probe order (statusCode → status → $metadata.httpStatusCode → $response.statusCode; body → error → $response.body)	JS-SDK field probe chain	MATCH	http_api_provider.rs:2584	N/A by construction: ri reads raw HTTP status/body from reqwest directly, no SDK error shapes to probe; resulting display strings match
+compat.ts:216	AMBIENT_AUTH_MARKER	"<authenticated>"	MATCH	env_api_keys.rs:80	identical (returned for bedrock/vertex ambient creds; not forwarded as bearer key)
+compat.ts:233	Cloudflare gateway auth header name	"cf-aig-authorization"	MATCH	http_api_provider.rs:2250	identical
+compat.ts:178	builtin API ids registered	anthropic-messages, openai-completions, openai-responses, openai-codex-responses, azure-openai-responses, google-generative-ai, google-vertex, mistral-conversations, bedrock-converse-stream, pi-messages	MATCH	http_api_provider.rs:160	all 10 registered via register_builtin_api_provider_if_missing
+compat.ts:257	cloudflare provider compat routing prefix	provider.startsWith("cloudflare-") routes through Models auth when no resolved auth	MATCH	http_api_provider.rs:2249	ri resolves cloudflare-ai-gateway auth inline (cf-aig-authorization injection); same effective auth outcome, no compat layer in ri
+env-api-keys.ts:66	github-copilot API key env var	["COPILOT_GITHUB_TOKEN"]	MATCH	env_api_keys.rs:5	identical
+env-api-keys.ts:71	anthropic env precedence	["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] (OAuth token first)	MATCH	env_api_keys.rs:6	identical order
+env-api-keys.ts:74	provider→env-var map (34 entries: ant-ling, qwen-token-plan[-cn], openai, azure-openai-responses, nvidia, deepseek, google=GEMINI_API_KEY, google-vertex=GOOGLE_CLOUD_API_KEY, groq, cerebras, xai, radius, openrouter, vercel-ai-gateway=AI_GATEWAY_API_KEY, zai, zai-coding-cn, mistral, minimax[-cn], moonshotai[-cn]=MOONSHOT_API_KEY, huggingface=HF_TOKEN, fireworks, together, opencode[-go]=OPENCODE_API_KEY, kimi-coding=KIMI_API_KEY, cloudflare-*=CLOUDFLARE_API_KEY, xiaomi, xiaomi-token-plan-cn/ams/sgp)	34 provider→env pairs	MATCH	env_api_keys.rs:7	all 34 pairs identical
+env-api-keys.ts:51	Vertex explicit ADC path env var	GOOGLE_APPLICATION_CREDENTIALS	MATCH	env_api_keys.rs:132	identical
+env-api-keys.ts:57	Vertex default ADC path	~/.config/gcloud/application_default_credentials.json	MATCH	env_api_keys.rs:150	identical on Unix (HOME, USERPROFILE fallback)
+-	Windows ADC path %APPDATA%\gcloud\application_default_credentials.json	-	EXTRA_IN_RI	env_api_keys.rs:143	ri also checks APPDATA-based gcloud path; pi checks only homedir/.config. Windows-only widening of ambient-auth detection
+env-api-keys.ts:150	Vertex project env vars	GOOGLE_CLOUD_PROJECT || GCLOUD_PROJECT	MATCH	env_api_keys.rs:125	identical
+env-api-keys.ts:152	Vertex location env var	GOOGLE_CLOUD_LOCATION	MATCH	env_api_keys.rs:127	identical
+env-api-keys.ts:155	Vertex/Bedrock ambient marker	"<authenticated>"	MATCH	env_api_keys.rs:80	identical
+env-api-keys.ts:168	Bedrock cred source: AWS_PROFILE	env var checked	MATCH	env_api_keys.rs:116	identical
+env-api-keys.ts:169	Bedrock cred source: AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY	conjunction	MATCH	env_api_keys.rs:117	identical
+env-api-keys.ts:170	Bedrock cred source: AWS_BEARER_TOKEN_BEDROCK	env var checked	MATCH	env_api_keys.rs:118	identical
+env-api-keys.ts:171	Bedrock cred sources: AWS_CONTAINER_CREDENTIALS_RELATIVE_URI / AWS_CONTAINER_CREDENTIALS_FULL_URI	either suffices	MATCH	env_api_keys.rs:120	identical
+env-api-keys.ts:173	Bedrock cred source: AWS_WEB_IDENTITY_TOKEN_FILE	suffices alone	DRIFT	env_api_keys.rs:119	ri requires AWS_WEB_IDENTITY_TOKEN_FILE && AWS_ROLE_ARN. With only the token file set, pi reports bedrock configured ("<authenticated>"), ri reports unconfigured — bedrock invisible in ri under IRSA setups lacking AWS_ROLE_ARN
+models.ts:653	cost rate divisor ($/Mtok)	1000000	MATCH	models.rs:102	1_000_000.0
+models.ts:656	1h cache-write pricing multiplier	input rate × 2 for cacheWrite1h subset	MATCH	models.rs:106	identical
+models.ts:643	pricing tier selection	tier applies when inputTokens(input+cacheRead+cacheWrite) > tier.inputTokensAbove; highest threshold wins	MATCH	models.rs:89	identical
+models.ts:661	EXTENDED_THINKING_LEVELS order	off, minimal, low, medium, high, xhigh, max	MATCH	types.rs:42	identical order
+models.ts:669	xhigh/max availability rule	only when explicitly present in thinkingLevelMap	MATCH	models.rs:123	identical
+models.ts:684	clampThinkingLevel search	requested index upward, then downward, else first-or-off	MATCH	models.rs:139	identical
+models.ts:202	mergeHeaders override semantics	case-insensitive name replacement, override wins	MATCH	models_runtime.rs:1077	identical
+utils/node-http-proxy.ts:4	DEFAULT_PROXY_PORTS	ftp:21, gopher:70, http:80, https:443, ws:80, wss:443 (else 0)	MATCH	node_http_proxy.rs:264	identical
+utils/node-http-proxy.ts:82	proxy env lookup order	`${protocol}_proxy` then `all_proxy`	MATCH	node_http_proxy.rs:42	same relative order; ri inserts npm_config fallbacks between (flagged separately)
+utils/node-http-proxy.ts:38	no_proxy semantics	env no_proxy; "*" disables all; split on comma/whitespace; entries starting with . or * are suffix matches; :port filter	MATCH	node_http_proxy.rs:145	identical semantics
+utils/node-http-proxy.ts:13	proxy env case precedence	lowercase key before uppercase; scoped env before process env	MATCH	node_http_proxy.rs:119	identical
+utils/node-http-proxy.ts:83	scheme-less proxy default	prefix `${protocol}://` when proxy lacks "://"	MATCH	node_http_proxy.rs:49	identical
+utils/node-http-proxy.ts:107	allowed proxy protocols	http: and https: only	MATCH	node_http_proxy.rs:55	identical
+utils/node-http-proxy.ts:89	UNSUPPORTED_PROXY_PROTOCOL_MESSAGE	"Unsupported proxy protocol. SOCKS and PAC proxy URLs are not supported; use an HTTP or HTTPS proxy URL."	MATCH	node_http_proxy.rs:6	identical
+-	npm_config_* proxy env fallbacks	-	EXTRA_IN_RI	node_http_proxy.rs:42	ri also consults npm_config_{protocol}_proxy, npm_config_proxy, npm_config_all_proxy, npm_config_no_proxy; pi consults none of these. ri honors npm proxy config pi ignores
+-	reqwest connection pool idle timeout	-	EXTRA_IN_RI	node_http_proxy.rs:81	POOL_IDLE_TIMEOUT=50s (gateways drop idle conns ~60s). pi delegates pooling to SDK/undici defaults; ri-only transport tuning, no request-visible drift
+-	websocket target proxy mapping ws→http / wss→https	-	EXTRA_IN_RI	node_http_proxy.rs:65	ri maps ws(s) targets to http(s) before env lookup (so http_proxy/https_proxy govern). pi resolver would look up ws_proxy/wss_proxy but is never invoked with ws URLs in-repo (pi's websocket transport handles proxying elsewhere); benign extension
+utils/validation.ts:95	boolean string coercion	"true"→true, "false"→false; 1→true, 0→false	MATCH	validation.rs:563	identical
+utils/validation.ts:58	primitive coercion table	null→0 (number/integer), null→"" (string), null→false (boolean); ""/0/false→null; numeric strings parsed; bool→1/0	MATCH	validation.rs:542	identical mappings
+utils/validation.ts:253	validation error path formatting	instancePath "/"→"." rewriting, empty path → "root"	MATCH	validation.rs:45	identical ("root" label, dot-joined)
+utils/typebox-helpers.ts:18	StringEnum schema shape	{type:"string", enum:[...]}, description/default only when truthy	MATCH	typebox_helpers.rs:36	identical (non-empty filters mirror JS truthiness)
+-	retry sleep abort poll granularity	-	EXTRA_IN_RI	retry.rs:123	RETRY_SLEEP_POLL_MS=10ms polling of abort flag during backoff (pi uses event-driven AbortSignal). Worst case adds ≤10ms abort latency; no other drift

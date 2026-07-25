@@ -203,12 +203,16 @@ pub struct BranchSummaryResult {
 }
 
 pub fn estimate_tokens(text: &str) -> u64 {
-    text.chars().count().div_ceil(4) as u64
+    estimate_text_chars(text).div_ceil(4)
+}
+
+fn estimate_text_chars(text: &str) -> u64 {
+    text.chars().count() as u64
 }
 
 /// Images are estimated at 4800 characters, mirroring pi's
 /// `ESTIMATED_IMAGE_CHARS` heuristic.
-const ESTIMATED_IMAGE_TOKENS: u64 = 4800 / 4;
+const ESTIMATED_IMAGE_CHARS: u64 = 4800;
 
 /// Combine usage from two LLM calls, mirroring pi `combineUsage`.
 pub fn combine_usage(first: &Usage, second: &Usage) -> Usage {
@@ -305,10 +309,7 @@ pub fn get_last_assistant_usage(messages: &[Message]) -> Option<(usize, &Usage)>
         .enumerate()
         .rev()
         .find_map(|(index, message)| match message {
-            Message::Assistant(assistant)
-                if assistant.stop_reason != StopReason::Error
-                    && assistant.stop_reason != StopReason::Aborted =>
-            {
+            Message::Assistant(assistant) if assistant_usage_is_valid(assistant) => {
                 Some((index, &assistant.usage))
             }
             _ => None,
@@ -320,11 +321,7 @@ pub fn get_last_assistant_usage_from_entries(entries: &[SessionTreeEntry]) -> Op
         SessionTreeEntry::Message {
             message: SessionEntryMessage::Llm(Message::Assistant(assistant)),
             ..
-        } if assistant.stop_reason != StopReason::Error
-            && assistant.stop_reason != StopReason::Aborted =>
-        {
-            Some(&assistant.usage)
-        }
+        } if assistant_usage_is_valid(assistant) => Some(&assistant.usage),
         _ => None,
     })
 }
@@ -337,13 +334,18 @@ pub fn get_last_session_assistant_usage(messages: &[SessionMessage]) -> Option<(
         .find_map(|(index, message)| match message {
             SessionMessage::Llm {
                 message: Message::Assistant(assistant),
-            } if assistant.stop_reason != StopReason::Error
-                && assistant.stop_reason != StopReason::Aborted =>
-            {
-                Some((index, &assistant.usage))
-            }
+            } if assistant_usage_is_valid(assistant) => Some((index, &assistant.usage)),
             _ => None,
         })
+}
+
+/// pi `getAssistantUsage`: only accept a usage anchor when the stop reason is
+/// valid and the reported context tokens are non-zero; otherwise keep
+/// scanning older messages.
+fn assistant_usage_is_valid(assistant: &AssistantMessage) -> bool {
+    assistant.stop_reason != StopReason::Error
+        && assistant.stop_reason != StopReason::Aborted
+        && calculate_context_tokens(&assistant.usage) > 0
 }
 
 pub fn should_compact(messages: &[Message], settings: &CompactionSettings) -> bool {
@@ -1098,15 +1100,21 @@ pub fn convert_session_messages_to_llm(messages: &[SessionMessage]) -> Vec<Messa
         .collect()
 }
 
+// pi `estimateTokens`: sum the message's estimated character count first,
+// then apply a single ceil(chars / 4) per message (not per content block).
 fn estimate_message_tokens(message: &Message) -> u64 {
+    estimate_message_chars(message).div_ceil(4)
+}
+
+fn estimate_message_chars(message: &Message) -> u64 {
     match message {
         Message::User(message) => match &message.content {
-            ri_llm_provider::UserContentValue::Plain(text) => estimate_tokens(text),
+            ri_llm_provider::UserContentValue::Plain(text) => estimate_text_chars(text),
             ri_llm_provider::UserContentValue::Blocks(blocks) => blocks
                 .iter()
                 .map(|block| match block {
-                    ri_llm_provider::UserContent::Text(text) => estimate_tokens(&text.text),
-                    ri_llm_provider::UserContent::Image(_) => ESTIMATED_IMAGE_TOKENS,
+                    ri_llm_provider::UserContent::Text(text) => estimate_text_chars(&text.text),
+                    ri_llm_provider::UserContent::Image(_) => ESTIMATED_IMAGE_CHARS,
                 })
                 .sum(),
         },
@@ -1114,11 +1122,11 @@ fn estimate_message_tokens(message: &Message) -> u64 {
             .content
             .iter()
             .map(|content| match content {
-                AssistantContent::Text(text) => estimate_tokens(&text.text),
-                AssistantContent::Thinking(thinking) => estimate_tokens(&thinking.thinking),
+                AssistantContent::Text(text) => estimate_text_chars(&text.text),
+                AssistantContent::Thinking(thinking) => estimate_text_chars(&thinking.thinking),
                 AssistantContent::ToolCall(tool_call) => {
-                    estimate_tokens(&tool_call.name)
-                        + estimate_tokens(&safe_json_stringify(&tool_call.arguments))
+                    estimate_text_chars(&tool_call.name)
+                        + estimate_text_chars(&safe_json_stringify(&tool_call.arguments))
                 }
             })
             .sum(),
@@ -1126,40 +1134,44 @@ fn estimate_message_tokens(message: &Message) -> u64 {
             .content
             .iter()
             .map(|content| match content {
-                ri_llm_provider::ToolResultContent::Text(text) => estimate_tokens(&text.text),
-                ri_llm_provider::ToolResultContent::Image(_) => ESTIMATED_IMAGE_TOKENS,
+                ri_llm_provider::ToolResultContent::Text(text) => estimate_text_chars(&text.text),
+                ri_llm_provider::ToolResultContent::Image(_) => ESTIMATED_IMAGE_CHARS,
             })
             .sum(),
     }
 }
 
 fn estimate_session_message_tokens(message: &SessionMessage) -> u64 {
+    estimate_session_message_chars(message).div_ceil(4)
+}
+
+fn estimate_session_message_chars(message: &SessionMessage) -> u64 {
     match message {
-        SessionMessage::Llm { message } => estimate_message_tokens(message),
+        SessionMessage::Llm { message } => estimate_message_chars(message),
         SessionMessage::BashExecution(message) => {
-            estimate_tokens(&message.command) + estimate_tokens(&message.output)
+            estimate_text_chars(&message.command) + estimate_text_chars(&message.output)
         }
         SessionMessage::Custom { content, .. } => match content {
-            CustomMessageContent::Text(text) => estimate_tokens(text),
+            CustomMessageContent::Text(text) => estimate_text_chars(text),
             CustomMessageContent::Blocks(blocks) => blocks
                 .iter()
                 .map(|block| match block {
-                    UserContent::Text(text) => estimate_tokens(&text.text),
-                    UserContent::Image(_) => ESTIMATED_IMAGE_TOKENS,
+                    UserContent::Text(text) => estimate_text_chars(&text.text),
+                    UserContent::Image(_) => ESTIMATED_IMAGE_CHARS,
                 })
                 .sum(),
         },
         SessionMessage::BranchSummary { summary, .. }
-        | SessionMessage::CompactionSummary { summary, .. } => estimate_tokens(summary),
+        | SessionMessage::CompactionSummary { summary, .. } => estimate_text_chars(summary),
     }
 }
 
 fn estimate_entry_message_tokens(message: &SessionEntryMessage) -> u64 {
     match message {
         SessionEntryMessage::Llm(message) => estimate_message_tokens(message),
-        SessionEntryMessage::BashExecution(message) => {
-            estimate_tokens(&message.command) + estimate_tokens(&message.output)
-        }
+        SessionEntryMessage::BashExecution(message) => (estimate_text_chars(&message.command)
+            + estimate_text_chars(&message.output))
+        .div_ceil(4),
     }
 }
 

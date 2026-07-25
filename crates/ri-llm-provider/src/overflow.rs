@@ -25,6 +25,7 @@ static OVERFLOW_PATTERNS: std::sync::LazyLock<Vec<Regex>> = std::sync::LazyLock:
         r"prompt too long; exceeded (?:max )?context length",
         r"context[_ ]length[_ ]exceeded",
         r"too many tokens",
+        r"range of input length should be",
         r"token limit exceeded",
         r"^4(?:00|13)\s*(?:status code)?\s*\(no body\)",
     ]
@@ -60,7 +61,9 @@ pub fn is_context_overflow(message: &AssistantMessage, context_window: Option<u6
         }
     }
 
-    if let Some(context_window) = context_window {
+    // pi: `model.contextWindow &&` — a zero context window disables the
+    // token-count heuristics (JS falsy), it does not mean "window of 0".
+    if let Some(context_window) = context_window.filter(|window| *window > 0) {
         let input_tokens = message.usage.input + message.usage.cache_read;
         if message.stop_reason == StopReason::Stop && input_tokens > context_window {
             return true;

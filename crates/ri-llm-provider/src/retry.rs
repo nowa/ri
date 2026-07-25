@@ -89,6 +89,14 @@ static RETRYABLE_PROVIDER_ERROR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     ])
 });
 
+/// True when the error text matches a terminal account/subscription limit
+/// (pi `NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN`). Shared with the OpenAI
+/// Codex inner retry loop, whose terminal rate-limit gate uses the same
+/// pattern (pi openai-codex-responses.ts `isTerminalRateLimitError`).
+pub fn is_non_retryable_provider_limit_error(error_message: &str) -> bool {
+    NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.is_match(error_message)
+}
+
 /// Retry policy: bounded attempts with exponential backoff
 /// (`base_delay_ms * 2^(attempt-1)`).
 #[derive(Debug, Clone, PartialEq, Eq)]

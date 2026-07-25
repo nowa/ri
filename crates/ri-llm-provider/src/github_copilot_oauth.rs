@@ -303,7 +303,8 @@ pub fn parse_github_copilot_device_code_response(
             .get("verification_uri_complete")
             .and_then(Value::as_str)
             .map(str::to_owned),
-        interval_seconds: required_u64(&data, "interval", "GitHub Copilot device code")?,
+        // pi treats `interval` as optional (RFC 8628 default: 5 seconds).
+        interval_seconds: data.get("interval").and_then(Value::as_u64).unwrap_or(5),
         expires_in_seconds: required_u64(&data, "expires_in", "GitHub Copilot device code")?,
     })
 }

@@ -678,7 +678,10 @@ fn session_builds_model_thinking_compaction_custom_and_branch_summary_context() 
         .expect("custom");
 
     let context = session.build_context().expect("context");
-    assert_eq!(context.thinking_level, "high");
+    // pi Session.getBranch() stops at the compaction boundary, so the
+    // pre-boundary thinking-level change is not part of the derived state;
+    // the model still derives from the kept assistant message.
+    assert_eq!(context.thinking_level, "off");
     assert_eq!(context.model.expect("model").provider, "test");
     assert_eq!(
         context

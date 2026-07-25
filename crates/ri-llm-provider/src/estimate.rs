@@ -35,16 +35,16 @@ fn safe_json_stringify<T: serde::Serialize>(value: &T) -> String {
 }
 
 pub fn estimate_text_tokens(text: &str) -> u64 {
-    (text.chars().count() as u64).div_ceil(CHARS_PER_TOKEN)
+    (text.encode_utf16().count() as u64).div_ceil(CHARS_PER_TOKEN)
 }
 
 fn estimate_user_content_chars(content: &UserContentValue) -> u64 {
     match content {
-        UserContentValue::Plain(text) => text.chars().count() as u64,
+        UserContentValue::Plain(text) => text.encode_utf16().count() as u64,
         UserContentValue::Blocks(blocks) => blocks
             .iter()
             .map(|block| match block {
-                UserContent::Text(text) => text.text.chars().count() as u64,
+                UserContent::Text(text) => text.text.encode_utf16().count() as u64,
                 UserContent::Image(_) => ESTIMATED_IMAGE_CHARS,
             })
             .sum(),
@@ -55,7 +55,7 @@ fn estimate_tool_result_content_chars(content: &[ToolResultContent]) -> u64 {
     content
         .iter()
         .map(|block| match block {
-            ToolResultContent::Text(text) => text.text.chars().count() as u64,
+            ToolResultContent::Text(text) => text.text.encode_utf16().count() as u64,
             ToolResultContent::Image(_) => ESTIMATED_IMAGE_CHARS,
         })
         .sum()
@@ -71,12 +71,15 @@ pub fn estimate_message_tokens(message: &Message) -> u64 {
             .content
             .iter()
             .map(|block| match block {
-                AssistantContent::Text(text) => text.text.chars().count() as u64,
-                AssistantContent::Thinking(thinking) => thinking.thinking.chars().count() as u64,
+                AssistantContent::Text(text) => text.text.encode_utf16().count() as u64,
+                AssistantContent::Thinking(thinking) => {
+                    thinking.thinking.encode_utf16().count() as u64
+                }
                 AssistantContent::ToolCall(tool_call) => {
-                    (tool_call.name.chars().count()
-                        + safe_json_stringify(&tool_call.arguments).chars().count())
-                        as u64
+                    (tool_call.name.encode_utf16().count()
+                        + safe_json_stringify(&tool_call.arguments)
+                            .encode_utf16()
+                            .count()) as u64
                 }
             })
             .sum(),

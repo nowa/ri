@@ -1,0 +1,138 @@
+pi_file:line	constant	pi_value	verdict	ri_file:line	ri_value/detail
+agent.ts:38-45	EMPTY_USAGE failure-message usage	all fields 0	MATCH	agent_loop.rs (failure msgs) / proxy.rs:477	Usage::zero()
+agent.ts:47-58	DEFAULT_MODEL placeholder	id/name/api/provider "unknown", contextWindow 0, maxTokens 0	MISSING_IN_RI	agent.rs:191	AgentOptions::new(model) requires explicit Model; no placeholder fallback. Benign: ri API makes omission impossible
+agent.ts:76	thinkingLevel default	"off"	MATCH	agent.rs:195	ThinkingLevel::Off
+agent.ts:224	Agent steeringMode default	"one-at-a-time"	MATCH	agent.rs:211	QueueMode::OneAtATime
+agent.ts:225	Agent followUpMode default	"one-at-a-time"	MATCH	agent.rs:212	QueueMode::OneAtATime
+agent.ts:228	transport default	"auto"	MATCH	ri-llm-provider http_api_provider.rs:1057	transport None -> Transport::Auto at provider
+agent.ts:230	toolExecution default	"parallel"	MATCH	agent.rs:209	ToolExecutionMode::Parallel
+agent.ts:140-152	queue drain semantics	"all"=drain all; "one-at-a-time"=oldest 1	MATCH	agent.rs:70-80	same
+agent-loop.ts:212-214	fail all tool calls when stopReason=="length"	length	MATCH	agent_loop.rs:578-608	same guard + identical error text
+agent-loop.ts:396	truncated tool-call error text	"Tool call \"{name}\" was not executed: the response hit the output token limit..."	MATCH	agent_loop.rs:600	identical
+agent-loop.ts:611	unknown tool error	"Tool {name} not found"	MATCH	agent_loop.rs:758	identical
+agent-loop.ts:639	default block reason	"Tool execution was blocked"	MATCH	agent_loop.rs:821	identical
+agent-loop.ts:632,647	abort tool result text	"Operation aborted"	MATCH	agent_loop.rs:805,842	identical
+harness/agent-harness.ts:343	default system prompt	"You are a helpful assistant."	MATCH	harness/system_prompt.rs:3 + agent_harness.rs:566	DEFAULT_SYSTEM_PROMPT identical
+harness/agent-harness.ts:216	harness steeringMode default	"one-at-a-time"	MATCH	harness/agent_harness.rs:573	QueueMode::OneAtATime
+harness/agent-harness.ts:217	harness followUpMode default	"one-at-a-time"	MATCH	harness/agent_harness.rs:574	QueueMode::OneAtATime
+harness/agent-harness.ts:409	drainQueuedMessages	all=splice(0); one=splice(0,1)	MATCH	harness/agent_harness.rs:619-620	drain(..) / pop_front()
+harness/agent-harness.ts:566-574	nextTurn queue drained fully before prompt, queued msgs precede user msg	splice(0), order [queued..., user]	MATCH	harness/agent_harness.rs:850,1845-1874	QueueMode::All; same ordering incl. before_agent_start msgs appended last
+harness/agent-harness.ts:720-721	compaction input = session.getBranch() (active branch path, stops at prior compaction boundary)	getBranch()	DRIFT	harness/agent_harness.rs:1398	compact_session uses session.entries() (entire append log: abandoned sibling branches, leaf markers, pre-compaction history). tokens_before overcounts and messages_to_summarize/cut point can include off-branch entries whenever the session tree has branches
+harness/agent-harness.ts:686,692	steer/followUp require non-idle	"Cannot steer while idle"/"Cannot follow up while idle"	MATCH	harness/agent_harness.rs:1326,1345	identical guards
+harness/agent-harness.ts:697-699	nextTurn allowed while idle	no phase check	MATCH	harness/agent_harness.rs:1351-1362	no phase check
+harness/compaction/compaction.ts:162	DEFAULT_COMPACTION_SETTINGS.enabled	true	MATCH	harness/compaction.rs:60	true
+harness/compaction/compaction.ts:164	reserveTokens	16384	MATCH	harness/compaction.rs:61	16_384
+harness/compaction/compaction.ts:165	keepRecentTokens	20000	MATCH	harness/compaction.rs:62	20_000
+harness/compaction/compaction.ts:253	shouldCompact threshold	tokens > window - reserve	MATCH	harness/compaction.rs:354-360	tokens + reserve > window (equivalent, saturating)
+harness/compaction/compaction.ts:256	ESTIMATED_IMAGE_CHARS	4800	MATCH	harness/compaction.rs:211	ESTIMATED_IMAGE_TOKENS = 4800/4 = 1200
+harness/compaction/compaction.ts:275-315	estimateTokens divisor + rounding	ceil(total message chars / 4), one ceil per message	DRIFT	harness/compaction.rs:205-207,1101-1164	div_ceil(4) per content block then summed; ri can overcount up to (#blocks-1) tokens per message. Divisor 4 matches; only rounding granularity differs (marginal cut-point/threshold shifts)
+harness/compaction/compaction.ts:174-185	getAssistantUsage guard	stopReason not aborted/error AND calculateContextTokens(usage) > 0	MISSING_IN_RI	harness/compaction.rs:302-347	ri get_last_assistant_usage/get_last_session_assistant_usage/..._from_entries only check stop_reason; a zero-usage assistant message anchors the estimate at usage_tokens=0 instead of falling back to an earlier real usage -> context-token undercount, compaction may fail to trigger
+harness/compaction/compaction.ts:170	calculateContextTokens	totalTokens || sum(input,output,cacheRead,cacheWrite)	MATCH	harness/compaction.rs:241-247	same
+harness/compaction/compaction.ts:551-553	summary maxTokens	min(floor(0.8*reserve), model.maxTokens if >0)	MATCH	harness/compaction.rs:1361-1364,1461-1473	reserve*8/10, min model.max_tokens when >0
+harness/compaction/compaction.ts:825-827	turn-prefix summary maxTokens	min(floor(0.5*reserve), model.maxTokens if >0)	MATCH	harness/compaction.rs:1362	reserve*5/10
+harness/compaction/compaction.ts:561-565	prompt wrappers	"<conversation>\n...\n</conversation>\n\n" + "<previous-summary>\n...\n</previous-summary>\n\n"	MATCH	harness/compaction.rs:1371-1392	identical
+harness/compaction/compaction.ts:557	custom instructions joiner	"\n\nAdditional focus: "	MATCH	harness/compaction.rs:1382,868	identical
+harness/compaction/compaction.ts:576-578	reasoning passed only if model.reasoning && thinkingLevel != off	condition	MATCH	harness/compaction.rs:1482	same filter
+harness/compaction/compaction.ts:751	empty-history placeholder	"No prior history."	MATCH	harness/compaction.rs:649	identical
+harness/compaction/compaction.ts:781	split-turn summary joiner	"\n\n---\n\n**Turn Context (split turn):**\n\n"	MATCH	harness/compaction.rs:684-687	identical
+harness/compaction/compaction.ts:316-354	valid cut-point entry kinds	message(user/assistant/bashExecution/custom/branchSummary/compactionSummary), branch_summary, custom_message	MATCH	harness/compaction.rs:1166-1187	same set (toolResult excluded)
+harness/compaction/compaction.ts:398-432	cut-point walk-back + keepRecentTokens accumulation	accumulate >= keepRecentTokens; walk back past non-message/non-compaction	MATCH	harness/compaction.rs:402-465	same
+harness/compaction/compaction.ts:656	tokensBefore source	estimateContextTokens(buildSessionContext(pathEntries).messages).tokens	MATCH	harness/compaction.rs:502-503	same formula (input entries differ per agent-harness DRIFT above)
+harness/compaction/utils.ts:74	TOOL_RESULT_MAX_CHARS	2000	MATCH	harness/compaction.rs:1085	literal 2000 (char-count vs UTF-16 units = known divergence, not re-flagged)
+harness/compaction/utils.ts:39-49	file-op tool names + arg key	"read"/"write"/"edit", args.path	MATCH	harness/compaction.rs:963-975	identical
+harness/compaction/utils.ts:65-71	file list tags	"<read-files>...</read-files>", "<modified-files>...</modified-files>", "\n\n" joiners	MATCH	harness/compaction.rs:999-1018	identical
+harness/compaction/utils.ts:91-132	serializeConversation markers	"[User]: ", "[Assistant thinking]: ", "[Assistant]: ", "[Assistant tool calls]: ", "; ", ", ", parts joined "\n\n"	MATCH	harness/compaction.rs:1020-1092	identical incl. text join "\n", user/toolResult join ""
+harness/compaction/utils.ts:84-88	truncateForSummary suffix	"\n\n[... {n} more characters truncated]"	MATCH	harness/compaction.rs:1295-1303	identical
+harness/compaction/compaction.ts:54-64	prev-compaction details keys + fromHook guard	"readFiles"/"modifiedFiles", skip when fromHook	MATCH	harness/compaction.rs:1261-1272,789-794	identical
+harness/compaction/branch-summarization.ts:213	branch summary reserveTokens default	16384	MATCH	harness/compaction.rs:838	16_384
+harness/compaction/branch-summarization.ts:217	contextWindow fallback	model.contextWindow || 128000	MATCH	harness/compaction.rs:842-846	128_000 when context_window==0
+harness/compaction/branch-summarization.ts:218	tokenBudget	contextWindow - reserveTokens	MATCH	harness/compaction.rs:847	saturating_sub
+harness/compaction/branch-summarization.ts:151-158	budget overshoot allowance for compaction/branch_summary entries	include if totalTokens < budget*0.9	MATCH	harness/compaction.rs:804-813	total*10 < budget*9 (integer-exact equivalent)
+harness/compaction/branch-summarization.ts:248	branch summary maxTokens	2048	MATCH	harness/compaction.rs:889	2_048
+harness/compaction/branch-summarization.ts:223	empty branch placeholder	"No content to summarize"	MATCH	harness/compaction.rs:852	identical
+harness/compaction/branch-summarization.ts:270	fallback summary	"No summary generated"	MATCH	harness/compaction.rs:935-938	identical (both unreachable due to preamble)
+harness/compaction/branch-summarization.ts:168-171	BRANCH_SUMMARY_PREAMBLE	"The user explored a different conversation branch before returning here.\nSummary of that exploration:\n\n"	MATCH	harness/compaction.rs:31	identical
+harness/compaction/branch-summarization.ts:127	prepareBranchEntries tokenBudget default	0 (= unlimited)	MATCH	harness/compaction.rs:804	token_budget > 0 guard preserves unlimited-at-0
+harness/compaction/branch-summarization.ts:104	toolResult excluded from branch summary	role toolResult -> skip	MATCH	harness/compaction.rs:1241-1253	identical
+harness/messages.ts:4-10	COMPACTION_SUMMARY_PREFIX/SUFFIX	"The conversation history before this point was compacted into the following summary:\n\n<summary>\n" / "\n</summary>"	MATCH	harness/compaction.rs:18-19	identical
+harness/messages.ts:12-17	BRANCH_SUMMARY_PREFIX/SUFFIX	"The following is a summary of a branch that this conversation came back from:\n\n<summary>\n" / "</summary>"	MATCH	harness/compaction.rs:20-22	identical
+harness/messages.ts:63-79	bashExecutionToText format	"Ran `{cmd}`\n", "```" fences, "(no output)", "(command cancelled)", "Command exited with code {n}", "[Output truncated. Full output: {path}]"	MATCH	harness/session.rs:1824-1846	identical
+harness/messages.ts:124-127	bashExecution excludeFromContext skip	excludeFromContext -> drop from LLM context	MATCH	harness/compaction.rs:1498-1509	identical
+harness/system-prompt.ts:7-24	skills system-prompt block	3 instruction lines + <available_skills>/<skill>/<name>/<description>/<location> markers, disableModelInvocation filter	MATCH	harness/system_prompt.rs:14-39	identical text and markers
+harness/system-prompt.ts:27-34	escapeXml entities	& < > " ' -> 5 entities	MATCH	harness/system_prompt.rs:41-48	identical order
+harness/skills.ts:5	MAX_NAME_LENGTH	64	MATCH	harness/skills.rs:7	64 (chars vs UTF-16 = known divergence)
+harness/skills.ts:6	MAX_DESCRIPTION_LENGTH	1024	MATCH	harness/skills.rs:8	1024
+harness/skills.ts:7	IGNORE_FILE_NAMES	[".gitignore", ".ignore", ".fdignore"]	MATCH	harness/skills.rs:9	identical
+harness/skills.ts:138	skill file name	"SKILL.md" (exact, dir short-circuits)	MATCH	harness/skills.rs:163-180	identical incl. early return
+harness/skills.ts:152	directory skip rules	name startsWith "." or == "node_modules"	MATCH	harness/skills.rs:185	identical
+harness/skills.ts:168	root-level loose skills	include only root ".md" files	MATCH	harness/skills.rs:205	identical
+harness/skills.ts:31-34,259-275	frontmatter keys	"name", "description", "disable-model-invocation" (=== true)	MATCH	harness/skills.rs:576-579	identical; empty name falls back to dir name in both
+harness/skills.ts:285-289	name validation	^[a-z0-9-]+$, no lead/trail hyphen, no "--", must match parent dir	MATCH	harness/skills.rs:497-526	identical rules
+harness/skills.ts:303-317	frontmatter delimiters	starts "---", end "\n---" from idx 3, yaml [4..end], body [end+4..].trim()	MATCH	harness/skills.rs:552-581	identical offsets
+harness/skills.ts:1 (ignore pkg)	ignore-pattern matching engine	npm "ignore" package (full gitignore: **, character classes, anchored patterns, escapes)	DRIFT	harness/skills.rs:305-430	hand-rolled matcher supporting only * and ? per path component; "**" does not span directories, no [class] sets. Skills under paths matched by advanced gitignore patterns are ignored in pi but still loaded in ri (and vice versa for ** patterns)
+harness/skills.ts:38-41	skill invocation block	"<skill name=\"..\" location=\"..\">\nReferences are relative to {dir}.\n\n{content}\n</skill>" + optional "\n\n{instructions}"	MATCH	harness/skills.rs:50-64	identical
+harness/skills.ts:151	skill dir iteration order	entries.sort(localeCompare)	DRIFT	harness/skills.rs:182,219	byte-order sort_by_key(file_name); ordering of loaded skills (and thus system-prompt listing) can differ for non-ASCII/mixed-case names
+harness/prompt-templates.ts:55,115	template extension filter	name.endsWith(".md") (case-sensitive)	MATCH	harness/prompt_templates.rs:59,122	extension()=="md" case-sensitive
+harness/prompt-templates.ts:154-155	derived description truncation	firstLine.slice(0,60) + "..." if len>60	MATCH	harness/prompt_templates.rs:154-159	identical (chars vs UTF-16 = known divergence)
+harness/prompt-templates.ts:159	template name	basename minus /\.md$/i (case-insensitive)	MATCH	harness/prompt_templates.rs:170-181	eq_ignore_ascii_case(".md")
+harness/prompt-templates.ts:18-21	frontmatter key	"description" ("argument-hint" declared but unused)	MATCH	harness/prompt_templates.rs:204	"description" only; parity
+harness/prompt-templates.ts:249-261	substitution placeholders	$N (1-based), ${@:N}, ${@:N:L}, $ARGUMENTS, $@; order numbered->slices->ARGUMENTS->@	MATCH	harness/prompt_templates.rs:247-343	identical semantics incl. $0 -> ""
+harness/prompt-templates.ts:223-246	parseCommandArgs	quotes ' and ", separators space/tab	MATCH	harness/prompt_templates.rs:220-245	identical
+harness/prompt-templates.ts:113	template dir iteration order	entries.sort(localeCompare)	DRIFT	harness/prompt_templates.rs:125	byte-order paths.sort(); template list ordering can differ for non-ASCII names
+harness/env/nodejs.ts:31-44	exec timeout contract	timeout in SECONDS, ms = t*1000, reject t<=0/non-finite, cap 2_147_483_647 ms	MISSING_IN_RI	harness/env.rs:98,537-549	ExecOptions.timeout_ms: Option<u64> taken directly in ms; no upper cap, no <=0 rejection (0 -> immediate timeout instead of error). Unit conversion + validation left to callers; a caller porting pi semantics naively passes seconds and gets a 1000x shorter timeout
+harness/env/nodejs.ts:153-161	bash lookup via which/where subprocess	5000 ms timeout	MATCH	harness/env.rs:695-699	ri scans PATH directly (no subprocess, no timeout needed); same resolution result
+harness/env/nodejs.ts:186-200,169-176	Windows shell candidates	%ProgramFiles%\Git\bin\bash.exe, %ProgramFiles(x86)%\..., legacy WSL system32/sysnative bash.exe -> stdin transport ("-s")	MISSING_IN_RI	harness/env.rs:685-699	ri: /bin/bash -> bash(.exe) on PATH -> "sh"; on Windows with Git-bash installed but not on PATH pi finds a shell, ri falls back to "sh" (likely unavailable) -> shell_unavailable
+harness/env/nodejs.ts:203	primary shell	"/bin/bash"	MATCH	harness/env.rs:686	identical
+harness/env/nodejs.ts:210	shell fallback	"sh" with "-c"	MATCH	harness/env.rs:692,477	identical
+harness/env/nodejs.ts:175	bash invocation arg	"-c"	MATCH	harness/env.rs:477	identical
+harness/env/nodejs.ts:236-243	process-tree kill	SIGKILL to -pid (process group), fallback pid	MATCH	harness/env.rs:705-716	kill(-pid, SIGKILL) + child.kill(); child spawned in own process group in both
+harness/env/nodejs.ts:546	createTempDir default prefix	"tmp-"	MATCH	harness/env.rs:426	create_temp_file parents under create_temp_dir("tmp-")
+harness/env/nodejs.ts:557	temp file name	{prefix}{uuid}{suffix} inside tmp- dir	MATCH	harness/env.rs:425-438	{prefix}{nanos-pid}{suffix}; unique-name contract preserved
+(ri only)	exec poll interval / pipe read buffer	n/a	EXTRA_IN_RI	harness/env.rs:550,608	5 ms try_wait poll, 8192-byte read buffer; implementation details, only affect callback chunk granularity
+harness/utils/truncate.ts:11	DEFAULT_MAX_LINES	2000	MATCH	harness/truncate.rs:1	2000
+harness/utils/truncate.ts:12	DEFAULT_MAX_BYTES	50*1024 = 51200	MATCH	harness/truncate.rs:2	50*1024
+harness/utils/truncate.ts:13	GREP_MAX_LINE_LENGTH	500	MATCH	harness/truncate.rs:3	500
+harness/utils/truncate.ts:343	truncateLine suffix	"... [truncated]"	MATCH	harness/truncate.rs:266	identical (char vs UTF-16 counting = known divergence)
+harness/utils/truncate.ts:108-116	formatSize thresholds	<1024 "B", <1024*1024 "KB" (1 dp), else "MB" (1 dp)	MATCH	harness/truncate.rs:58-66	identical
+harness/utils/truncate.ts:221	tail trailing-newline pop	drop trailing "" line if >1 lines	MATCH	harness/truncate.rs:148	identical
+harness/utils/truncate.ts:175,249	per-line byte accounting	+1 newline byte after first line	MATCH	harness/truncate.rs:111,175	identical
+harness/utils/truncate.ts:251-261	tail partial-line edge	partial last line kept when single line exceeds maxBytes	MATCH	harness/truncate.rs:176-187	identical
+harness/utils/shell-output.ts:42	in-memory tail ring budget	DEFAULT_MAX_BYTES*2 = 102400	MATCH	harness/shell_output.rs:113	DEFAULT_MAX_BYTES*2
+harness/utils/shell-output.ts:80	full-output spill threshold	totalBytes > DEFAULT_MAX_BYTES (51200)	MATCH	harness/shell_output.rs:99	identical
+harness/utils/shell-output.ts:64-67	spill temp file	prefix "bash-", suffix ".log"	MATCH	harness/shell_output.rs:101,140	identical
+harness/utils/shell-output.ts:22-33	sanitizeBinaryOutput	keep 0x09/0x0A/0x0D; strip <=0x1F; strip U+FFF9..U+FFFB	MATCH	harness/shell_output.rs:19-30	identical
+harness/utils/shell-output.ts:79	CR strip	replace \r -> ""	MATCH	harness/shell_output.rs:94	identical
+harness/utils/shell-output.ts:87-90	ring-buffer eviction	evict oldest chunk while over budget, keep >=1	MATCH	harness/shell_output.rs:113-117	identical
+harness/session/session.ts:40	derived thinkingLevel default	"off"	MATCH	harness/session.rs:1617	identical
+harness/session/session.ts:328	appendSessionName sanitization	replace(/[\r\n]+/g," ").trim()	MATCH	harness/session.rs:1920-1935	newline-run collapse to single space + trim
+harness/session/session.ts:352	branch-summary fromId fallback	entryId ?? "root"	MATCH	harness/session.rs:1296-1301	identical incl. parentId null at root
+harness/session/session.ts:59-90	default compaction context transform	latest compaction leads; keep firstKeptEntryId..compaction-1 then post-compaction tail	MATCH	harness/session.rs:1656-1692	identical (retainedTail branch = known missing)
+harness/session/session.ts:129-135	branch_summary projected only when summary non-empty; custom entries omitted unless projector	condition	MATCH	harness/session.rs:1723-1729,1868-1877	identical
+harness/session/session.ts:179-182	Session.getBranch path semantics	getPathToRootOrCompaction (stops at prior compaction boundary)	DRIFT	harness/session.rs:1033-1043	Session::branch() uses path_to_root (full walk to root; never stops at compaction). build_context is rescued by the default transform, but collect_entries_for_branch_summary (compaction.rs:738-746) sees pre-compaction ancestors pi would exclude -> common-ancestor detection differs when tree navigation crosses a compaction boundary
+harness/session/jsonl-storage.ts:17,77	session header version	3 (exact match required)	MATCH	harness/session.rs:604,2065	3
+harness/session/jsonl-storage.ts:76	header type tag	"session"	MATCH	harness/session.rs:603,2059	identical
+harness/session/jsonl-storage.ts:43-51	entry id generation	uuidv7().slice(-8), 100 collision retries, fallback full uuidv7	MATCH	harness/session.rs:1937-1948 (+sqlite_session.rs:688)	identical (8 chars, 100, fallback)
+harness/session/jsonl-storage.ts:153-156	metadata header read	readTextLines maxLines:1	MATCH	harness/session.rs:1777-1783	single read_line
+harness/session/jsonl-storage.ts:65-132	header/entry field validation	type/version/id/timestamp/cwd/parentSession/metadata; entry type/id/parentId(null|string)/timestamp/leaf targetId	MATCH	harness/session.rs:2055-2177	identical checks and messages
+harness/session/jsonl-storage.ts:171,179-183	blank-line filter + 1-based line numbers over filtered lines	split("\n").filter(trim)	MATCH	harness/session.rs:2037-2052	identical quirk
+harness/session/jsonl-storage.ts:371-375	getEntries cursor semantics	start = afterEntrySeq ?? 0; slice(start, start+limit) - FORWARD page; afterEntrySeq honored without limit	DRIFT	harness/session.rs:815-823,870-883	ri treats after_entry_seq as inclusive UPPER bound and returns the `limit` entries ENDING there (backward window); with limit=None, after_entry_seq is ignored and ALL entries return. Any pi-style forward cursor pagination (resume-from-seq) returns wrong windows in ri
+harness/session/jsonl-storage.ts:350-369	getPathToRootOrCompaction stop rules	stop at firstKeptEntryId (inclusive); retainedTail break	MATCH	harness/session.rs:888-928	identical sans retainedTail (known); ri also filters Leaf entries (unreachable in pi paths anyway)
+harness/session/jsonl-repo.ts:34-36	encodeCwd	"--" + cwd minus ONE leading [/\\], [/\\:]->"-" + "--"	MATCH	harness/session.rs:1507-1513	identical
+harness/session/jsonl-repo.ts:65-73	session file name	{timestamp with [:.]->"-"}_{sessionId}.jsonl	MATCH	harness/session.rs:1422,2219-2221	identical
+harness/session/repo-utils.ts:16	createTimestamp	new Date().toISOString() (ms precision, Z)	MATCH	harness/session.rs:2215-2217	to_rfc3339_opts(Millis, true)
+harness/session/jsonl-repo.ts:110-113	list filter	kind != directory && endsWith(".jsonl")	MATCH	harness/session.rs:1454-1462	identical
+harness/session/jsonl-repo.ts:123	list ordering	createdAt descending (Date.getTime)	MATCH	harness/session.rs:1470,2229-2246	rfc3339 millis desc; unparsable -> Equal (pi NaN comparator also non-total); negligible
+harness/session/jsonl-repo.ts:117-121	list skips invalid sessions	skip SessionError code "invalid_session" only	MATCH	harness/session.rs:1463-1467	identical
+harness/session/jsonl-repo.ts:127-132	delete	rm force:true (missing ok)	MATCH	harness/session.rs:1474-1480	NotFound -> Ok
+harness/session/repo-utils.ts:32-51	fork target rules	position default "before"; "before" requires user message; "at" keeps target; empty entryId -> all entries	MATCH	harness/session.rs:1541-1591	identical incl. empty-string filter
+harness/session/jsonl-repo.ts:147-156	fork inheritance	parentSessionPath ?? source.path; metadata ?? source.metadata	MATCH	harness/session.rs:1489-1500	identical
+harness/session/jsonl-storage.ts:308-348	getSessionStats	messageCount(all message entries); cached=cacheRead; uncached=input+cacheWrite; total=input+output+cacheRead+cacheWrite; costTotal; includes compaction+branch_summary usage	MATCH	harness/sqlite_session.rs:104-200	identical formulas (serde guarantees the numeric-fields guard)
+harness/session/jsonl-storage.ts:303-306	getSessionName	last session_info entry, trimmed, empty -> undefined	MATCH	harness/session.rs:1073-1085	identical
+harness/session/memory-storage.ts:61	in-memory metadata default	{id: uuidv7(), createdAt: toISOString()}	MATCH	harness/session.rs:494-498	identical
+proxy.ts:152	proxy endpoint	POST {proxyUrl}/api/stream	MATCH	proxy.rs:224	identical (ri also trims trailing "/")
+proxy.ts:155-156	auth + content-type headers	Authorization: Bearer {token}; application/json	MATCH	proxy.rs:233-234	bearer_auth + content-type
+proxy.ts:196-198	SSE line prefix	"data: " then slice(6).trim()	MATCH	proxy.rs:271-272	strip_prefix("data: ") + trim
+proxy.ts:59-71	serializable proxy options subset	temperature, maxTokens, reasoning, cacheRetention, sessionId, headers, metadata, transport, thinkingBudgets, maxRetryDelayMs	MATCH	proxy.rs:76-97	same 10 fields
+proxy.ts:121-137	initial partial message	stopReason "stop", zero usage	MATCH	proxy.rs:468-481	StopReason::Stop + Usage::zero()
+proxy.ts:167-176	proxy error formatting	"Proxy error: {status} {statusText}" or "Proxy error: {body.error}"	MATCH	proxy.rs:240-258	identical shape
+(ri only)	sqlite session backend PRAGMAs/migrations	n/a (no sqlite backend in pi packages/agent/src)	EXTRA_IN_RI	harness/sqlite_session.rs:37,1348-1362	journal_mode WAL, synchronous FULL, busy_timeout 5000, migrations table; backend has no counterpart in this pi slice (ports pi coding-assistant sqlite; out of slice)

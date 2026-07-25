@@ -42,19 +42,35 @@ pub fn transform_messages(
 }
 
 pub fn normalize_openai_completions_tool_call_id(id: &str, model: &Model) -> String {
-    if id.contains('|') {
-        let call_id = id.split('|').next().unwrap_or_default();
-        return call_id
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
-                    ch
-                } else {
-                    '_'
-                }
-            })
-            .take(40)
-            .collect();
+    // Pipe-separated `{call_id}|{item_id}` ids from the Responses API: keep
+    // item-level uniqueness (parallel calls can share call_id) and stay within
+    // OpenAI's 40-char limit, hashing when the combined id is too long (pi).
+    if let Some(separator) = id.find('|') {
+        let sanitize = |part: &str| {
+            part.chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                        ch
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+        };
+        let call_id = sanitize(&id[..separator]);
+        let item_id = sanitize(&id[separator + 1..]);
+        let combined = if item_id.is_empty() {
+            call_id.clone()
+        } else {
+            format!("{call_id}_{item_id}")
+        };
+        if combined.len() <= 40 {
+            return combined;
+        }
+        let hash: String = crate::json_repair::short_hash(id).chars().take(8).collect();
+        let prefix_len = 40usize.saturating_sub(hash.len() + 1).max(1);
+        let prefix: String = call_id.chars().take(prefix_len).collect();
+        return format!("{prefix}_{hash}");
     }
 
     if model.provider == "openai" && id.len() > 40 {

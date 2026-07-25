@@ -1,0 +1,1407 @@
+{
+ "cases": [
+  {
+   "id": "anthropic-claude-sonnet-4-5--basic",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   }
+  },
+  {
+   "id": "anthropic-claude-sonnet-4-5--multiturn",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-5",
+   "context": {
+    "system": "You are helpful.",
+    "tools": [
+     {
+      "name": "get_weather",
+      "description": "Get the current weather for a city",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city"
+       ],
+       "additionalProperties": false
+      }
+     }
+    ],
+    "messages": [
+     {
+      "role": "user",
+      "text": "What is the weather in Paris?"
+     },
+     {
+      "role": "assistant",
+      "text": "I'll check.",
+      "toolCalls": [
+       {
+        "id": "call_weather_1",
+        "name": "get_weather",
+        "arguments": {
+         "city": "Paris"
+        }
+       }
+      ]
+     },
+     {
+      "role": "toolResult",
+      "toolCallId": "call_weather_1",
+      "toolName": "get_weather",
+      "text": "Sunny, 22C",
+      "isError": false
+     },
+     {
+      "role": "user",
+      "text": "Thanks, summarize."
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "anthropic-claude-sonnet-4-5--thinking",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4."
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "anthropic-claude-sonnet-4-5--image",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-5",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "blocks": [
+       {
+        "type": "text",
+        "text": "Describe this image."
+       },
+       {
+        "type": "image",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "mimeType": "image/png"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "anthropic-claude-sonnet-4-5--empty-edge",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-5",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     },
+     {
+      "role": "assistant",
+      "text": "   \n\t"
+     },
+     {
+      "role": "user",
+      "text": "Please respond this time."
+     }
+    ]
+   }
+  },
+  {
+   "id": "anthropic-claude-sonnet-4-5--sampling",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "temperature": 0.5,
+    "maxTokens": 512
+   }
+  },
+  {
+   "id": "anthropic-claude-sonnet-4-5--session",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "sessionId": "sess-diff-1"
+   }
+  },
+  {
+   "id": "anthropic-claude-sonnet-4-5--crossmodel",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4.",
+      "from": {
+       "provider": "openai",
+       "model": "gpt-5-mini",
+       "api": "openai-responses"
+      }
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   }
+  },
+  {
+   "id": "openai-gpt-5-mini--basic",
+   "provider": "openai",
+   "model": "gpt-5-mini",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   }
+  },
+  {
+   "id": "openai-gpt-5-mini--multiturn",
+   "provider": "openai",
+   "model": "gpt-5-mini",
+   "context": {
+    "system": "You are helpful.",
+    "tools": [
+     {
+      "name": "get_weather",
+      "description": "Get the current weather for a city",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city"
+       ],
+       "additionalProperties": false
+      }
+     }
+    ],
+    "messages": [
+     {
+      "role": "user",
+      "text": "What is the weather in Paris?"
+     },
+     {
+      "role": "assistant",
+      "text": "I'll check.",
+      "toolCalls": [
+       {
+        "id": "call_weather_1",
+        "name": "get_weather",
+        "arguments": {
+         "city": "Paris"
+        }
+       }
+      ]
+     },
+     {
+      "role": "toolResult",
+      "toolCallId": "call_weather_1",
+      "toolName": "get_weather",
+      "text": "Sunny, 22C",
+      "isError": false
+     },
+     {
+      "role": "user",
+      "text": "Thanks, summarize."
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "openai-gpt-5-mini--thinking",
+   "provider": "openai",
+   "model": "gpt-5-mini",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4."
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "openai-gpt-5-mini--image",
+   "provider": "openai",
+   "model": "gpt-5-mini",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "blocks": [
+       {
+        "type": "text",
+        "text": "Describe this image."
+       },
+       {
+        "type": "image",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "mimeType": "image/png"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "openai-gpt-5-mini--empty-edge",
+   "provider": "openai",
+   "model": "gpt-5-mini",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     },
+     {
+      "role": "assistant",
+      "text": "   \n\t"
+     },
+     {
+      "role": "user",
+      "text": "Please respond this time."
+     }
+    ]
+   }
+  },
+  {
+   "id": "openai-gpt-5-mini--sampling",
+   "provider": "openai",
+   "model": "gpt-5-mini",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "temperature": 0.5,
+    "maxTokens": 512
+   }
+  },
+  {
+   "id": "openai-gpt-5-mini--session",
+   "provider": "openai",
+   "model": "gpt-5-mini",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "sessionId": "sess-diff-1"
+   }
+  },
+  {
+   "id": "openai-gpt-5-mini--crossmodel",
+   "provider": "openai",
+   "model": "gpt-5-mini",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4.",
+      "from": {
+       "provider": "anthropic",
+       "model": "claude-sonnet-4-5",
+       "api": "anthropic-messages"
+      }
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   }
+  },
+  {
+   "id": "openai-gpt-4o-mini-openai-completions--basic",
+   "provider": "openai",
+   "model": "gpt-4o-mini",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "apiOverride": "openai-completions"
+  },
+  {
+   "id": "openai-gpt-4o-mini-openai-completions--multiturn",
+   "provider": "openai",
+   "model": "gpt-4o-mini",
+   "context": {
+    "system": "You are helpful.",
+    "tools": [
+     {
+      "name": "get_weather",
+      "description": "Get the current weather for a city",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city"
+       ],
+       "additionalProperties": false
+      }
+     }
+    ],
+    "messages": [
+     {
+      "role": "user",
+      "text": "What is the weather in Paris?"
+     },
+     {
+      "role": "assistant",
+      "text": "I'll check.",
+      "toolCalls": [
+       {
+        "id": "call_weather_1",
+        "name": "get_weather",
+        "arguments": {
+         "city": "Paris"
+        }
+       }
+      ]
+     },
+     {
+      "role": "toolResult",
+      "toolCallId": "call_weather_1",
+      "toolName": "get_weather",
+      "text": "Sunny, 22C",
+      "isError": false
+     },
+     {
+      "role": "user",
+      "text": "Thanks, summarize."
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   },
+   "apiOverride": "openai-completions"
+  },
+  {
+   "id": "openai-gpt-4o-mini-openai-completions--thinking",
+   "provider": "openai",
+   "model": "gpt-4o-mini",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4."
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   },
+   "apiOverride": "openai-completions"
+  },
+  {
+   "id": "openai-gpt-4o-mini-openai-completions--image",
+   "provider": "openai",
+   "model": "gpt-4o-mini",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "blocks": [
+       {
+        "type": "text",
+        "text": "Describe this image."
+       },
+       {
+        "type": "image",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "mimeType": "image/png"
+       }
+      ]
+     }
+    ]
+   },
+   "apiOverride": "openai-completions"
+  },
+  {
+   "id": "openai-gpt-4o-mini-openai-completions--empty-edge",
+   "provider": "openai",
+   "model": "gpt-4o-mini",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     },
+     {
+      "role": "assistant",
+      "text": "   \n\t"
+     },
+     {
+      "role": "user",
+      "text": "Please respond this time."
+     }
+    ]
+   },
+   "apiOverride": "openai-completions"
+  },
+  {
+   "id": "openai-gpt-4o-mini-openai-completions--sampling",
+   "provider": "openai",
+   "model": "gpt-4o-mini",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "temperature": 0.5,
+    "maxTokens": 512
+   },
+   "apiOverride": "openai-completions"
+  },
+  {
+   "id": "openai-gpt-4o-mini-openai-completions--session",
+   "provider": "openai",
+   "model": "gpt-4o-mini",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "sessionId": "sess-diff-1"
+   },
+   "apiOverride": "openai-completions"
+  },
+  {
+   "id": "openai-gpt-4o-mini-openai-completions--crossmodel",
+   "provider": "openai",
+   "model": "gpt-4o-mini",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4.",
+      "from": {
+       "provider": "anthropic",
+       "model": "claude-sonnet-4-5",
+       "api": "anthropic-messages"
+      }
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   },
+   "apiOverride": "openai-completions"
+  },
+  {
+   "id": "openai-codex-gpt-5.5--basic",
+   "provider": "openai-codex",
+   "model": "gpt-5.5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   }
+  },
+  {
+   "id": "openai-codex-gpt-5.5--multiturn",
+   "provider": "openai-codex",
+   "model": "gpt-5.5",
+   "context": {
+    "system": "You are helpful.",
+    "tools": [
+     {
+      "name": "get_weather",
+      "description": "Get the current weather for a city",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city"
+       ],
+       "additionalProperties": false
+      }
+     }
+    ],
+    "messages": [
+     {
+      "role": "user",
+      "text": "What is the weather in Paris?"
+     },
+     {
+      "role": "assistant",
+      "text": "I'll check.",
+      "toolCalls": [
+       {
+        "id": "call_weather_1",
+        "name": "get_weather",
+        "arguments": {
+         "city": "Paris"
+        }
+       }
+      ]
+     },
+     {
+      "role": "toolResult",
+      "toolCallId": "call_weather_1",
+      "toolName": "get_weather",
+      "text": "Sunny, 22C",
+      "isError": false
+     },
+     {
+      "role": "user",
+      "text": "Thanks, summarize."
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "openai-codex-gpt-5.5--thinking",
+   "provider": "openai-codex",
+   "model": "gpt-5.5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4."
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "openai-codex-gpt-5.5--image",
+   "provider": "openai-codex",
+   "model": "gpt-5.5",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "blocks": [
+       {
+        "type": "text",
+        "text": "Describe this image."
+       },
+       {
+        "type": "image",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "mimeType": "image/png"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "openai-codex-gpt-5.5--empty-edge",
+   "provider": "openai-codex",
+   "model": "gpt-5.5",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     },
+     {
+      "role": "assistant",
+      "text": "   \n\t"
+     },
+     {
+      "role": "user",
+      "text": "Please respond this time."
+     }
+    ]
+   }
+  },
+  {
+   "id": "openai-codex-gpt-5.5--sampling",
+   "provider": "openai-codex",
+   "model": "gpt-5.5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "temperature": 0.5,
+    "maxTokens": 512
+   }
+  },
+  {
+   "id": "openai-codex-gpt-5.5--session",
+   "provider": "openai-codex",
+   "model": "gpt-5.5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "sessionId": "sess-diff-1"
+   }
+  },
+  {
+   "id": "openai-codex-gpt-5.5--crossmodel",
+   "provider": "openai-codex",
+   "model": "gpt-5.5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4.",
+      "from": {
+       "provider": "anthropic",
+       "model": "claude-sonnet-4-5",
+       "api": "anthropic-messages"
+      }
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   }
+  },
+  {
+   "id": "google-gemini-2.5-flash--basic",
+   "provider": "google",
+   "model": "gemini-2.5-flash",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   }
+  },
+  {
+   "id": "google-gemini-2.5-flash--multiturn",
+   "provider": "google",
+   "model": "gemini-2.5-flash",
+   "context": {
+    "system": "You are helpful.",
+    "tools": [
+     {
+      "name": "get_weather",
+      "description": "Get the current weather for a city",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city"
+       ],
+       "additionalProperties": false
+      }
+     }
+    ],
+    "messages": [
+     {
+      "role": "user",
+      "text": "What is the weather in Paris?"
+     },
+     {
+      "role": "assistant",
+      "text": "I'll check.",
+      "toolCalls": [
+       {
+        "id": "call_weather_1",
+        "name": "get_weather",
+        "arguments": {
+         "city": "Paris"
+        }
+       }
+      ]
+     },
+     {
+      "role": "toolResult",
+      "toolCallId": "call_weather_1",
+      "toolName": "get_weather",
+      "text": "Sunny, 22C",
+      "isError": false
+     },
+     {
+      "role": "user",
+      "text": "Thanks, summarize."
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "google-gemini-2.5-flash--thinking",
+   "provider": "google",
+   "model": "gemini-2.5-flash",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4."
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "google-gemini-2.5-flash--image",
+   "provider": "google",
+   "model": "gemini-2.5-flash",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "blocks": [
+       {
+        "type": "text",
+        "text": "Describe this image."
+       },
+       {
+        "type": "image",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "mimeType": "image/png"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "google-gemini-2.5-flash--empty-edge",
+   "provider": "google",
+   "model": "gemini-2.5-flash",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     },
+     {
+      "role": "assistant",
+      "text": "   \n\t"
+     },
+     {
+      "role": "user",
+      "text": "Please respond this time."
+     }
+    ]
+   }
+  },
+  {
+   "id": "google-gemini-2.5-flash--sampling",
+   "provider": "google",
+   "model": "gemini-2.5-flash",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "temperature": 0.5,
+    "maxTokens": 512
+   }
+  },
+  {
+   "id": "google-gemini-2.5-flash--session",
+   "provider": "google",
+   "model": "gemini-2.5-flash",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "sessionId": "sess-diff-1"
+   }
+  },
+  {
+   "id": "google-gemini-2.5-flash--crossmodel",
+   "provider": "google",
+   "model": "gemini-2.5-flash",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4.",
+      "from": {
+       "provider": "anthropic",
+       "model": "claude-sonnet-4-5",
+       "api": "anthropic-messages"
+      }
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   }
+  },
+  {
+   "id": "mistral-devstral-medium-latest--basic",
+   "provider": "mistral",
+   "model": "devstral-medium-latest",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   }
+  },
+  {
+   "id": "mistral-devstral-medium-latest--multiturn",
+   "provider": "mistral",
+   "model": "devstral-medium-latest",
+   "context": {
+    "system": "You are helpful.",
+    "tools": [
+     {
+      "name": "get_weather",
+      "description": "Get the current weather for a city",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city"
+       ],
+       "additionalProperties": false
+      }
+     }
+    ],
+    "messages": [
+     {
+      "role": "user",
+      "text": "What is the weather in Paris?"
+     },
+     {
+      "role": "assistant",
+      "text": "I'll check.",
+      "toolCalls": [
+       {
+        "id": "call_weather_1",
+        "name": "get_weather",
+        "arguments": {
+         "city": "Paris"
+        }
+       }
+      ]
+     },
+     {
+      "role": "toolResult",
+      "toolCallId": "call_weather_1",
+      "toolName": "get_weather",
+      "text": "Sunny, 22C",
+      "isError": false
+     },
+     {
+      "role": "user",
+      "text": "Thanks, summarize."
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "mistral-devstral-medium-latest--thinking",
+   "provider": "mistral",
+   "model": "devstral-medium-latest",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4."
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "mistral-devstral-medium-latest--image",
+   "provider": "mistral",
+   "model": "devstral-medium-latest",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "blocks": [
+       {
+        "type": "text",
+        "text": "Describe this image."
+       },
+       {
+        "type": "image",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "mimeType": "image/png"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "mistral-devstral-medium-latest--empty-edge",
+   "provider": "mistral",
+   "model": "devstral-medium-latest",
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     },
+     {
+      "role": "assistant",
+      "text": "   \n\t"
+     },
+     {
+      "role": "user",
+      "text": "Please respond this time."
+     }
+    ]
+   }
+  },
+  {
+   "id": "mistral-devstral-medium-latest--sampling",
+   "provider": "mistral",
+   "model": "devstral-medium-latest",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "temperature": 0.5,
+    "maxTokens": 512
+   }
+  },
+  {
+   "id": "mistral-devstral-medium-latest--session",
+   "provider": "mistral",
+   "model": "devstral-medium-latest",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "sessionId": "sess-diff-1"
+   }
+  },
+  {
+   "id": "mistral-devstral-medium-latest--crossmodel",
+   "provider": "mistral",
+   "model": "devstral-medium-latest",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Solve 2+2"
+     },
+     {
+      "role": "assistant",
+      "thinking": "Let me think about this.",
+      "thinkingSignature": "sig-abc-123",
+      "text": "The answer is 4.",
+      "from": {
+       "provider": "anthropic",
+       "model": "claude-sonnet-4-5",
+       "api": "anthropic-messages"
+      }
+     },
+     {
+      "role": "user",
+      "text": "Now solve 3+3"
+     }
+    ]
+   }
+  },
+  {
+   "id": "anthropic-claude-opus-4-8--xhigh",
+   "provider": "anthropic",
+   "model": "claude-opus-4-8",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "xhigh"
+   }
+  },
+  {
+   "id": "openai-gpt-5.5--xhigh",
+   "provider": "openai",
+   "model": "gpt-5.5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "xhigh"
+   }
+  },
+  {
+   "id": "anthropic-claude-sonnet-4-5--reasoning-off",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "off"
+   }
+  },
+  {
+   "id": "openai-gpt-5-mini--reasoning-minimal",
+   "provider": "openai",
+   "model": "gpt-5-mini",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "minimal"
+   }
+  },
+  {
+   "id": "groq-qwen3--reasoning-minimal",
+   "provider": "groq",
+   "model": "qwen/qwen3-32b",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "minimal"
+   }
+  },
+  {
+   "id": "groq-qwen3--reasoning-high",
+   "provider": "groq",
+   "model": "qwen/qwen3-32b",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "groq-qwen3--reasoning-none",
+   "provider": "groq",
+   "model": "qwen/qwen3-32b",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   }
+  },
+  {
+   "id": "openrouter-anthropic--basic",
+   "provider": "openrouter",
+   "model": "anthropic/claude-sonnet-4.5",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   },
+   "options": {
+    "reasoning": "high"
+   }
+  },
+  {
+   "id": "openrouter-deepseek--basic",
+   "provider": "openrouter",
+   "model": "deepseek/deepseek-r1",
+   "context": {
+    "system": "You are helpful.",
+    "messages": [
+     {
+      "role": "user",
+      "text": "Hello"
+     }
+    ]
+   }
+  }
+ ]
+}

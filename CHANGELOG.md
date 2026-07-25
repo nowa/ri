@@ -16,6 +16,26 @@ When ri syncs to a new pi minor line, the version jumps accordingly
 
 ## [Unreleased]
 
+### Fixed
+
+- Behavior-parity audit (~920 constants/branches walked plus a 57-case live
+  payload differential against pi; see `docs/BEHAVIOR_PARITY_AUDIT.md`):
+  Anthropic `/v1/messages` endpoint, Bedrock cache TTL wire value / Claude 5
+  prompt caching / throttling-error classification / simple-stream defaults,
+  codex retry semantics (0 default retries, 429-only 60s cap, terminal-quota
+  gate, abortable waits), pi's SDK-shaped error bodies feeding the retry and
+  overflow classifiers, branch-scoped compaction with pi cursor paging and
+  zero-usage guards, tool-call id item-part preservation, provider detection
+  sets (nvidia/ant-ling/zai-cn/OpenRouter gates), Anthropic/Mistral/Google
+  drifts, scoped env resolution, and a long tail of smaller alignments —
+  each locked by new regression tests (+56).
+
+### Added
+
+- Reusable differential-testing harness (`tools/differential/` +
+  `tests/differential.rs`): replays a shared case matrix through pi's and
+  ri's real streaming pipelines and diffs the captured payloads.
+
 ## [0.81.2] - 2026-07-25
 
 Pi baseline: unchanged (v0.81.1, commit

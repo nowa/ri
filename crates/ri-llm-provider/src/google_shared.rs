@@ -96,14 +96,16 @@ pub fn build_google_simple_payload(
         } else {
             clamped
         };
+        // pi's Vertex implementation has no gemma-4 branch: only the
+        // Generative AI API routes gemma-4 through level-based thinking.
         if is_gemini3_pro_model(&model.id)
             || is_gemini3_flash_model(&model.id)
-            || is_gemma4_model(&model.id)
+            || (model.api != "google-vertex" && is_gemma4_model(&model.id))
         {
             Some(GoogleThinkingOptions {
                 enabled: true,
                 budget_tokens: None,
-                level: Some(google_thinking_level(&model.id, effort).to_owned()),
+                level: Some(google_thinking_level(&model.api, &model.id, effort).to_owned()),
             })
         } else {
             Some(GoogleThinkingOptions {
@@ -206,7 +208,7 @@ pub fn build_google_payload(
                 }
                 Value::Object(thinking_config)
             } else {
-                google_disabled_thinking_config(&model.id)
+                google_disabled_thinking_config(&model.api, &model.id)
             },
         );
     }
@@ -218,17 +220,19 @@ pub fn build_google_payload(
     })
 }
 
-pub fn google_disabled_thinking_config(model_id: &str) -> Value {
+pub fn google_disabled_thinking_config(api: &str, model_id: &str) -> Value {
     if is_gemini3_pro_model(model_id) {
         json!({ "thinkingLevel": "LOW" })
-    } else if is_gemini3_flash_model(model_id) || is_gemma4_model(model_id) {
+    } else if is_gemini3_flash_model(model_id)
+        || (api != "google-vertex" && is_gemma4_model(model_id))
+    {
         json!({ "thinkingLevel": "MINIMAL" })
     } else {
         json!({ "thinkingBudget": 0 })
     }
 }
 
-pub fn google_thinking_level(model_id: &str, effort: ThinkingLevel) -> &'static str {
+pub fn google_thinking_level(api: &str, model_id: &str, effort: ThinkingLevel) -> &'static str {
     if is_gemini3_pro_model(model_id) {
         return match effort {
             ThinkingLevel::Minimal | ThinkingLevel::Low => "LOW",
@@ -239,7 +243,8 @@ pub fn google_thinking_level(model_id: &str, effort: ThinkingLevel) -> &'static 
             | ThinkingLevel::Off => "HIGH",
         };
     }
-    if is_gemma4_model(model_id) {
+    // pi's Vertex getGemini3ThinkingLevel has no gemma-4 branch.
+    if api != "google-vertex" && is_gemma4_model(model_id) {
         return match effort {
             ThinkingLevel::Minimal | ThinkingLevel::Low => "MINIMAL",
             ThinkingLevel::Medium
@@ -594,8 +599,9 @@ fn process_google_function_call_part(
     let id = if let Some(id) = provided_id.filter(|_| !duplicate) {
         id.to_owned()
     } else {
+        // pi: `${part.functionCall.name}_${Date.now()}_${++toolCallCounter}`
         *tool_call_counter += 1;
-        format!("{name}_generated_{tool_call_counter}")
+        format!("{name}_{}_{tool_call_counter}", crate::types::now_millis())
     };
     let arguments = function_call
         .get("args")
@@ -664,14 +670,11 @@ fn apply_google_chunk_metadata(output: &mut AssistantMessage, model: &Model, chu
         .and_then(Value::as_u64)
         .unwrap_or_default()
         .saturating_add(thoughts_tokens);
+    // pi: `totalTokens: chunk.usageMetadata.totalTokenCount || 0`.
     let total_tokens = usage
         .get("totalTokenCount")
         .and_then(Value::as_u64)
-        .unwrap_or_else(|| {
-            input
-                .saturating_add(output_tokens)
-                .saturating_add(cache_read)
-        });
+        .unwrap_or(0);
     output.usage = Usage {
         input,
         output: output_tokens,
@@ -703,13 +706,20 @@ fn map_google_tool_choice(choice: &str) -> &'static str {
 }
 
 fn is_gemini3_pro_model(model_id: &str) -> bool {
-    let lower = model_id.to_ascii_lowercase();
-    lower.contains("gemini-3") && lower.contains("-pro")
+    static PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"gemini-3(?:\.\d+)?-pro").expect("valid gemini 3 pro pattern")
+    });
+    PATTERN.is_match(&model_id.to_ascii_lowercase())
 }
 
 fn is_gemini3_flash_model(model_id: &str) -> bool {
+    static PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"gemini-3(?:\.\d+)?-flash").expect("valid gemini 3 flash pattern")
+    });
     let lower = model_id.to_ascii_lowercase();
-    lower.contains("gemini-3") && lower.contains("-flash")
+    PATTERN.is_match(&lower)
+        || lower == "gemini-flash-latest"
+        || lower == "gemini-flash-lite-latest"
 }
 
 fn is_gemma4_model(model_id: &str) -> bool {

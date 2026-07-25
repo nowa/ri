@@ -192,7 +192,13 @@ pub fn builtin_providers() -> Vec<Arc<dyn Provider>> {
         .into_iter()
         .filter_map(|provider_id| builtin_provider(&provider_id))
         .collect();
-    providers.push(radius_provider(RadiusProviderOptions::default()));
+    // pi registers providers alphabetically (all.ts), radius included.
+    let radius = radius_provider(RadiusProviderOptions::default());
+    let position = providers
+        .iter()
+        .position(|provider| provider.id() > radius.id())
+        .unwrap_or(providers.len());
+    providers.insert(position, radius);
     providers
 }
 

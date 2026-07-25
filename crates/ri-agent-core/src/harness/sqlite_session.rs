@@ -913,39 +913,27 @@ impl SqliteSessionStorage {
         get_path_to_root_or_compaction(|id| self.get_entry(id), leaf_id)
     }
 
-    /// Cursor-paged listing (pi `getEntries`): up to `limit` entries at or
-    /// before the anchor sequence, ascending.
+    /// Cursor-paged listing (pi `getEntries`): forward paging — skip the
+    /// first `after_entry_seq` entries and return up to `limit` of the
+    /// remaining entries in ascending order (pi
+    /// `entries.slice(afterEntrySeq, afterEntrySeq + limit)`).
     pub fn entries_page(
         &self,
         options: &SessionEntryCursorOptions,
     ) -> Result<Vec<SessionTreeEntry>, SessionError> {
-        let Some(limit) = options.limit else {
-            return Ok(self.entries());
-        };
         let rows = {
             let connection = self.connection.lock().expect("sqlite connection lock");
-            let anchor: Option<i64> = match options.after_entry_seq {
-                Some(seq) => Some(seq as i64),
-                None => connection
-                    .query_row(
-                        "SELECT entry_seq FROM session_entries WHERE session_id = ?1 ORDER BY entry_seq DESC LIMIT 1",
-                        rusqlite::params![self.metadata.id],
-                        |row| row.get(0),
-                    )
-                    .ok(),
-            };
-            let Some(anchor) = anchor else {
-                return Ok(Vec::new());
-            };
+            // `entry_seq` is a dense 1-based per-session sequence, so an
+            // OFFSET of `after_entry_seq` mirrors pi's slice semantics.
+            let offset = options.after_entry_seq.unwrap_or(0) as i64;
+            let limit = options.limit.map_or(-1_i64, |limit| limit as i64);
             load_entry_rows(
                 &connection,
-                "SELECT id, parent_id, type, timestamp, payload FROM session_entries WHERE session_id = ?1 AND entry_seq <= ?2 ORDER BY entry_seq DESC LIMIT ?3",
-                rusqlite::params![self.metadata.id, anchor, limit as i64],
+                "SELECT id, parent_id, type, timestamp, payload FROM session_entries WHERE session_id = ?1 ORDER BY entry_seq LIMIT ?2 OFFSET ?3",
+                rusqlite::params![self.metadata.id, limit, offset],
             )
         };
-        let mut entries = self.decode_and_cache(rows);
-        entries.reverse();
-        Ok(entries)
+        Ok(self.decode_and_cache(rows))
     }
 
     pub fn entries(&self) -> Vec<SessionTreeEntry> {

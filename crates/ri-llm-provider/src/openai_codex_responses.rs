@@ -26,9 +26,18 @@ pub const OPENAI_CODEX_WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE: &str =
 /// cached connections before that so a request never lands on a stale socket
 /// (pi #6268).
 pub const OPENAI_CODEX_SESSION_WEBSOCKET_MAX_AGE_MS: i64 = 55 * 60 * 1000;
+/// Cached websocket connections idle longer than this are closed and a fresh
+/// socket is dialed (pi SESSION_WEBSOCKET_CACHE_TTL_MS).
+pub const OPENAI_CODEX_SESSION_WEBSOCKET_CACHE_TTL_MS: i64 = 5 * 60 * 1000;
 
 pub fn openai_codex_websocket_session_expired(created_at_ms: i64, now_ms: i64) -> bool {
     now_ms - created_at_ms >= OPENAI_CODEX_SESSION_WEBSOCKET_MAX_AGE_MS
+}
+
+/// pi arms an idle timer when a cached socket is released; ri checks the idle
+/// deadline lazily when the next request acquires the cached socket.
+pub fn openai_codex_websocket_session_idle_expired(last_used_at_ms: i64, now_ms: i64) -> bool {
+    now_ms - last_used_at_ms >= OPENAI_CODEX_SESSION_WEBSOCKET_CACHE_TTL_MS
 }
 
 /// The Codex backend accepts zstd-compressed request bodies on the SSE
@@ -59,8 +68,17 @@ pub fn openai_codex_error_event_code(event: &serde_json::Value) -> Option<&str> 
                 .and_then(serde_json::Value::as_str)
         })
 }
-pub const OPENAI_CODEX_MAX_RETRIES: usize = 3;
+/// No provider-internal retries unless the caller opts in via
+/// `options.maxRetries` (pi DEFAULT_MAX_RETRIES = 0); the outer harness retry
+/// policy owns the retry budget.
+pub const OPENAI_CODEX_DEFAULT_MAX_RETRIES: usize = 0;
 pub const OPENAI_CODEX_BASE_RETRY_DELAY_MS: u64 = 1000;
+/// Default cap applied only to 429 retry-after delays (pi
+/// DEFAULT_MAX_RETRY_DELAY_MS).
+pub const OPENAI_CODEX_DEFAULT_MAX_RETRY_DELAY_MS: u64 = 60_000;
+/// WebSocket close code 1009 means the frame exceeded the server's message
+/// size limit; surface a readable reason when the close frame has none.
+pub const OPENAI_CODEX_WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE: u16 = 1009;
 
 const JWT_CLAIM_PATH: &str = "https://api.openai.com/auth";
 const ACCOUNT_ID_ERROR: &str = "Failed to extract accountId from token";
@@ -252,11 +270,9 @@ pub fn build_openai_codex_responses_payload(
                 .collect(),
         );
     }
-    if let Some(reasoning_effort) = options.reasoning_effort
-        && let Some(effort) = openai_codex_reasoning_effort(model, reasoning_effort)
-    {
+    if let Some(reasoning_effort) = options.reasoning_effort {
         payload["reasoning"] = json!({
-            "effort": effort,
+            "effort": openai_codex_reasoning_effort(model, reasoning_effort),
             "summary": options.reasoning_summary.unwrap_or_else(|| "auto".to_owned()),
         });
     }
@@ -393,6 +409,23 @@ pub fn parse_openai_codex_sse_events(body: &str) -> Result<Vec<Value>, String> {
     flush_openai_codex_sse_event(&mut events, &mut data, &mut raw)?;
 
     Ok(events)
+}
+
+/// pi `extractWebSocketCloseError`: `"WebSocket closed <code> <reason>"`,
+/// with close code 1009 gaining a synthetic " message too big" reason when
+/// the server sent none.
+pub fn openai_codex_websocket_close_error_message(code: Option<u16>, reason: &str) -> String {
+    let code_text = code.map(|code| format!(" {code}")).unwrap_or_default();
+    let reason_text = if !reason.is_empty() {
+        format!(" {reason}")
+    } else if code == Some(OPENAI_CODEX_WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE) {
+        " message too big".to_owned()
+    } else {
+        String::new()
+    };
+    format!("WebSocket closed{code_text}{reason_text}")
+        .trim()
+        .to_owned()
 }
 
 trait AsyncReadWrite: AsyncRead + AsyncWrite + Unpin + Send {}
@@ -549,7 +582,21 @@ impl OpenAICodexWebSocket {
                     }
                     reading_text = true;
                 }
-                0x8 => return Ok(None),
+                0x8 => {
+                    // A coded close frame before completion surfaces as a
+                    // pi-style "WebSocket closed <code> <reason>" error
+                    // (pi extractWebSocketCloseError); a bare close keeps the
+                    // legacy premature-close handling.
+                    if frame.payload.len() >= 2 {
+                        let code = u16::from_be_bytes([frame.payload[0], frame.payload[1]]);
+                        let reason = String::from_utf8_lossy(&frame.payload[2..]).into_owned();
+                        return Err(openai_codex_websocket_close_error_message(
+                            Some(code),
+                            &reason,
+                        ));
+                    }
+                    return Ok(None);
+                }
                 0x9 => self.write_frame(0xA, &frame.payload).await?,
                 0xA => {}
                 opcode => return Err(format!("Unsupported WebSocket opcode: {opcode}")),
@@ -979,20 +1026,120 @@ pub fn record_openai_codex_websocket_sse_fallback(
     stats.websocket_fallback_active = Some(fallback_active);
 }
 
+/// pi `isTerminalRateLimitError`: a 429 whose RAW body matches a terminal
+/// account/subscription limit must not be retried.
+pub fn is_openai_codex_terminal_rate_limit_error(error_text: &str) -> bool {
+    crate::retry::is_non_retryable_provider_limit_error(error_text)
+}
+
+static OPENAI_CODEX_RETRYABLE_ERROR_TEXT_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        "(?i)rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused",
+    )
+    .expect("valid codex retryable error pattern")
+});
+
+/// pi `isRetryableError`: `error_text` is the RAW response body, not the
+/// parsed friendly message.
 pub fn is_openai_codex_retryable_error(status: u16, error_text: &str) -> bool {
+    if status == 429 && is_openai_codex_terminal_rate_limit_error(error_text) {
+        return false;
+    }
     if matches!(status, 429 | 500 | 502 | 503 | 504) {
         return true;
     }
-    let normalized = error_text
+    OPENAI_CODEX_RETRYABLE_ERROR_TEXT_PATTERN.is_match(error_text)
+}
+
+/// JS `Number(text)` semantics for retry headers: trimmed empty input is 0,
+/// hex/octal/binary literals parse, and unparseable text is NaN (`None`).
+fn js_header_number(text: &str) -> Option<f64> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Some(0.0);
+    }
+    match trimmed {
+        "Infinity" | "+Infinity" => return Some(f64::INFINITY),
+        "-Infinity" => return Some(f64::NEG_INFINITY),
+        _ => {}
+    }
+    if let Some(rest) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return u128::from_str_radix(rest, 16)
+            .ok()
+            .map(|value| value as f64);
+    }
+    if let Some(rest) = trimmed
+        .strip_prefix("0o")
+        .or_else(|| trimmed.strip_prefix("0O"))
+    {
+        return u128::from_str_radix(rest, 8).ok().map(|value| value as f64);
+    }
+    if let Some(rest) = trimmed
+        .strip_prefix("0b")
+        .or_else(|| trimmed.strip_prefix("0B"))
+    {
+        return u128::from_str_radix(rest, 2).ok().map(|value| value as f64);
+    }
+    // Rust's f64 parser accepts "inf"/"nan" spellings JS Number() rejects.
+    if trimmed
         .chars()
-        .flat_map(char::to_lowercase)
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .collect::<String>();
-    normalized.contains("ratelimit")
-        || normalized.contains("overloaded")
-        || normalized.contains("serviceunavailable")
-        || normalized.contains("upstreamconnect")
-        || normalized.contains("connectionrefused")
+        .any(|ch| ch.is_ascii_alphabetic() && !matches!(ch, 'e' | 'E'))
+    {
+        return None;
+    }
+    trimmed.parse::<f64>().ok().filter(|value| !value.is_nan())
+}
+
+/// JS `Date.parse` accepts IMF-fixdate (RFC 2822) and ISO-8601 forms; naive
+/// datetimes without a timezone are read as UTC here (JS uses local time, but
+/// real retry-after dates always carry a zone).
+fn parse_openai_codex_retry_after_date_ms(text: &str) -> Option<i64> {
+    if let Ok(date) = DateTime::parse_from_rfc2822(text) {
+        return Some(date.with_timezone(&Utc).timestamp_millis());
+    }
+    if let Ok(date) = DateTime::parse_from_rfc3339(text) {
+        return Some(date.with_timezone(&Utc).timestamp_millis());
+    }
+    if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f") {
+        return Some(datetime.and_utc().timestamp_millis());
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d") {
+        return Some(date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis());
+    }
+    None
+}
+
+/// pi `getRetryAfterDelayMs`: `retry-after-ms` wins only when it parses to a
+/// finite number, otherwise the `retry-after` header is consulted (numeric
+/// seconds first, then an HTTP date).
+pub fn openai_codex_retry_after_delay_ms(
+    retry_after_ms: Option<&str>,
+    retry_after: Option<&str>,
+    now_ms: i64,
+) -> Option<u64> {
+    if let Some(value) = retry_after_ms
+        && let Some(millis) = js_header_number(value).filter(|millis| millis.is_finite())
+    {
+        return Some(millis.max(0.0) as u64);
+    }
+
+    // An empty retry-after header is falsy in pi and yields no delay.
+    let retry_after = retry_after.filter(|value| !value.is_empty())?;
+    if let Some(seconds) = js_header_number(retry_after).filter(|seconds| seconds.is_finite()) {
+        return Some((seconds.max(0.0) * 1000.0) as u64);
+    }
+    let date_ms = parse_openai_codex_retry_after_date_ms(retry_after)?;
+    Some(date_ms.saturating_sub(now_ms).max(0) as u64)
+}
+
+/// pi `capRetryDelayMs`: default cap 60s; a caller-provided cap of 0 disables
+/// capping entirely (pi treats `maxRetryDelayMs <= 0` as "no cap").
+pub fn cap_openai_codex_retry_delay_ms(delay_ms: u64, max_retry_delay_ms: Option<u64>) -> u64 {
+    let cap = max_retry_delay_ms.unwrap_or(OPENAI_CODEX_DEFAULT_MAX_RETRY_DELAY_MS);
+    if cap > 0 { delay_ms.min(cap) } else { delay_ms }
 }
 
 pub fn openai_codex_retry_delay_ms(
@@ -1010,11 +1157,13 @@ pub fn openai_codex_retry_delay_ms(
         retry_after,
         attempt,
         now_ms,
-        OPENAI_CODEX_MAX_RETRIES,
+        OPENAI_CODEX_DEFAULT_MAX_RETRIES,
         None,
     )
 }
 
+/// `error_text` must be the RAW response body (pi retries on the raw text and
+/// only parses the friendly message for the final error).
 pub fn openai_codex_retry_delay_ms_with_limits(
     status: u16,
     error_text: &str,
@@ -1029,41 +1178,39 @@ pub fn openai_codex_retry_delay_ms_with_limits(
         return None;
     }
 
-    let attempt = u32::try_from(attempt).unwrap_or(u32::MAX);
-    let mut delay_ms =
-        OPENAI_CODEX_BASE_RETRY_DELAY_MS.saturating_mul(2_u64.saturating_pow(attempt));
-    if let Some(retry_after_ms) = retry_after_ms {
-        if let Ok(millis) = retry_after_ms.parse::<f64>()
-            && millis.is_finite()
-        {
-            delay_ms = millis.max(0.0) as u64;
-        }
-    } else if let Some(retry_after) = retry_after {
-        if let Ok(seconds) = retry_after.parse::<f64>()
-            && seconds.is_finite()
-        {
-            delay_ms = (seconds.max(0.0) * 1000.0) as u64;
-        } else if let Ok(date) = DateTime::parse_from_rfc2822(retry_after) {
-            delay_ms = date
-                .with_timezone(&Utc)
-                .timestamp_millis()
-                .saturating_sub(now_ms)
-                .max(0) as u64;
+    match openai_codex_retry_after_delay_ms(retry_after_ms, retry_after, now_ms) {
+        // The cap applies only to 429 retry-after delays; exponential backoff
+        // and non-429 retry-after delays are never capped (pi :391-397).
+        Some(delay_ms) if status == 429 => Some(cap_openai_codex_retry_delay_ms(
+            delay_ms,
+            max_retry_delay_ms,
+        )),
+        Some(delay_ms) => Some(delay_ms),
+        None => {
+            let attempt = u32::try_from(attempt).unwrap_or(u32::MAX);
+            Some(OPENAI_CODEX_BASE_RETRY_DELAY_MS.saturating_mul(2_u64.saturating_pow(attempt)))
         }
     }
-
-    Some(max_retry_delay_ms.map_or(delay_ms, |max| delay_ms.min(max)))
 }
 
-pub fn openai_codex_error_message_from_response(status: u16, body: &str, now_ms: i64) -> String {
-    let mut message = if body.is_empty() {
-        "Request failed".to_owned()
-    } else {
+pub fn openai_codex_error_message_from_response(
+    status: u16,
+    status_text: &str,
+    body: &str,
+    now_ms: i64,
+) -> String {
+    // pi parseErrorResponse: `raw || response.statusText || "Request failed"`.
+    let mut message = if !body.is_empty() {
         body.to_owned()
+    } else if !status_text.is_empty() {
+        status_text.to_owned()
+    } else {
+        "Request failed".to_owned()
     };
     let mut friendly_message = None;
 
-    if let Ok(value) = parse_json_with_repair::<Value>(body)
+    // Strict JSON.parse like pi; a malformed body keeps the raw text.
+    if let Ok(value) = serde_json::from_str::<Value>(body)
         && let Some(error) = value.get("error").and_then(Value::as_object)
     {
         let code = error
@@ -1097,7 +1244,12 @@ pub fn openai_codex_error_message_from_response(status: u16, body: &str, now_ms:
                 "You have hit your ChatGPT usage limit{plan}.{when}"
             ));
         }
-        if let Some(error_message) = error.get("message").and_then(Value::as_str) {
+        // pi: `err.message || friendlyMessage || message` (empty is falsy).
+        if let Some(error_message) = error
+            .get("message")
+            .and_then(Value::as_str)
+            .filter(|error_message| !error_message.is_empty())
+        {
             message = error_message.to_owned();
         } else if let Some(friendly_message) = &friendly_message {
             message = friendly_message.clone();
@@ -1148,22 +1300,21 @@ fn format_openai_codex_tool(tool: &Tool) -> Value {
     })
 }
 
-fn openai_codex_reasoning_effort(model: &Model, level: ThinkingLevel) -> Option<String> {
+fn openai_codex_reasoning_effort(model: &Model, level: ThinkingLevel) -> String {
+    // pi: `thinkingLevelMap?.[level] ?? level` — a null map entry falls back
+    // to the raw level name, so codex always sends a reasoning effort.
     match model.thinking_level_map.get(&level) {
-        Some(Some(effort)) => Some(effort.clone()),
-        Some(None) => None,
-        None => Some(
-            match level {
-                ThinkingLevel::Off => "none",
-                ThinkingLevel::Minimal => "minimal",
-                ThinkingLevel::Low => "low",
-                ThinkingLevel::Medium => "medium",
-                ThinkingLevel::High => "high",
-                ThinkingLevel::XHigh => "xhigh",
-                ThinkingLevel::Max => "max",
-            }
-            .to_owned(),
-        ),
+        Some(Some(effort)) => effort.clone(),
+        _ => match level {
+            ThinkingLevel::Off => "none",
+            ThinkingLevel::Minimal => "minimal",
+            ThinkingLevel::Low => "low",
+            ThinkingLevel::Medium => "medium",
+            ThinkingLevel::High => "high",
+            ThinkingLevel::XHigh => "xhigh",
+            ThinkingLevel::Max => "max",
+        }
+        .to_owned(),
     }
 }
 

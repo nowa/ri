@@ -343,90 +343,175 @@ impl IgnoreRule {
         let relative_path = relative_path.trim_start_matches("./");
         let is_dir = relative_path.ends_with('/');
         let relative_path = relative_path.trim_end_matches('/');
-
-        if directory_only {
-            return matches_directory_pattern(pattern, relative_path, is_dir);
+        if relative_path.is_empty() {
+            return false;
         }
 
-        if pattern.contains('/') {
-            if path_pattern_matches(pattern, relative_path) {
-                return true;
-            }
-            !has_glob(pattern) && relative_path.starts_with(&format!("{pattern}/"))
-        } else {
-            relative_path
-                .split('/')
-                .any(|component| component_pattern_matches(pattern, component))
-                || relative_path.starts_with(&format!("{pattern}/"))
+        // A leading slash anchors the pattern to the root (gitignore).
+        let (anchored_by_slash, pattern) = match pattern.strip_prefix('/') {
+            Some(rest) => (true, rest),
+            None => (false, pattern),
+        };
+        if pattern.is_empty() {
+            return false;
         }
-    }
-}
+        let anchored = anchored_by_slash || pattern.contains('/');
 
-fn matches_directory_pattern(pattern: &str, relative_path: &str, is_dir: bool) -> bool {
-    if pattern.contains('/') {
-        if path_pattern_matches(pattern, relative_path) {
-            return is_dir || relative_path.starts_with(&format!("{pattern}/"));
+        let mut pattern_components = pattern.split('/').collect::<Vec<_>>();
+        if !anchored {
+            // A pattern without a slash matches at any depth (gitignore
+            // basename semantics): an implicit leading `**/`.
+            pattern_components.insert(0, "**");
         }
-        return !has_glob(pattern) && relative_path.starts_with(&format!("{pattern}/"));
-    }
+        let path_components = relative_path.split('/').collect::<Vec<_>>();
 
-    let mut components = relative_path.split('/').peekable();
-    while let Some(component) = components.next() {
-        if component_pattern_matches(pattern, component) && (is_dir || components.peek().is_some())
-        {
+        // A trailing `/**` matches everything inside the directory but not
+        // the directory itself (gitignore); with a directory-only slash
+        // (`a/**/`) the globstar keeps its zero-or-more meaning instead.
+        if !directory_only && pattern_components.last() == Some(&"**") {
+            let head = &pattern_components[..pattern_components.len() - 1];
+            return match_components(head, &path_components).prefix;
+        }
+
+        let outcome = match_components(&pattern_components, &path_components);
+        if outcome.prefix {
+            // The pattern matched a leading directory of the path, so the
+            // path lives inside an ignored directory.
             return true;
         }
+        outcome.full && (!directory_only || is_dir)
     }
-    false
 }
 
-fn path_pattern_matches(pattern: &str, relative_path: &str) -> bool {
-    let pattern_components = pattern.split('/').collect::<Vec<_>>();
-    let path_components = relative_path.split('/').collect::<Vec<_>>();
-    if pattern_components.len() != path_components.len() {
-        return false;
+#[derive(Clone, Copy, Default)]
+struct ComponentMatch {
+    /// The pattern consumed the entire path.
+    full: bool,
+    /// The pattern matched a proper leading directory prefix of the path.
+    prefix: bool,
+}
+
+fn match_components(pattern: &[&str], path: &[&str]) -> ComponentMatch {
+    let Some((&head, rest)) = pattern.split_first() else {
+        return ComponentMatch {
+            full: path.is_empty(),
+            prefix: !path.is_empty(),
+        };
+    };
+    if head == "**" {
+        // A standalone `**` spans zero or more path components (gitignore
+        // globstar).
+        let mut outcome = match_components(rest, path);
+        if let Some((_, path_rest)) = path.split_first() {
+            let skipped = match_components(pattern, path_rest);
+            outcome.full |= skipped.full;
+            outcome.prefix |= skipped.prefix;
+        }
+        return outcome;
     }
-    pattern_components
-        .iter()
-        .zip(path_components)
-        .all(|(pattern, component)| component_pattern_matches(pattern, component))
+    let Some((&first, path_rest)) = path.split_first() else {
+        return ComponentMatch::default();
+    };
+    if component_pattern_matches(head, first) {
+        match_components(rest, path_rest)
+    } else {
+        ComponentMatch::default()
+    }
 }
 
 fn has_glob(pattern: &str) -> bool {
-    pattern.contains('*') || pattern.contains('?')
+    pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
 }
 
 fn component_pattern_matches(pattern: &str, text: &str) -> bool {
     if !has_glob(pattern) {
         return pattern == text;
     }
-    let pattern = pattern.as_bytes();
-    let text = text.as_bytes();
-    let (mut p, mut t) = (0, 0);
-    let mut star = None;
-    let mut match_after_star = 0;
+    component_glob_matches(pattern.as_bytes(), text.as_bytes())
+}
 
-    while t < text.len() {
-        if p < pattern.len() && (pattern[p] == text[t] || pattern[p] == b'?') {
-            p += 1;
-            t += 1;
-        } else if p < pattern.len() && pattern[p] == b'*' {
-            star = Some(p);
-            match_after_star = t;
-            p += 1;
-        } else if let Some(star_index) = star {
-            p = star_index + 1;
-            match_after_star += 1;
-            t = match_after_star;
-        } else {
-            return false;
+/// Byte-wise glob over one path component: `*`/`?` wildcards plus `[...]`
+/// character classes with `!`/`^` negation and ranges (gitignore).
+fn component_glob_matches(pattern: &[u8], text: &[u8]) -> bool {
+    let Some((&first, rest)) = pattern.split_first() else {
+        return text.is_empty();
+    };
+    match first {
+        b'*' => {
+            // Consecutive asterisks inside a component behave like a single
+            // one (gitignore: "other consecutive asterisks are considered
+            // regular asterisks").
+            let mut rest = rest;
+            while rest.first() == Some(&b'*') {
+                rest = &rest[1..];
+            }
+            (0..=text.len()).any(|skip| component_glob_matches(rest, &text[skip..]))
+        }
+        b'?' => !text.is_empty() && component_glob_matches(rest, &text[1..]),
+        b'[' => {
+            // An unterminated class matches nothing (npm `ignore`).
+            let Some(class) = CharacterClass::parse(pattern) else {
+                return false;
+            };
+            !text.is_empty()
+                && class.matches(text[0])
+                && component_glob_matches(&pattern[class.length..], &text[1..])
+        }
+        _ => !text.is_empty() && text[0] == first && component_glob_matches(rest, &text[1..]),
+    }
+}
+
+struct CharacterClass {
+    length: usize,
+    negated: bool,
+    ranges: Vec<(u8, u8)>,
+}
+
+impl CharacterClass {
+    /// Parse a `[...]` class at the start of `pattern` (gitignore rules:
+    /// `!`/`^` negation, `a-z` ranges, a leading `]` is literal).
+    fn parse(pattern: &[u8]) -> Option<Self> {
+        let mut index = 1;
+        let negated = matches!(pattern.get(index), Some(b'!' | b'^'));
+        if negated {
+            index += 1;
+        }
+        let mut ranges = Vec::new();
+        let mut first = true;
+        loop {
+            let &byte = pattern.get(index)?;
+            if byte == b']' && !first {
+                return Some(Self {
+                    length: index + 1,
+                    negated,
+                    ranges,
+                });
+            }
+            first = false;
+            index += 1;
+            if pattern.get(index) == Some(&b'-')
+                && pattern.get(index + 1).is_some_and(|&end| end != b']')
+            {
+                let end = pattern[index + 1];
+                index += 2;
+                // Out-of-order ranges are dropped (npm `ignore`
+                // sanitizeRange).
+                if byte <= end {
+                    ranges.push((byte, end));
+                }
+            } else {
+                ranges.push((byte, byte));
+            }
         }
     }
 
-    while p < pattern.len() && pattern[p] == b'*' {
-        p += 1;
+    fn matches(&self, byte: u8) -> bool {
+        let inside = self
+            .ranges
+            .iter()
+            .any(|&(start, end)| start <= byte && byte <= end);
+        inside != self.negated
     }
-    p == pattern.len()
 }
 
 fn load_skill_from_file(path: &Path) -> (Option<Skill>, Vec<SkillDiagnostic>) {

@@ -2474,6 +2474,16 @@ Alignment; the following upstream increments remain open:
   timeout), and canonicalized temp dirs in the execution-env tests — which
   fixes the long-standing macOS-only `/var -> /private/var` failure; the
   workspace suite now passes 1325/1325 locally.
+- Behavior-parity audit (2026-07-25): constants sweep (662+137 rows),
+  function-level walk of retry/error-body/SSE/estimate utils (121 rows),
+  and a 57-case live payload differential harness (pi bun dumper vs ri
+  complete_simple, both through real payload hooks). All actionable drifts
+  fixed across five parallel work packages; highest impact: anthropic /v1
+  endpoint, bedrock TTL/caching/throttling/defaults, codex retry semantics,
+  SDK-shaped error bodies, branch-scoped compaction + pi cursor paging,
+  tool-call id item preservation. Workspace 1527 passed / 0 failed;
+  differential 55/57 (2 documented pi-bug divergences). Residuals and
+  feature gaps in docs/BEHAVIOR_PARITY_AUDIT.md.
 - Prompt-text parity audit (2026-07-25): all 156 model-visible strings
   (system/summarization prompts, skills/templates, session markers,
   tool-error texts, transform placeholders, provider-injected text)

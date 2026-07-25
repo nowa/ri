@@ -809,9 +809,10 @@ impl SessionStorageKind {
         }
     }
 
-    /// Cursor-paged entry listing (pi `SessionEntryCursorOptions`): up to
-    /// `limit` entries whose 1-based sequence number is at or before
-    /// `after_entry_seq` (default: the latest entry), in ascending order.
+    /// Cursor-paged entry listing (pi `SessionEntryCursorOptions`): forward
+    /// paging — skip the first `after_entry_seq` entries and return up to
+    /// `limit` of the remaining entries in ascending order (pi
+    /// `entries.slice(afterEntrySeq, afterEntrySeq + limit)`).
     pub fn entries_page(
         &self,
         options: &SessionEntryCursorOptions,
@@ -862,8 +863,10 @@ impl SessionStorageKind {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionEntryCursorOptions {
     pub limit: Option<usize>,
-    /// Inclusive upper-bound sequence anchor; `None` starts from the latest
-    /// entry.
+    /// Exclusive lower-bound sequence anchor: the page starts after the
+    /// entry with this 1-based sequence number (equivalently, the number of
+    /// leading entries to skip). Honored even without `limit`; `None` starts
+    /// at the beginning (pi `afterEntrySeq`).
     pub after_entry_seq: Option<u64>,
 }
 
@@ -871,15 +874,12 @@ pub(crate) fn page_in_memory_entries(
     entries: &[SessionTreeEntry],
     options: &SessionEntryCursorOptions,
 ) -> Vec<SessionTreeEntry> {
-    let Some(limit) = options.limit else {
-        return entries.to_vec();
+    let start = (options.after_entry_seq.unwrap_or(0) as usize).min(entries.len());
+    let end = match options.limit {
+        Some(limit) => start.saturating_add(limit).min(entries.len()),
+        None => entries.len(),
     };
-    let upper = options
-        .after_entry_seq
-        .map(|seq| (seq as usize).min(entries.len()))
-        .unwrap_or(entries.len());
-    let lower = upper.saturating_sub(limit);
-    entries[lower..upper].to_vec()
+    entries[start..end].to_vec()
 }
 
 /// Walk from `leaf_id` to the root, stopping after a compaction entry's
@@ -1030,6 +1030,9 @@ impl Session {
         self.storage.lock().entries()
     }
 
+    /// The active branch: path from the root to the leaf, stopping at the
+    /// previous compaction boundary (pi `Session.getBranch` →
+    /// `getPathToRootOrCompaction`).
     pub fn branch(&self, from_id: Option<&str>) -> Result<Vec<SessionTreeEntry>, SessionError> {
         let owned_leaf;
         let leaf_id = match from_id {
@@ -1039,7 +1042,7 @@ impl Session {
                 owned_leaf.as_deref()
             }
         };
-        self.storage.lock().path_to_root(leaf_id)
+        self.storage.lock().path_to_root_or_compaction(leaf_id)
     }
 
     pub fn build_context(&self) -> Result<SessionContext, SessionError> {

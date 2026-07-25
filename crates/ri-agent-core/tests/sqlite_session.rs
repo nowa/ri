@@ -700,9 +700,12 @@ fn sqlite_entries_page_follows_the_sequence_cursor() {
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>()
     };
-    assert_eq!(page(Some(2), None), vec!["e4", "e5"]);
-    assert_eq!(page(Some(2), Some(3)), vec!["e2", "e3"]);
-    assert_eq!(page(Some(10), Some(2)), vec!["e1", "e2"]);
+    // pi getEntries(): forward paging — skip `afterEntrySeq` entries, take
+    // `limit`; the anchor applies even without a limit.
+    assert_eq!(page(Some(2), None), vec!["e1", "e2"]);
+    assert_eq!(page(Some(2), Some(3)), vec!["e4", "e5"]);
+    assert_eq!(page(Some(10), Some(2)), vec!["e3", "e4", "e5"]);
+    assert_eq!(page(None, Some(3)), vec!["e4", "e5"]);
     assert_eq!(page(None, None), vec!["e1", "e2", "e3", "e4", "e5"]);
 }
 

@@ -228,8 +228,7 @@ pub fn resolve_azure_openai_config(
                 .azure_resource_name
                 .filter(|value| !value.is_empty())
                 .or_else(|| {
-                    std::env::var("AZURE_OPENAI_RESOURCE_NAME")
-                        .ok()
+                    crate::get_provider_env_value("AZURE_OPENAI_RESOURCE_NAME", &options.env)
                         .filter(|value| !value.is_empty())
                 })
                 .map(|resource| build_default_azure_openai_base_url(&resource))

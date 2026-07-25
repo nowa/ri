@@ -114,6 +114,11 @@ pub fn build_openai_responses_payload(
                 }
             }
         }
+        // pi forces encrypted-reasoning replay for xAI whenever the model
+        // reasons, regardless of the effort/summary branch above.
+        if model.provider == "xai" {
+            payload["include"] = json!(["reasoning.encrypted_content"]);
+        }
     }
 
     payload
@@ -150,10 +155,22 @@ pub fn convert_openai_responses_tools_with_defer(
 pub fn resolve_openai_responses_cache_retention(
     cache_retention: Option<CacheRetention>,
 ) -> CacheRetention {
+    resolve_openai_responses_cache_retention_scoped(
+        cache_retention,
+        &std::collections::BTreeMap::new(),
+    )
+}
+
+/// pi resolves PI_CACHE_RETENTION through the request-scoped provider env
+/// before the process environment.
+pub fn resolve_openai_responses_cache_retention_scoped(
+    cache_retention: Option<CacheRetention>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> CacheRetention {
     if let Some(cache_retention) = cache_retention {
         return cache_retention;
     }
-    if std::env::var("PI_CACHE_RETENTION").ok().as_deref() == Some("long") {
+    if crate::get_provider_env_value("PI_CACHE_RETENTION", env).as_deref() == Some("long") {
         CacheRetention::Long
     } else {
         CacheRetention::Short
@@ -405,13 +422,25 @@ pub fn convert_openai_responses_messages_with_deferred(
                             {
                                 item_id = None;
                             }
-                            output.push(json!({
-                                "type": "function_call",
-                                "id": item_id,
-                                "call_id": call_id,
-                                "name": tool_call.name,
-                                "arguments": serde_json::to_string(&tool_call.arguments).unwrap_or_else(|_| "{}".to_owned()),
-                            }));
+                            let arguments = serde_json::to_string(&tool_call.arguments)
+                                .unwrap_or_else(|_| "{}".to_owned());
+                            // pi only sets `id` when an item id is present; an
+                            // explicit null is a wire difference.
+                            output.push(match item_id {
+                                Some(item_id) => json!({
+                                    "type": "function_call",
+                                    "id": item_id,
+                                    "call_id": call_id,
+                                    "name": tool_call.name,
+                                    "arguments": arguments,
+                                }),
+                                None => json!({
+                                    "type": "function_call",
+                                    "call_id": call_id,
+                                    "name": tool_call.name,
+                                    "arguments": arguments,
+                                }),
+                            });
                         }
                     }
                 }
@@ -573,7 +602,9 @@ fn normalize_responses_id_part(part: &str) -> String {
 
 fn split_responses_tool_call_id(id: &str) -> (&str, Option<&str>) {
     match id.split_once('|') {
-        Some((call_id, item_id)) => (call_id, Some(item_id)),
+        // pi destructures `id.split("|")` into [callId, itemId]: only the
+        // second segment survives; a third pipe-separated part is dropped.
+        Some((call_id, rest)) => (call_id, Some(rest.split('|').next().unwrap_or(rest))),
         None => (id, None),
     }
 }
@@ -901,6 +932,7 @@ impl OpenAIResponsesStreamProcessor {
                     _ => {}
                 }
             }
+            "response.done" if model.api != "openai-codex-responses" => {}
             "response.completed" | "response.incomplete" | "response.done" => {
                 if let Some(response_output) =
                     event.pointer("/response/output").and_then(Value::as_array)
@@ -1221,10 +1253,11 @@ pub fn parse_openai_responses_usage(
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
         ),
+        // pi: usage.total_tokens || 0 — no computed fallback.
         total_tokens: value
             .get("total_tokens")
             .and_then(Value::as_u64)
-            .unwrap_or(input_tokens + output),
+            .unwrap_or(0),
         cost: UsageCost::default(),
     };
     calculate_cost(model, &mut usage);
@@ -1256,6 +1289,11 @@ pub fn openai_responses_service_tier_cost_multiplier(
     model: &Model,
     service_tier: Option<&str>,
 ) -> f64 {
+    // pi wires the service-tier pricing hook only for the OpenAI and Codex
+    // paths; Azure usage is never multiplied.
+    if model.api == "azure-openai-responses" {
+        return 1.0;
+    }
     match service_tier {
         Some("flex") => 0.5,
         Some("priority") if model.id == "gpt-5.5" => 2.5,

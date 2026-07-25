@@ -424,10 +424,22 @@ fn convert_openai_completions_messages_with_cache(
 pub fn resolve_openai_completions_cache_retention(
     cache_retention: Option<CacheRetention>,
 ) -> CacheRetention {
+    resolve_openai_completions_cache_retention_scoped(
+        cache_retention,
+        &std::collections::BTreeMap::new(),
+    )
+}
+
+/// pi resolves PI_CACHE_RETENTION through the request-scoped provider env
+/// before the process environment.
+pub fn resolve_openai_completions_cache_retention_scoped(
+    cache_retention: Option<CacheRetention>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> CacheRetention {
     if let Some(cache_retention) = cache_retention {
         return cache_retention;
     }
-    if std::env::var("PI_CACHE_RETENTION").ok().as_deref() == Some("long") {
+    if crate::get_provider_env_value("PI_CACHE_RETENTION", env).as_deref() == Some("long") {
         CacheRetention::Long
     } else {
         CacheRetention::Short
@@ -1158,7 +1170,8 @@ fn supports_strict_mode(model: &Model) -> bool {
 
     !(is_moonshot_openai_completions_model(model)
         || is_together_openai_completions_model(model)
-        || is_cloudflare_ai_gateway_model(model))
+        || is_cloudflare_ai_gateway_model(model)
+        || is_nvidia_openai_completions_model(model))
 }
 
 fn supports_usage_in_streaming(model: &Model) -> bool {
@@ -1185,14 +1198,21 @@ fn supports_developer_role(model: &Model) -> bool {
         .as_ref()
         .and_then(|compat| compat.get("supportsDeveloperRole"))
         .and_then(Value::as_bool)
-        .unwrap_or_else(|| !is_nonstandard_openai_completions_model(model))
+        .unwrap_or_else(|| {
+            let openrouter = is_openrouter_openai_completions_model(model);
+            let openrouter_developer_role_model = openrouter
+                && (model.id.starts_with("anthropic/") || model.id.starts_with("openai/"));
+            openrouter_developer_role_model
+                || (!is_nonstandard_openai_completions_model(model) && !openrouter)
+        })
 }
 
 fn is_nonstandard_openai_completions_model(model: &Model) -> bool {
     let provider = model.provider.as_str();
     let base_url = model.base_url.as_str();
 
-    provider == "cerebras"
+    is_nvidia_openai_completions_model(model)
+        || provider == "cerebras"
         || base_url.contains("cerebras.ai")
         || provider == "xai"
         || base_url.contains("api.x.ai")
@@ -1205,6 +1225,7 @@ fn is_nonstandard_openai_completions_model(model: &Model) -> bool {
         || base_url.contains("opencode.ai")
         || is_cloudflare_workers_ai_model(model)
         || is_cloudflare_ai_gateway_model(model)
+        || is_ant_ling_openai_completions_model(model)
 }
 
 fn is_together_openai_completions_model(model: &Model) -> bool {
@@ -1214,7 +1235,22 @@ fn is_together_openai_completions_model(model: &Model) -> bool {
 }
 
 fn is_zai_openai_completions_model(model: &Model) -> bool {
-    model.provider == "zai" || model.base_url.contains("api.z.ai")
+    model.provider == "zai"
+        || model.provider == "zai-coding-cn"
+        || model.base_url.contains("api.z.ai")
+        || model.base_url.contains("open.bigmodel.cn")
+}
+
+fn is_nvidia_openai_completions_model(model: &Model) -> bool {
+    model.provider == "nvidia" || model.base_url.contains("integrate.api.nvidia.com")
+}
+
+fn is_ant_ling_openai_completions_model(model: &Model) -> bool {
+    model.provider == "ant-ling" || model.base_url.contains("api.ant-ling.com")
+}
+
+fn is_openrouter_openai_completions_model(model: &Model) -> bool {
+    model.provider == "openrouter" || model.base_url.contains("openrouter.ai")
 }
 
 fn is_moonshot_openai_completions_model(model: &Model) -> bool {
@@ -1245,6 +1281,8 @@ fn uses_max_tokens_field(model: &Model) -> bool {
         || is_moonshot_openai_completions_model(model)
         || is_cloudflare_ai_gateway_model(model)
         || is_together_openai_completions_model(model)
+        || is_nvidia_openai_completions_model(model)
+        || is_ant_ling_openai_completions_model(model)
 }
 
 fn uses_anthropic_cache_control(model: &Model) -> bool {
@@ -1254,7 +1292,7 @@ fn uses_anthropic_cache_control(model: &Model) -> bool {
         .and_then(|compat| compat.get("cacheControlFormat"))
         .and_then(Value::as_str)
         == Some("anthropic")
-        || (model.provider == "openrouter" && model.id.contains("anthropic/"))
+        || (model.provider == "openrouter" && model.id.starts_with("anthropic/"))
 }
 
 fn openai_completions_cache_control(
@@ -1350,7 +1388,9 @@ fn supports_long_cache_retention(model: &Model) -> bool {
         .unwrap_or_else(|| {
             !(is_together_openai_completions_model(model)
                 || is_cloudflare_workers_ai_model(model)
-                || is_cloudflare_ai_gateway_model(model))
+                || is_cloudflare_ai_gateway_model(model)
+                || is_nvidia_openai_completions_model(model)
+                || is_ant_ling_openai_completions_model(model))
         })
 }
 
@@ -1431,6 +1471,18 @@ fn apply_reasoning_options(payload: &mut Value, model: &Model, reasoning: Option
                     && let Some(Some(effort)) = model.thinking_level_map.get(&reasoning)
                 {
                     payload["reasoning"] = json!({ "effort": effort });
+                }
+            }
+            "string-thinking" => {
+                if let Some(reasoning) = reasoning {
+                    payload["thinking"] = Value::String(thinking_level_wire(model, reasoning));
+                } else if model.thinking_level_map.get(&ThinkingLevel::Off) != Some(&None) {
+                    let thinking = model
+                        .thinking_level_map
+                        .get(&ThinkingLevel::Off)
+                        .and_then(|value| value.clone())
+                        .unwrap_or_else(|| "none".to_owned());
+                    payload["thinking"] = Value::String(thinking);
                 }
             }
             "openrouter" => {
@@ -1531,7 +1583,9 @@ fn supports_reasoning_effort(model: &Model) -> bool {
                 || is_zai_openai_completions_model(model)
                 || is_moonshot_openai_completions_model(model)
                 || is_together_openai_completions_model(model)
-                || is_cloudflare_ai_gateway_model(model))
+                || is_cloudflare_ai_gateway_model(model)
+                || is_nvidia_openai_completions_model(model)
+                || is_ant_ling_openai_completions_model(model))
         })
 }
 
@@ -1551,7 +1605,9 @@ fn thinking_format(model: &Model) -> &str {
         "zai"
     } else if is_together_openai_completions_model(model) {
         "together"
-    } else if model.provider == "openrouter" || model.base_url.contains("openrouter.ai") {
+    } else if is_ant_ling_openai_completions_model(model) {
+        "ant-ling"
+    } else if is_openrouter_openai_completions_model(model) {
         "openrouter"
     } else {
         "openai"
@@ -1563,17 +1619,15 @@ fn apply_provider_routing_options(payload: &mut Value, model: &Model) {
         return;
     };
 
-    if model.base_url.contains("openrouter.ai")
-        && let Some(routing) = compat.get("openRouterRouting")
+    if let Some(routing) = compat.get("openRouterRouting")
         && routing.is_object()
     {
         payload["provider"] = routing.clone();
     }
 
-    if model.base_url.contains("ai-gateway.vercel.sh")
-        && let Some(routing) = compat
-            .get("vercelGatewayRouting")
-            .and_then(Value::as_object)
+    if let Some(routing) = compat
+        .get("vercelGatewayRouting")
+        .and_then(Value::as_object)
     {
         let mut gateway_options = Map::new();
         if let Some(only) = routing.get("only").filter(|value| !value.is_null()) {

@@ -575,7 +575,10 @@ pub async fn send_oauth_http_request(
         .method
         .parse::<reqwest::Method>()
         .map_err(|error| format!("Unsupported OAuth HTTP method {}: {error}", request.method))?;
-    let mut builder = client.request(method.clone(), &request.url);
+    let mut builder = client
+        .request(method.clone(), &request.url)
+        // pi aborts OAuth token requests after 30s (AbortSignal.timeout).
+        .timeout(std::time::Duration::from_secs(30));
     for (name, value) in &request.headers {
         builder = builder.header(name, value);
     }

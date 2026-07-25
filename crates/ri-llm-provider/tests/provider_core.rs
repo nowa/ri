@@ -5188,9 +5188,11 @@ fn cloudflare_model_metadata_and_base_url_resolution_match_provider_catalog() {
             "maxTokensField": "max_tokens",
         }))
     );
+    // pi substitutes `env[VAR] ?? "{VAR}"` — unresolved placeholders stay
+    // literal instead of failing locally.
     assert_eq!(
-        resolve_cloudflare_base_url(&gateway_workers).expect_err("missing env"),
-        "CLOUDFLARE_ACCOUNT_ID is required for provider cloudflare-ai-gateway but is not set."
+        resolve_cloudflare_base_url(&gateway_workers).expect("unresolved stays literal"),
+        gateway_workers.base_url
     );
 
     set_env("CLOUDFLARE_ACCOUNT_ID", "account-id");
@@ -8826,11 +8828,12 @@ fn github_copilot_oauth_refresh_and_base_url_helpers_match_provider() {
     );
     assert_eq!(normalize_github_domain("not a domain"), None);
 
-    let err = parse_github_copilot_device_code_response(
+    // pi treats `interval` as optional (RFC 8628 default of 5 seconds).
+    let device_code = parse_github_copilot_device_code_response(
         r#"{"device_code":"device-code","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","expires_in":900}"#,
     )
-    .expect_err("missing interval should be invalid");
-    assert!(err.contains("interval"), "{err}");
+    .expect("missing interval defaults");
+    assert_eq!(device_code.interval_seconds, 5);
 
     let refresh = build_github_copilot_refresh_request("ghu_refresh_token", None);
     assert_eq!(
@@ -9938,7 +9941,11 @@ fn bedrock_env_api_key_marker_matches_supported_http_auth_sources() {
     remove_env("AWS_ROLE_ARN");
 
     set_env("AWS_WEB_IDENTITY_TOKEN_FILE", "/var/run/secrets/token");
-    assert_eq!(get_env_api_key("amazon-bedrock"), None);
+    // pi treats the web-identity token file alone as ambient credentials.
+    assert_eq!(
+        get_env_api_key("amazon-bedrock"),
+        Some("<authenticated>".to_owned())
+    );
     set_env("AWS_ROLE_ARN", "arn:aws:iam::123456789012:role/test");
     assert_eq!(
         get_env_api_key("amazon-bedrock"),
@@ -10651,8 +10658,10 @@ async fn bedrock_stream_events_preserve_blocks_usage_and_stop_reason() {
     assert_eq!(output.usage.output, 5);
     assert_eq!(output.usage.cache_read, 4);
     assert_eq!(output.usage.cache_write, 2);
-    assert_eq!(output.usage.total_tokens, 21);
-    assert_usage_total_matches_components("bedrock stream usage", &output.usage);
+    // pi bedrock: `totalTokens || input + output` — cache tokens are not
+    // folded into the fallback, so the component-total invariant does not
+    // hold here.
+    assert_eq!(output.usage.total_tokens, 15);
     assert!(matches!(
         &output.content[0],
         AssistantContent::Thinking(thinking)
@@ -12183,7 +12192,10 @@ fn message_transform_normalizes_cross_provider_tool_call_ids() {
         panic!("tool call");
     };
 
-    assert_eq!(tool_call.id, "call_pAYbIr76hXIjncD9UE4eGfnS");
+    // pi preserves item-level uniqueness: callId + "_" + shortHash(id)[..8]
+    // when the combined call/item id exceeds 40 chars (ground truth computed
+    // with pi's shortHash over this exact id).
+    assert_eq!(tool_call.id, "call_pAYbIr76hXIjncD9UE4eGfnS_1q6evuz1");
     assert!(tool_call.id.len() <= 40);
     assert_eq!(tool_call.thought_signature, None);
 
@@ -16587,52 +16599,54 @@ fn openai_codex_responses_usage_uses_client_tier_when_response_echoes_default() 
 
 #[test]
 fn openai_codex_responses_retry_delay_respects_headers_and_backoff() {
+    // pi defaults to zero inner retries; delays require an explicit budget.
     assert_eq!(
         openai_codex_retry_delay_ms(429, "rate limited", Some("1500"), None, 0, 0),
+        None
+    );
+    let delay = |status, error_text, retry_after_ms, retry_after, attempt| {
+        openai_codex_retry_delay_ms_with_limits(
+            status,
+            error_text,
+            retry_after_ms,
+            retry_after,
+            attempt,
+            0,
+            3,
+            None,
+        )
+    };
+    assert_eq!(
+        delay(429, "rate limited", Some("1500"), None, 0),
         Some(1500)
     );
     assert_eq!(
-        openai_codex_retry_delay_ms(429, "rate limited", None, Some("60"), 0, 0),
+        delay(429, "rate limited", None, Some("60"), 0),
         Some(60_000)
     );
     assert_eq!(
-        openai_codex_retry_delay_ms(
+        delay(
             429,
             "rate limited",
             None,
             Some("Thu, 01 Jan 1970 00:00:45 GMT"),
             0,
-            0
         ),
         Some(45_000)
     );
+    assert_eq!(delay(429, "rate limited", None, None, 0), Some(1000));
+    assert_eq!(delay(429, "rate limited", None, None, 1), Some(2000));
+    assert_eq!(delay(429, "rate limited", None, None, 2), Some(4000));
+    assert_eq!(delay(429, "rate limited", None, None, 3), None);
+    assert_eq!(delay(400, "plain bad request", None, None, 0), None);
     assert_eq!(
-        openai_codex_retry_delay_ms(429, "rate limited", None, None, 0, 0),
+        delay(400, "upstream connect refused", None, None, 0),
         Some(1000)
     );
-    assert_eq!(
-        openai_codex_retry_delay_ms(429, "rate limited", None, None, 1, 0),
-        Some(2000)
-    );
-    assert_eq!(
-        openai_codex_retry_delay_ms(429, "rate limited", None, None, 2, 0),
-        Some(4000)
-    );
-    assert_eq!(
-        openai_codex_retry_delay_ms(429, "rate limited", None, None, 3, 0),
-        None
-    );
-    assert_eq!(
-        openai_codex_retry_delay_ms(400, "plain bad request", None, None, 0, 0),
-        None
-    );
-    assert_eq!(
-        openai_codex_retry_delay_ms(400, "upstream connect refused", None, None, 0, 0),
-        Some(1000)
-    );
+    // maxRetryDelayMs <= 0 disables the 429 retry-after cap; backoff applies.
     assert_eq!(
         openai_codex_retry_delay_ms_with_limits(429, "rate limited", None, None, 0, 0, 1, Some(0)),
-        Some(0)
+        Some(1000)
     );
     assert_eq!(
         openai_codex_retry_delay_ms_with_limits(429, "rate limited", None, None, 1, 0, 1, None),
@@ -17160,7 +17174,7 @@ fn openai_completions_detects_openai_compatible_payload_defaults_from_base_url()
 }
 
 #[test]
-fn openai_completions_payload_forwards_provider_routing_for_matching_gateways() {
+fn openai_completions_payload_forwards_provider_routing_from_compat() {
     let context = user_context("Hi");
     let openrouter_routing = json!({
         "only": ["anthropic"],
@@ -17190,13 +17204,15 @@ fn openai_completions_payload_forwards_provider_routing_for_matching_gateways() 
     );
     assert_eq!(payload["provider"], openrouter_routing);
 
+    // pi forwards compat routing regardless of the base URL (no gateway
+    // host gate).
     openrouter_model.base_url = "https://proxy.example.com/v1".to_owned();
     let payload = build_openai_completions_payload(
         &openrouter_model,
         &context,
         OpenAICompletionsPayloadOptions::default(),
     );
-    assert!(payload.get("provider").is_none());
+    assert_eq!(payload["provider"], openrouter_routing);
 
     let mut vercel_model = Model {
         id: "custom-vercel".to_owned(),
@@ -20439,12 +20455,16 @@ fn overflow_matches_provider_error_shapes_without_rate_limit_false_positives() {
 
 #[test]
 fn overflow_matches_context_overflow_provider_error_corpus() {
-    assert_eq!(overflow_pattern_count(), 24);
+    assert_eq!(overflow_pattern_count(), 25);
 
     for (provider, error) in [
         (
             "anthropic token limit",
             "prompt is too long: 213462 tokens > 200000 maximum",
+        ),
+        (
+            "dashscope input length",
+            "Range of input length should be [1, 30720]",
         ),
         (
             "anthropic request size",
@@ -21698,7 +21718,7 @@ async fn builtin_anthropic_provider_posts_json_and_parses_sse() {
         message.usage.cost.total,
         0.00005,
     );
-    assert!(request.starts_with("POST /messages HTTP/1.1"));
+    assert!(request.starts_with("POST /v1/messages HTTP/1.1"));
     assert!(
         request
             .to_ascii_lowercase()
@@ -21816,7 +21836,7 @@ async fn builtin_cloudflare_ai_gateway_anthropic_preserves_byok_authorization_an
 
     assert_eq!(text_of(&message), Some("Gateway Claude"));
     assert_eq!(message.response_id.as_deref(), Some("msg_cf_anthropic"));
-    assert!(request.starts_with("POST /messages HTTP/1.1"));
+    assert!(request.starts_with("POST /v1/messages HTTP/1.1"));
     assert!(lower_request.contains("cf-aig-authorization: bearer cf-token"));
     assert!(lower_request.contains("authorization: bearer upstream-token"));
     assert!(!lower_request.contains("\r\nx-api-key:"));
@@ -21858,7 +21878,7 @@ async fn builtin_github_copilot_anthropic_provider_exposes_response_id() {
     );
     assert_eq!(message.usage.input, 3);
     assert_eq!(message.usage.output, 1);
-    assert!(request.starts_with("POST /messages HTTP/1.1"));
+    assert!(request.starts_with("POST /v1/messages HTTP/1.1"));
     assert!(lower_request.contains("authorization: bearer copilot-anthropic-token"));
     assert!(lower_request.contains("copilot-integration-id: vscode-chat"));
     assert!(!lower_request.contains("x-api-key:"));
@@ -22727,7 +22747,8 @@ async fn builtin_openai_codex_provider_retries_sse_network_errors_before_streami
     options.stream.api_key = Some(codex_test_token());
     options.stream.session_id = Some("codex-network-retry-session".to_owned());
     options.stream.transport = Some(Transport::Sse);
-    options.stream.max_retry_delay_ms = Some(0);
+    // pi defaults to zero inner retries; network retry requires opting in.
+    options.stream.max_retries = Some(1);
 
     let message = complete_simple(&model, user_context("hello"), options)
         .await

@@ -423,9 +423,11 @@ async fn openai_completions_error_surfaces_status_and_body() {
     let _request = request_task.await.expect("request task");
 
     assert_eq!(message.stop_reason, StopReason::Error);
+    // pi: the openai SDK stringifies the body's string `error` field into the
+    // message ("403 \"...\""); a string field is not a separate body.
     assert_eq!(
         message.error_message.as_deref(),
-        Some(r#"403: {"error":"blocked by gateway WAF"}"#)
+        Some(r#"403 "blocked by gateway WAF""#)
     );
 }
 
@@ -468,9 +470,11 @@ async fn openai_responses_error_keeps_prefix_and_surfaces_body() {
     let _request = request_task.await.expect("request task");
 
     assert_eq!(message.stop_reason, StopReason::Error);
+    // pi: string `error` field folds into the SDK message, so the prefix
+    // carries the SDK-shaped text rather than a separate body.
     assert_eq!(
         message.error_message.as_deref(),
-        Some(r#"OpenAI API error (403): {"error":"blocked by gateway WAF"}"#)
+        Some(r#"OpenAI API error (403): 403 "blocked by gateway WAF""#)
     );
 }
 

@@ -3,10 +3,11 @@ use crate::{
     harness::{
         BranchMoveSummary, BranchSummaryResult, CollectEntriesResult, CompactionDetails,
         CompactionPreparation, CompactionResult, CompactionThresholdSettings, CustomMessageContent,
-        DEFAULT_SYSTEM_PROMPT, LocalExecutionEnv, PromptTemplate, Session, SessionTreeEntry, Skill,
-        collect_entries_for_branch_summary, compact as compact_prepared_session,
-        convert_session_messages_to_llm, format_prompt_template_invocation,
-        format_skill_invocation, generate_branch_summary, prepare_compaction,
+        DEFAULT_SYSTEM_PROMPT, LocalExecutionEnv, PromptTemplate, Session, SessionError,
+        SessionErrorCode, SessionTreeEntry, Skill, collect_entries_for_branch_summary,
+        compact as compact_prepared_session, convert_session_messages_to_llm,
+        format_prompt_template_invocation, format_skill_invocation, generate_branch_summary,
+        prepare_compaction,
     },
     types::{
         AgentContext, AgentEvent, AgentEventSink, AgentLoopTurnUpdate, AgentMessage,
@@ -1395,7 +1396,13 @@ impl AgentHarness {
             let had_pending_mutations = self.has_pending_session_writes();
             self.flush_pending_session_writes()?;
 
-            let entries = self.session.entries();
+            // pi compact(): feed the active branch (path from the leaf to
+            // the root, stopping at the previous compaction boundary) into
+            // preparation, not the whole append log.
+            let entries = self
+                .session
+                .branch(None)
+                .map_err(AgentHarnessError::session)?;
             let Some(preparation) = prepare_compaction(&entries, options.settings)
                 .map_err(AgentHarnessError::compaction)?
             else {
@@ -2398,12 +2405,23 @@ fn collect_branch_summary_entries_for_target(
         Some(target_id) => collect_entries_for_branch_summary(session, old_leaf_id, target_id)
             .map_err(AgentHarnessError::branch_summary),
         None => {
-            let entries = match old_leaf_id {
-                Some(old_leaf_id) => session
-                    .branch(Some(old_leaf_id))
-                    .map_err(AgentHarnessError::session)?,
-                None => Vec::new(),
-            };
+            // A move to the root has no pi counterpart; mirror pi
+            // `collectEntriesForBranchSummary` with a null common ancestor:
+            // walk the full parent chain from the old leaf, including
+            // pre-compaction history.
+            let mut entries = Vec::new();
+            let mut current = old_leaf_id.map(str::to_owned);
+            while let Some(current_id) = current {
+                let entry = session.get_entry(&current_id).ok_or_else(|| {
+                    AgentHarnessError::session(SessionError::new(
+                        SessionErrorCode::InvalidSession,
+                        format!("Entry {current_id} not found"),
+                    ))
+                })?;
+                current = entry.parent_id().map(str::to_owned);
+                entries.push(entry);
+            }
+            entries.reverse();
             Ok(CollectEntriesResult {
                 entries,
                 common_ancestor_id: None,

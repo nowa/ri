@@ -39,7 +39,9 @@ pub struct RadiusGatewayConfig {
 }
 
 pub fn normalize_radius_gateway_url(value: &str) -> String {
-    let with_scheme = if value.starts_with("http://") || value.starts_with("https://") {
+    let lowered = value.to_ascii_lowercase();
+    // pi: /^https?:\/\//i — scheme detection is case-insensitive.
+    let with_scheme = if lowered.starts_with("http://") || lowered.starts_with("https://") {
         value.to_owned()
     } else {
         format!("https://{value}")
@@ -287,7 +289,8 @@ async fn login_radius_with_browser(
     interaction: &dyn AuthInteraction,
 ) -> Result<OAuthCredential, String> {
     let pkce = crate::anthropic_oauth::generate_pkce()?;
-    let state = crate::openai_codex_oauth::generate_openai_codex_oauth_state()?;
+    // pi: crypto.randomUUID() — a v4 UUID, not the codex hex state.
+    let state = uuid::Uuid::new_v4().to_string();
     let redirect_uri =
         format!("http://{RADIUS_CALLBACK_HOST}:{RADIUS_CALLBACK_PORT}{RADIUS_CALLBACK_PATH}");
     let query = form_body(&[

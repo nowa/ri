@@ -728,6 +728,9 @@ fn apply_known_model_overrides(model: &mut Model) {
                 cache_write: 3.75,
                 tiers: Vec::new(),
             };
+            // pi's generated catalog marks Cloudflare AI Gateway Anthropic
+            // models with the session-affinity compat flag.
+            model.compat = Some(json!({ "sendSessionAffinityHeaders": true }));
         }
     }
 
@@ -4567,24 +4570,20 @@ pub fn resolve_cloudflare_base_url_scoped(
             remaining = &after_start[end + 1..];
             continue;
         }
-        let value = crate::get_provider_env_value(name, env).ok_or_else(|| {
-            format!(
-                "{name} is required for provider {} but is not set.",
-                model.provider
-            )
-        })?;
-        resolved.push_str(&value);
+        // pi leaves an unresolved placeholder literal in the URL instead of
+        // failing (cloudflare-stream.ts: `env[VAR] ?? "{VAR}"`).
+        match crate::get_provider_env_value(name, env) {
+            Some(value) => resolved.push_str(&value),
+            None => resolved.push_str(&remaining[start..start + end + 2]),
+        }
         remaining = &after_start[end + 1..];
     }
     resolved.push_str(remaining);
     Ok(resolved)
 }
 
+/// pi substitutes exactly these two placeholders; any other `{...}` text in a
+/// base URL passes through untouched.
 fn is_cloudflare_env_placeholder(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first == '_' || first.is_ascii_uppercase())
-        && chars.all(|ch| ch == '_' || ch.is_ascii_uppercase() || ch.is_ascii_digit())
+    name == "CLOUDFLARE_ACCOUNT_ID" || name == "CLOUDFLARE_GATEWAY_ID"
 }

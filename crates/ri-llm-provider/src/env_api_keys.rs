@@ -116,7 +116,9 @@ fn has_bedrock_credentials() -> bool {
     env_os_nonempty("AWS_PROFILE")
         || (env_os_nonempty("AWS_ACCESS_KEY_ID") && env_os_nonempty("AWS_SECRET_ACCESS_KEY"))
         || env_os_nonempty("AWS_BEARER_TOKEN_BEDROCK")
-        || (env_os_nonempty("AWS_WEB_IDENTITY_TOKEN_FILE") && env_os_nonempty("AWS_ROLE_ARN"))
+        // pi treats the web-identity token file alone as ambient credentials
+        // (IRSA can inject the role via the token audience).
+        || env_os_nonempty("AWS_WEB_IDENTITY_TOKEN_FILE")
         || env_os_nonempty("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
         || env_os_nonempty("AWS_CONTAINER_CREDENTIALS_FULL_URI")
 }

@@ -830,7 +830,7 @@ pub fn build_anthropic_payload(
             anthropic_allow_empty_signature(model),
             &deferred_tool_names,
         ),
-        "max_tokens": options.max_tokens.unwrap_or(model.max_tokens / 3),
+        "max_tokens": options.max_tokens.unwrap_or(model.max_tokens),
         "stream": true,
     });
 
@@ -1087,11 +1087,7 @@ fn supports_anthropic_session_affinity(model: &Model) -> bool {
         .as_ref()
         .and_then(|compat| compat.get("sendSessionAffinityHeaders"))
         .and_then(Value::as_bool)
-        .unwrap_or_else(|| {
-            model.provider == "fireworks"
-                || (model.provider == "cloudflare-ai-gateway"
-                    && model.base_url.contains("anthropic"))
-        })
+        .unwrap_or(false)
 }
 
 fn convert_anthropic_messages_from_transformed(
@@ -1444,10 +1440,19 @@ fn anthropic_inbound_tool_name(
 pub fn resolve_anthropic_cache_retention(
     cache_retention: Option<CacheRetention>,
 ) -> CacheRetention {
+    resolve_anthropic_cache_retention_scoped(cache_retention, &std::collections::BTreeMap::new())
+}
+
+/// pi resolves PI_CACHE_RETENTION through the request-scoped provider env
+/// before the process environment.
+pub fn resolve_anthropic_cache_retention_scoped(
+    cache_retention: Option<CacheRetention>,
+    env: &std::collections::BTreeMap<String, String>,
+) -> CacheRetention {
     if let Some(cache_retention) = cache_retention {
         return cache_retention;
     }
-    if std::env::var("PI_CACHE_RETENTION").ok().as_deref() == Some("long") {
+    if crate::get_provider_env_value("PI_CACHE_RETENTION", env).as_deref() == Some("long") {
         CacheRetention::Long
     } else {
         CacheRetention::Short
@@ -1471,7 +1476,7 @@ fn supports_anthropic_long_cache_retention(model: &Model) -> bool {
         .as_ref()
         .and_then(|compat| compat.get("supportsLongCacheRetention"))
         .and_then(Value::as_bool)
-        .unwrap_or(model.provider != "fireworks")
+        .unwrap_or(true)
 }
 
 fn supports_anthropic_eager_tool_input_streaming(model: &Model) -> bool {
@@ -1480,7 +1485,7 @@ fn supports_anthropic_eager_tool_input_streaming(model: &Model) -> bool {
         .as_ref()
         .and_then(|compat| compat.get("supportsEagerToolInputStreaming"))
         .and_then(Value::as_bool)
-        .unwrap_or(model.provider != "fireworks")
+        .unwrap_or(true)
 }
 
 fn supports_anthropic_cache_control_on_tools(model: &Model) -> bool {
@@ -1489,23 +1494,23 @@ fn supports_anthropic_cache_control_on_tools(model: &Model) -> bool {
         .as_ref()
         .and_then(|compat| compat.get("supportsCacheControlOnTools"))
         .and_then(Value::as_bool)
-        .unwrap_or(model.provider != "fireworks")
+        .unwrap_or(true)
 }
 
 fn should_use_anthropic_fine_grained_tool_streaming_beta(model: &Model, context: &Context) -> bool {
     !context.tools.is_empty() && !supports_anthropic_eager_tool_input_streaming(model)
 }
 
-/// Whether the model uses adaptive thinking. Generated Anthropic-compatible
-/// aliases carry a `forceAdaptiveThinking` compat flag; first-party ids fall
-/// back to the id-based detection until the catalog refresh lands.
+/// Whether the model uses adaptive thinking. Only an explicit
+/// `forceAdaptiveThinking: true` compat flag enables adaptive thinking
+/// (pi `anthropic-messages.ts` checks `compat?.forceAdaptiveThinking === true`).
 fn anthropic_force_adaptive_thinking(model: &Model) -> bool {
     model
         .compat
         .as_ref()
         .and_then(|compat| compat.get("forceAdaptiveThinking"))
         .and_then(Value::as_bool)
-        .unwrap_or_else(|| supports_anthropic_adaptive_thinking(&model.id))
+        .unwrap_or(false)
 }
 
 /// Whether unsigned thinking blocks replay as `thinking` blocks with an empty
@@ -1520,33 +1525,15 @@ fn anthropic_allow_empty_signature(model: &Model) -> bool {
         .unwrap_or(false)
 }
 
-/// Claude Opus 4.7+ deprecates the temperature parameter.
+/// Claude Opus 4.7+ deprecates the temperature parameter; the generated
+/// catalog marks those models with `supportsTemperature: false`.
 fn anthropic_supports_temperature(model: &Model) -> bool {
     model
         .compat
         .as_ref()
         .and_then(|compat| compat.get("supportsTemperature"))
         .and_then(Value::as_bool)
-        .unwrap_or_else(|| {
-            !(model.id.contains("opus-4-7")
-                || model.id.contains("opus-4.7")
-                || model.id.contains("opus-4-8")
-                || model.id.contains("opus-4.8"))
-        })
-}
-
-fn supports_anthropic_adaptive_thinking(model_id: &str) -> bool {
-    model_id.contains("opus-4-6")
-        || model_id.contains("opus-4.6")
-        || model_id.contains("opus-4-7")
-        || model_id.contains("opus-4.7")
-        || model_id.contains("opus-4-8")
-        || model_id.contains("opus-4.8")
-        || model_id.contains("sonnet-4-6")
-        || model_id.contains("sonnet-4.6")
-        || model_id.contains("sonnet-5")
-        || model_id.contains("sonnet.5")
-        || model_id.contains("fable-5")
+        .unwrap_or(true)
 }
 
 fn map_anthropic_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> &'static str {

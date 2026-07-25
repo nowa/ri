@@ -77,6 +77,9 @@ struct CachedCodexWebSocket {
     socket: OpenAICodexWebSocket,
     continuation: Option<OpenAICodexCachedWebSocketContinuation>,
     created_at_ms: i64,
+    /// When the socket was last released back to the cache; drives the
+    /// 5-minute idle TTL (pi SESSION_WEBSOCKET_CACHE_TTL_MS).
+    last_used_at_ms: i64,
 }
 
 enum CodexWebSocketStreamError {
@@ -307,7 +310,10 @@ async fn stream_pi_messages_sse(
     if !status.is_success() {
         let status_text = status.canonical_reason().unwrap_or_default().to_owned();
         let body = response.text().await.map_err(|error| error.to_string())?;
-        return Err(crate::pi_messages::pi_messages_response_error_message(
+        return Err(crate::pi_messages::append_pi_messages_response_failure(
+            output,
+            model,
+            url,
             status.as_u16(),
             &status_text,
             &body,
@@ -372,7 +378,10 @@ impl ApiProvider for OpenAICompletionsHttpProvider {
     ) -> Result<AssistantMessageEventStream, ProviderError> {
         ensure_model_api(model, self.api())?;
         let cache_retention =
-            resolve_openai_completions_cache_retention(options.stream.cache_retention);
+            crate::openai_completions::resolve_openai_completions_cache_retention_scoped(
+                options.stream.cache_retention,
+                &options.stream.env,
+            );
         let mut payload = build_openai_completions_payload(
             model,
             &context,
@@ -387,13 +396,14 @@ impl ApiProvider for OpenAICompletionsHttpProvider {
             },
         );
         payload["stream"] = Value::Bool(true);
-        let headers = build_openai_completions_default_headers_with_context(
+        let mut headers = build_openai_completions_default_headers_with_context(
             model,
             Some(&context),
             options.stream.session_id.as_deref(),
             cache_retention,
             &options.stream.headers,
         );
+        remove_null_provider_headers(&mut headers, &options.stream);
         let base_url = resolved_model_base_url(model).map_err(ProviderError::Provider)?;
         spawn_openai_completions_sse_request(
             model.clone(),
@@ -433,7 +443,10 @@ impl ApiProvider for OpenAIResponsesHttpProvider {
     ) -> Result<AssistantMessageEventStream, ProviderError> {
         ensure_model_api(model, self.api())?;
         let cache_retention =
-            resolve_openai_responses_cache_retention(options.stream.cache_retention);
+            crate::openai_responses::resolve_openai_responses_cache_retention_scoped(
+                options.stream.cache_retention,
+                &options.stream.env,
+            );
         let payload = build_openai_responses_payload(
             model,
             &context,
@@ -458,13 +471,14 @@ impl ApiProvider for OpenAIResponsesHttpProvider {
                     .map(str::to_owned),
             },
         );
-        let headers = build_openai_responses_default_headers_with_context(
+        let mut headers = build_openai_responses_default_headers_with_context(
             model,
             Some(&context),
             options.stream.session_id.as_deref(),
             cache_retention,
             &options.stream.headers,
         );
+        remove_null_provider_headers(&mut headers, &options.stream);
         let base_url = resolved_model_base_url(model).map_err(ProviderError::Provider)?;
         spawn_openai_responses_sse_request(
             model.clone(),
@@ -504,11 +518,12 @@ impl ApiProvider for MistralHttpProvider {
     ) -> Result<AssistantMessageEventStream, ProviderError> {
         ensure_model_api(model, self.api())?;
         let payload = build_mistral_simple_payload(model, &context, options.clone());
-        let headers = build_mistral_request_headers(
+        let mut headers = build_mistral_request_headers(
             model,
             options.stream.session_id.as_deref(),
             &options.stream.headers,
         );
+        remove_null_provider_headers(&mut headers, &options.stream);
         spawn_mistral_sse_request(
             model.clone(),
             options,
@@ -595,6 +610,7 @@ impl ApiProvider for AzureOpenAIResponsesHttpProvider {
         );
         let mut headers = model.headers.clone();
         headers.extend(options.stream.headers.clone());
+        remove_null_provider_headers(&mut headers, &options.stream);
         if !headers_contain(&headers, "api-key")
             && let Some(api_key) = options
                 .stream
@@ -646,7 +662,16 @@ impl ApiProvider for AnthropicMessagesHttpProvider {
             .api_key
             .clone()
             .or_else(|| get_env_api_key_scoped(&model.provider, &options.stream.env))
-            .unwrap_or_default();
+            .filter(|api_key| !api_key.is_empty());
+        // pi assertRequestAuth: fail fast when neither an API key nor an auth
+        // header is present instead of sending an unauthenticated request.
+        if api_key.is_none() && !headers_carry_request_auth(&options.stream.headers) {
+            return Err(ProviderError::Provider(format!(
+                "No API key for provider: {}",
+                model.provider
+            )));
+        }
+        let api_key = api_key.unwrap_or_default();
         let config = build_anthropic_client_config(
             model,
             &context,
@@ -654,7 +679,10 @@ impl ApiProvider for AnthropicMessagesHttpProvider {
                 api_key,
                 headers: options.stream.headers.clone(),
                 session_id: options.stream.session_id.clone(),
-                cache_retention: options.stream.cache_retention,
+                cache_retention: Some(crate::anthropic::resolve_anthropic_cache_retention_scoped(
+                    options.stream.cache_retention,
+                    &options.stream.env,
+                )),
                 interleaved_thinking: options
                     .stream
                     .extra
@@ -671,6 +699,7 @@ impl ApiProvider for AnthropicMessagesHttpProvider {
             config.is_oauth_token,
         );
         let mut headers = config.default_headers.clone();
+        remove_null_provider_headers(&mut headers, &options.stream);
         headers
             .entry("anthropic-version".to_owned())
             .or_insert_with(|| "2023-06-01".to_owned());
@@ -688,13 +717,27 @@ impl ApiProvider for AnthropicMessagesHttpProvider {
         spawn_anthropic_sse_request(
             model.clone(),
             options,
-            endpoint_url(&base_url, "messages"),
+            // The Anthropic SDK posts to `{baseUrl}/v1/messages` (the catalog
+            // base URLs carry no /v1 segment).
+            endpoint_url(&base_url, "v1/messages"),
             headers,
             payload,
             context.tools.clone(),
             config.is_oauth_token,
         )
     }
+}
+
+/// pi `assertRequestAuth`: accepted request-auth headers with a non-blank
+/// value.
+fn headers_carry_request_auth(headers: &BTreeMap<String, String>) -> bool {
+    ["authorization", "x-api-key", "cf-aig-authorization"]
+        .iter()
+        .any(|name| {
+            headers
+                .iter()
+                .any(|(key, value)| key.eq_ignore_ascii_case(name) && !value.trim().is_empty())
+        })
 }
 
 struct GoogleGenerativeAiHttpProvider;
@@ -727,6 +770,7 @@ impl ApiProvider for GoogleGenerativeAiHttpProvider {
         let payload = build_google_simple_payload(model, &context, options.clone());
         let mut headers = model.headers.clone();
         headers.extend(options.stream.headers.clone());
+        remove_null_provider_headers(&mut headers, &options.stream);
         if !headers_contain(&headers, "x-goog-api-key") {
             let api_key = options
                 .stream
@@ -811,6 +855,7 @@ impl ApiProvider for GoogleVertexHttpProvider {
                 headers.extend(options.stream.headers.clone());
                 headers
             });
+        remove_null_provider_headers(&mut headers, &options.stream);
         if !headers_contain(&headers, "x-goog-api-key")
             && !headers_contain(&headers, "authorization")
             && let Some(api_key) = config.api_key.clone()
@@ -892,8 +937,13 @@ impl ApiProvider for OpenAICodexResponsesHttpProvider {
                     .map(str::to_owned),
             },
         );
+        // Null-valued options headers unset model defaults before the codex
+        // builders add their own required headers (pi buildBaseCodexHeaders
+        // deletes null entries from the Headers object).
+        let mut codex_model_headers = model.headers.clone();
+        remove_null_provider_headers(&mut codex_model_headers, &options.stream);
         let headers = build_openai_codex_sse_headers(
-            &model.headers,
+            &codex_model_headers,
             &options.stream.headers,
             &account_id,
             &token,
@@ -905,7 +955,7 @@ impl ApiProvider for OpenAICodexResponsesHttpProvider {
             .clone()
             .unwrap_or_else(crate::uuidv7);
         let websocket_headers = build_openai_codex_websocket_headers(
-            &model.headers,
+            &codex_model_headers,
             &options.stream.headers,
             &account_id,
             &token,
@@ -950,6 +1000,7 @@ impl ApiProvider for BedrockConverseStreamHttpProvider {
         options: SimpleStreamOptions,
     ) -> Result<AssistantMessageEventStream, ProviderError> {
         ensure_model_api(model, self.api())?;
+        let options = apply_bedrock_simple_stream_defaults(model, &context, options);
         let config = resolve_bedrock_client_config(
             model,
             BedrockClientOptions {
@@ -972,7 +1023,10 @@ impl ApiProvider for BedrockConverseStreamHttpProvider {
             model,
             &context,
             BedrockPayloadOptions {
-                cache_retention: options.stream.cache_retention,
+                cache_retention: Some(crate::bedrock::resolve_bedrock_cache_retention_scoped(
+                    options.stream.cache_retention,
+                    &options.stream.env,
+                )),
                 max_tokens: options.stream.max_tokens,
                 temperature: options.stream.temperature,
                 tool_choice: options
@@ -999,11 +1053,14 @@ impl ApiProvider for BedrockConverseStreamHttpProvider {
         );
         let mut headers = model.headers.clone();
         // `host` and `x-amz-*` participate in the SigV4 canonical request and
-        // must never be overwritten by caller-supplied headers.
+        // `authorization` is owned by SigV4 or the bearer-token path; none may
+        // be overwritten by caller-supplied headers (pi isReservedHeader).
         headers.extend(options.stream.headers.iter().filter_map(|(name, value)| {
             let lower = name.to_ascii_lowercase();
-            (!lower.starts_with("x-amz-") && lower != "host").then(|| (name.clone(), value.clone()))
+            (!lower.starts_with("x-amz-") && lower != "host" && lower != "authorization")
+                .then(|| (name.clone(), value.clone()))
         }));
+        remove_null_provider_headers(&mut headers, &options.stream);
         headers
             .entry("accept".to_owned())
             .or_insert_with(|| "application/vnd.amazon.eventstream".to_owned());
@@ -1037,6 +1094,54 @@ impl ApiProvider for BedrockConverseStreamHttpProvider {
             config,
         )
     }
+}
+
+/// pi bedrock `streamSimple`: an unset maxTokens falls back to the clamped
+/// model cap, and non-adaptive Claude thinking grows/clamps maxTokens so the
+/// budget fits inside `maxTokens - 1024` (pi adjustMaxTokensForThinking).
+fn apply_bedrock_simple_stream_defaults(
+    model: &Model,
+    context: &Context,
+    mut options: SimpleStreamOptions,
+) -> SimpleStreamOptions {
+    let base_max_tokens = crate::simple_options::clamp_max_tokens_to_context(
+        model,
+        context,
+        options.stream.max_tokens.unwrap_or(model.max_tokens),
+    );
+    options.stream.max_tokens = Some(base_max_tokens);
+
+    let Some(reasoning) = options.reasoning else {
+        return options;
+    };
+    if !crate::bedrock::is_bedrock_anthropic_claude_model(model)
+        || crate::bedrock::supports_bedrock_adaptive_thinking(model)
+    {
+        return options;
+    }
+
+    let adjusted = crate::simple_options::adjust_max_tokens_for_thinking(
+        base_max_tokens,
+        model.max_tokens,
+        reasoning,
+        options.thinking_budgets.as_ref(),
+    );
+    let max_tokens =
+        crate::simple_options::clamp_max_tokens_to_context(model, context, adjusted.max_tokens);
+    options.stream.max_tokens = Some(max_tokens);
+    let budget = adjusted
+        .thinking_budget
+        .min(max_tokens.saturating_sub(1024));
+    let mut budgets = options.thinking_budgets.clone().unwrap_or_default();
+    match crate::simple_options::clamp_reasoning_for_budget(reasoning) {
+        crate::types::ThinkingLevel::Minimal => budgets.minimal = Some(budget),
+        crate::types::ThinkingLevel::Low => budgets.low = Some(budget),
+        crate::types::ThinkingLevel::Medium => budgets.medium = Some(budget),
+        crate::types::ThinkingLevel::High => budgets.high = Some(budget),
+        _ => {}
+    }
+    options.thinking_budgets = Some(budgets);
+    options
 }
 
 fn spawn_openai_codex_responses_request(
@@ -1372,10 +1477,15 @@ async fn stream_openai_codex_websocket_json(
         None
     };
     // Rotate sessions past their server-side lifetime instead of reusing a
-    // socket the server is about to close (pi #6268).
+    // socket the server is about to close (pi #6268), and drop sockets that
+    // sat idle past the cache TTL (pi SESSION_WEBSOCKET_CACHE_TTL_MS) so a
+    // fresh connection is dialed instead.
     if let Some(entry) = cached.take_if(|entry| {
         crate::openai_codex_responses::openai_codex_websocket_session_expired(
             entry.created_at_ms,
+            now_millis() as i64,
+        ) || crate::openai_codex_responses::openai_codex_websocket_session_idle_expired(
+            entry.last_used_at_ms,
             now_millis() as i64,
         )
     }) {
@@ -1386,16 +1496,20 @@ async fn stream_openai_codex_websocket_json(
     let (mut socket, continuation, connection_created_at_ms) = if let Some(cached) = cached {
         (cached.socket, cached.continuation, cached.created_at_ms)
     } else {
-        (
-            connect_openai_codex_websocket(
+        // A user abort interrupts the connect wait promptly (pi
+        // connectWebSocket observes the abort signal).
+        let socket = tokio::select! {
+            result = connect_openai_codex_websocket(
                 url,
                 headers,
                 openai_codex_websocket_connect_timeout_ms(options),
-            )
-            .await?,
-            None,
-            now_millis() as i64,
-        )
+            ) => result?,
+            _ = wait_for_abort_flag(options) => {
+                push_abort_if_requested(sender, options, output);
+                return Ok(());
+            }
+        };
+        (socket, None, now_millis() as i64)
     };
 
     let cached_request = if use_cached_context {
@@ -1435,24 +1549,49 @@ async fn stream_openai_codex_websocket_json(
             let _ = socket.close().await;
             return Ok(());
         }
-        let read_result = match idle_timeout_ms {
-            Some(timeout_ms) => {
-                match tokio::time::timeout(
-                    std::time::Duration::from_millis(timeout_ms),
-                    socket.read_json_text(),
-                )
-                .await
-                {
-                    Ok(result) => result,
-                    Err(_) => {
-                        let _ = socket.close().await;
-                        return Err(CodexWebSocketStreamError::transport(format!(
-                            "WebSocket idle timeout after {timeout_ms}ms"
-                        )));
+        enum CodexWebSocketRead {
+            Event(Result<Option<Value>, String>),
+            IdleTimeout,
+            Aborted,
+        }
+        // The read wait observes both the idle timeout and the user abort
+        // flag (pi parseWebSocket wakes on abort immediately).
+        let read_outcome = {
+            let read_future = async {
+                match idle_timeout_ms {
+                    Some(timeout_ms) => {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_millis(timeout_ms),
+                            socket.read_json_text(),
+                        )
+                        .await
+                        {
+                            Ok(result) => CodexWebSocketRead::Event(result),
+                            Err(_) => CodexWebSocketRead::IdleTimeout,
+                        }
                     }
+                    None => CodexWebSocketRead::Event(socket.read_json_text().await),
                 }
+            };
+            tokio::select! {
+                outcome = read_future => outcome,
+                _ = wait_for_abort_flag(options) => CodexWebSocketRead::Aborted,
             }
-            None => socket.read_json_text().await,
+        };
+        let read_result = match read_outcome {
+            CodexWebSocketRead::Event(result) => result,
+            CodexWebSocketRead::IdleTimeout => {
+                let _ = socket.close().await;
+                return Err(CodexWebSocketStreamError::transport(format!(
+                    "WebSocket idle timeout after {}ms",
+                    idle_timeout_ms.unwrap_or_default()
+                )));
+            }
+            CodexWebSocketRead::Aborted => {
+                let _ = socket.close().await;
+                push_abort_if_requested(sender, options, output);
+                return Ok(());
+            }
         };
         let event = read_result
             .map_err(|error| {
@@ -1524,6 +1663,7 @@ async fn stream_openai_codex_websocket_json(
                         socket,
                         continuation,
                         created_at_ms: connection_created_at_ms,
+                        last_used_at_ms: now_millis() as i64,
                     },
                 );
             } else {
@@ -1674,21 +1814,31 @@ async fn stream_openai_codex_sse_json(
             }
             None => build_json_request(model, &request_options, url, headers, payload.clone())?,
         };
-        let send_result = match header_timeout_ms {
-            Some(timeout_ms) => {
-                match tokio::time::timeout(
-                    std::time::Duration::from_millis(timeout_ms),
-                    request.send(),
-                )
-                .await
-                {
-                    Ok(result) => result.map_err(|error| error.to_string()),
-                    Err(_) => Err(format!(
-                        "Codex SSE response headers timed out after {timeout_ms}ms"
-                    )),
+        // The user abort flag cancels the in-flight header wait (pi combines
+        // the user signal with the header-timeout signal in the fetch).
+        let send_result = tokio::select! {
+            result = async {
+                match header_timeout_ms {
+                    Some(timeout_ms) => {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_millis(timeout_ms),
+                            request.send(),
+                        )
+                        .await
+                        {
+                            Ok(result) => result.map_err(|error| error.to_string()),
+                            Err(_) => Err(format!(
+                                "Codex SSE response headers timed out after {timeout_ms}ms"
+                            )),
+                        }
+                    }
+                    None => request.send().await.map_err(|error| error.to_string()),
                 }
+            } => result,
+            _ = wait_for_abort_flag(options) => {
+                push_abort_if_requested(sender, options, output);
+                return Ok(());
             }
-            None => request.send().await.map_err(|error| error.to_string()),
         };
         let response = match send_result {
             Ok(response) => response,
@@ -1697,9 +1847,12 @@ async fn stream_openai_codex_sse_json(
                 if attempt >= max_retries || error.contains("usage limit") {
                     return Err(error);
                 }
-                let delay_ms = openai_codex_network_retry_delay_ms(attempt, options);
-                if delay_ms > 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                // Network backoff is never capped by maxRetryDelayMs (pi
+                // caps only 429 retry-after delays).
+                let delay_ms = openai_codex_network_retry_delay_ms(attempt);
+                if !sleep_observing_abort(delay_ms, options).await {
+                    push_abort_if_requested(sender, options, output);
+                    return Ok(());
                 }
                 attempt += 1;
                 continue;
@@ -1712,6 +1865,7 @@ async fn stream_openai_codex_sse_json(
                 .await;
         }
 
+        let status_text = status.canonical_reason().unwrap_or_default().to_owned();
         let status = status.as_u16();
         let retry_after_ms = response
             .headers()
@@ -1724,11 +1878,12 @@ async fn stream_openai_codex_sse_json(
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         let body = response.text().await.map_err(|error| error.to_string())?;
-        let error = openai_codex_error_message_from_response(status, &body, now_millis());
         let max_retries = openai_codex_max_retries(options);
+        // Retryability (including the terminal 429 rate-limit gate) tests the
+        // RAW response body; the friendly message is only for the final error.
         let Some(delay_ms) = openai_codex_retry_delay_ms_with_limits(
             status,
-            &error,
+            &body,
             retry_after_ms.as_deref(),
             retry_after.as_deref(),
             attempt,
@@ -1736,13 +1891,59 @@ async fn stream_openai_codex_sse_json(
             max_retries,
             options.stream.max_retry_delay_ms,
         ) else {
-            return Err(error);
+            return Err(openai_codex_error_message_from_response(
+                status,
+                &status_text,
+                &body,
+                now_millis(),
+            ));
         };
 
-        if delay_ms > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        if !sleep_observing_abort(delay_ms, options).await {
+            push_abort_if_requested(sender, options, output);
+            return Ok(());
         }
         attempt += 1;
+    }
+}
+
+const ABORT_FLAG_POLL_INTERVAL_MS: u64 = 10;
+
+/// Resolves once the user abort flag is raised; pends forever when the
+/// request has no abort flag.
+async fn wait_for_abort_flag(options: &SimpleStreamOptions) {
+    match options.stream.abort_flag.as_ref() {
+        Some(abort_flag) => {
+            while !abort_flag.load(Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    ABORT_FLAG_POLL_INTERVAL_MS,
+                ))
+                .await;
+            }
+        }
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// Sleep that observes the abort flag every 10ms, mirroring pi's abortable
+/// retry sleeps; returns `false` when aborted before the delay elapsed.
+async fn sleep_observing_abort(delay_ms: u64, options: &SimpleStreamOptions) -> bool {
+    let mut remaining = delay_ms;
+    loop {
+        if options
+            .stream
+            .abort_flag
+            .as_ref()
+            .is_some_and(|abort_flag| abort_flag.load(Ordering::SeqCst))
+        {
+            return false;
+        }
+        if remaining == 0 {
+            return true;
+        }
+        let step = remaining.min(ABORT_FLAG_POLL_INTERVAL_MS);
+        tokio::time::sleep(std::time::Duration::from_millis(step)).await;
+        remaining -= step;
     }
 }
 
@@ -1787,18 +1988,13 @@ fn openai_codex_max_retries(options: &SimpleStreamOptions) -> usize {
         .stream
         .max_retries
         .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(crate::openai_codex_responses::OPENAI_CODEX_MAX_RETRIES)
+        .unwrap_or(crate::openai_codex_responses::OPENAI_CODEX_DEFAULT_MAX_RETRIES)
 }
 
-fn openai_codex_network_retry_delay_ms(attempt: usize, options: &SimpleStreamOptions) -> u64 {
+fn openai_codex_network_retry_delay_ms(attempt: usize) -> u64 {
     let shift = attempt.min(63) as u32;
     let multiplier = 1u64.checked_shl(shift).unwrap_or(u64::MAX);
-    let delay_ms =
-        crate::openai_codex_responses::OPENAI_CODEX_BASE_RETRY_DELAY_MS.saturating_mul(multiplier);
-    options
-        .stream
-        .max_retry_delay_ms
-        .map_or(delay_ms, |max| delay_ms.min(max))
+    crate::openai_codex_responses::OPENAI_CODEX_BASE_RETRY_DELAY_MS.saturating_mul(multiplier)
 }
 
 async fn stream_openai_responses_sse_response(
@@ -1923,8 +2119,19 @@ async fn stream_google_sse_json(
     emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
+        let json_content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("application/json"));
+        let status_text = status.canonical_reason().unwrap_or_default().to_owned();
         let body = response.text().await.map_err(|error| error.to_string())?;
-        return Err(provider_error_from_body(status.as_u16(), &body));
+        return Err(google_provider_error_from_body(
+            status.as_u16(),
+            &status_text,
+            json_content_type,
+            &body,
+        ));
     }
 
     let mut byte_stream = response.bytes_stream();
@@ -2004,12 +2211,30 @@ async fn stream_bedrock_eventstream_json(
     if let Some(timeout_ms) = options.stream.timeout_ms {
         request = request.timeout(std::time::Duration::from_millis(timeout_ms));
     }
+    // Some custom endpoints require HTTP/1.1 instead of HTTP/2 (pi honors the
+    // AWS_BEDROCK_FORCE_HTTP1 escape hatch by swapping the request handler).
+    if crate::get_provider_env_value("AWS_BEDROCK_FORCE_HTTP1", &options.stream.env).as_deref()
+        == Some("1")
+    {
+        request = request.version(reqwest::Version::HTTP_11);
+    }
     let response = request.send().await.map_err(|error| error.to_string())?;
     emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
+        // The AWS exception-name prefix ("Throttling error: " etc.) keeps
+        // downstream retry/overflow classification aligned with pi.
+        let error_type_header = response
+            .headers()
+            .get("x-amzn-errortype")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let body = response.text().await.map_err(|error| error.to_string())?;
-        return Err(provider_error_from_body(status.as_u16(), &body));
+        return Err(crate::bedrock::format_bedrock_http_error(
+            status.as_u16(),
+            error_type_header.as_deref(),
+            &body,
+        ));
     }
 
     let mut byte_stream = response.bytes_stream();
@@ -2067,7 +2292,7 @@ async fn stream_anthropic_sse_json(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.map_err(|error| error.to_string())?;
-        return Err(provider_error_from_body(status.as_u16(), &body));
+        return Err(anthropic_provider_error_from_body(status.as_u16(), &body));
     }
 
     let mut byte_stream = response.bytes_stream();
@@ -2325,12 +2550,7 @@ fn azure_openai_responses_url(base_url: &str, api_version: &str) -> String {
 }
 
 fn mistral_chat_completions_url(base_url: &str) -> String {
-    let base_url = base_url.trim_end_matches('/');
-    if base_url.ends_with("/v1") {
-        format!("{base_url}/chat/completions")
-    } else {
-        format!("{base_url}/v1/chat/completions")
-    }
+    crate::mistral::mistral_chat_completions_url(base_url)
 }
 
 fn google_generative_ai_stream_url(base_url: &str, model_id: &str) -> String {
@@ -2445,6 +2665,82 @@ fn headers_contain(headers: &BTreeMap<String, String>, name: &str) -> bool {
     headers.keys().any(|key| key.eq_ignore_ascii_case(name))
 }
 
+/// Reserved `StreamOptions.extra` key listing header names whose JSON value
+/// was `null`. pi models provider headers as `Record<string, string | null>`
+/// where a null options header unsets the same-named model default header
+/// (pi `providerHeadersToRecord`); ri's typed `BTreeMap<String, String>`
+/// cannot hold nulls, so [`stream_options_from_json`] strips them into this
+/// marker for the merge boundary to consume.
+pub const NULL_PROVIDER_HEADERS_EXTRA_KEY: &str = "__nullProviderHeaders";
+
+/// Pre-filter raw JSON options before `StreamOptions` deserialization:
+/// null-valued headers are removed (instead of failing deserialization) and
+/// recorded under [`NULL_PROVIDER_HEADERS_EXTRA_KEY`].
+pub fn strip_null_provider_headers_json(options_json: &mut Value) {
+    let Some(object) = options_json.as_object_mut() else {
+        return;
+    };
+    let mut removed = Vec::new();
+    if let Some(headers) = object.get_mut("headers").and_then(Value::as_object_mut) {
+        headers.retain(|name, value| {
+            if value.is_null() {
+                removed.push(Value::String(name.clone()));
+                false
+            } else {
+                true
+            }
+        });
+    }
+    if !removed.is_empty() {
+        object.insert(
+            NULL_PROVIDER_HEADERS_EXTRA_KEY.to_owned(),
+            Value::Array(removed),
+        );
+    }
+}
+
+/// Deserialize `StreamOptions` from raw JSON, tolerating pi-style null header
+/// values (which unset model default headers rather than erroring).
+pub fn stream_options_from_json(mut value: Value) -> Result<StreamOptions, String> {
+    strip_null_provider_headers_json(&mut value);
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+/// Deserialize `SimpleStreamOptions` from raw JSON, tolerating pi-style null
+/// header values.
+pub fn simple_stream_options_from_json(mut value: Value) -> Result<SimpleStreamOptions, String> {
+    strip_null_provider_headers_json(&mut value);
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+fn null_provider_header_names(options: &StreamOptions) -> Vec<&str> {
+    options
+        .extra
+        .get(NULL_PROVIDER_HEADERS_EXTRA_KEY)
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default()
+}
+
+/// Remove headers that a null-valued options header unsets
+/// (pi `providerHeadersToRecord`). Names compare case-insensitively, matching
+/// the `Headers`-based providers.
+pub fn remove_null_provider_headers(
+    headers: &mut BTreeMap<String, String>,
+    options: &StreamOptions,
+) {
+    for name in null_provider_header_names(options) {
+        let keys = headers
+            .keys()
+            .filter(|key| key.eq_ignore_ascii_case(name))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in keys {
+            headers.remove(&key);
+        }
+    }
+}
+
 #[cfg(test)]
 fn parse_sse_json_body(body: &str) -> Vec<Value> {
     let mut events = Vec::new();
@@ -2454,14 +2750,21 @@ fn parse_sse_json_body(body: &str) -> Vec<Value> {
     events
 }
 
+const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+
 #[derive(Debug, Default)]
 struct SseJsonParser {
     line_buffer: Vec<u8>,
     data_lines: Vec<String>,
+    /// Leading UTF-8 BOM handling (pi's TextDecoder strips a single BOM at
+    /// the start of the stream before line parsing).
+    bom_checked: bool,
+    bom_matched: u8,
 }
 
 impl SseJsonParser {
     fn push_bytes(&mut self, bytes: &[u8], events: &mut Vec<Value>) {
+        let bytes = self.strip_leading_bom(bytes);
         for byte in bytes {
             if *byte == b'\n' {
                 self.push_line(events);
@@ -2469,6 +2772,33 @@ impl SseJsonParser {
                 self.line_buffer.push(*byte);
             }
         }
+    }
+
+    /// Consume one leading UTF-8 BOM, tolerating a BOM split across chunks;
+    /// a partial match that turns out not to be a BOM is replayed as content
+    /// (BOM bytes are never `\n`, so the line buffer is safe to extend).
+    fn strip_leading_bom<'bytes>(&mut self, bytes: &'bytes [u8]) -> &'bytes [u8] {
+        if self.bom_checked {
+            return bytes;
+        }
+        let mut offset = 0;
+        while offset < bytes.len() {
+            if bytes[offset] == UTF8_BOM[self.bom_matched as usize] {
+                self.bom_matched += 1;
+                offset += 1;
+                if self.bom_matched as usize == UTF8_BOM.len() {
+                    self.bom_checked = true;
+                    return &bytes[offset..];
+                }
+            } else {
+                self.bom_checked = true;
+                self.line_buffer
+                    .extend_from_slice(&UTF8_BOM[..self.bom_matched as usize]);
+                return &bytes[offset..];
+            }
+        }
+        // Chunk ended mid-BOM: wait for more bytes.
+        &[]
     }
 
     fn finish(&mut self, events: &mut Vec<Value>) {
@@ -2565,49 +2895,121 @@ fn push_sse_event(events: &mut Vec<Value>, data_lines: &mut Vec<String>) {
     }
 }
 
-const MAX_PROVIDER_ERROR_BODY_CHARS: usize = 4000;
+pub const MAX_PROVIDER_ERROR_BODY_CHARS: usize = 4000;
 
-fn truncate_provider_error_text(text: &str, max_chars: usize) -> String {
-    let total_chars = text.chars().count();
-    if total_chars <= max_chars {
+/// pi `truncateErrorText` counts UTF-16 code units (JS string length); the
+/// reported truncated-character count uses the same arithmetic.
+pub fn truncate_provider_error_text(text: &str, max_chars: usize) -> String {
+    let total_units: usize = text.chars().map(char::len_utf16).sum();
+    if total_units <= max_chars {
         return text.to_owned();
     }
-    let truncated = text.chars().take(max_chars).collect::<String>();
+    let mut used = 0usize;
+    let mut truncated = String::new();
+    for ch in text.chars() {
+        let units = ch.len_utf16();
+        if used + units > max_chars {
+            break;
+        }
+        used += units;
+        truncated.push(ch);
+    }
     format!(
         "{truncated}... [truncated {} chars]",
-        total_chars - max_chars
+        total_units - max_chars
     )
 }
 
-/// pi surfaces non-2xx OpenAI bodies as `<status>: <body>` (no prefix) or
-/// `<prefix> (<status>): <body>` (`formatProviderError`).
-fn openai_provider_error_from_body(status: u16, body: &str, prefix: Option<&str>) -> String {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        let message = format!("Provider returned HTTP {status}");
-        return match prefix {
-            Some(prefix) => format!("{prefix} ({status}): {message}"),
-            None => message,
-        };
-    }
-    let body = truncate_provider_error_text(trimmed, MAX_PROVIDER_ERROR_BODY_CHARS);
-    match prefix {
-        Some(prefix) => format!("{prefix} ({status}): {body}"),
-        None => format!("{status}: {body}"),
+/// JS truthiness for parsed JSON values (`null`, `false`, `0`, and `""` are
+/// falsy); pi's SDK error composition branches on it.
+fn js_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_none_or(|number| number != 0.0),
+        Value::String(text) => !text.is_empty(),
+        _ => true,
     }
 }
 
-fn openai_completions_provider_error_from_body(status: u16, body: &str) -> String {
+/// The openai/anthropic SDK `APIError.makeMessage(status, error, message)`:
+/// `error.message` when present, otherwise the JSON of `error`, otherwise the
+/// raw text; composed as `"<status> <msg>"` or
+/// `"<status> status code (no body)"`.
+fn sdk_api_error_message(status: u16, error_field: Option<&Value>, raw_message: &str) -> String {
+    let msg = match error_field {
+        Some(field) if js_truthy(field) => match field.get("message") {
+            Some(message) if js_truthy(message) => match message {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            },
+            _ => field.to_string(),
+        },
+        _ => raw_message.to_owned(),
+    };
+    if msg.is_empty() {
+        format!("{status} status code (no body)")
+    } else {
+        format!("{status} {msg}")
+    }
+}
+
+/// Mirrors pi's Anthropic SDK error surface (anthropic-messages.ts:752 keeps
+/// `error.message` verbatim): the SDK folds the WHOLE parsed body into
+/// `"<status> <json>"`, an empty body yields
+/// `"<status> status code (no body)"`, and a non-JSON body passes through.
+pub fn anthropic_provider_error_from_body(status: u16, body: &str) -> String {
+    // Strict JSON.parse like the SDK; JS-falsy parses behave as unparsed.
+    let parsed = serde_json::from_str::<Value>(body).ok().filter(js_truthy);
+    sdk_api_error_message(status, parsed.as_ref(), body)
+}
+
+/// Mirrors pi's openai SDK error + `formatProviderError`: the SDK extracts
+/// the parsed body's `error` field into `"<status> <msg>"`, and
+/// `normalizeProviderError` surfaces the field's JSON (truncated, empty
+/// objects excluded) when the message does not already carry it.
+pub fn openai_provider_error_from_body(status: u16, body: &str, prefix: Option<&str>) -> String {
+    let parsed = serde_json::from_str::<Value>(body).ok().filter(js_truthy);
+    let error_field = parsed.as_ref().and_then(|value| value.get("error"));
+    // JS `errMessage` is the raw text only when the body did not parse.
+    let raw_message = if parsed.is_some() { "" } else { body };
+    let sdk_message = sdk_api_error_message(status, error_field, raw_message);
+    // pi isNonEmptyObject: empty parsed bodies never surface as "{}".
+    let body_text = error_field.and_then(|field| match field {
+        Value::Object(object) if !object.is_empty() => Some(field.to_string()),
+        Value::Array(items) if !items.is_empty() => Some(field.to_string()),
+        _ => None,
+    });
+    let body_text =
+        body_text.map(|text| truncate_provider_error_text(&text, MAX_PROVIDER_ERROR_BODY_CHARS));
+    match body_text {
+        Some(body_text) if !sdk_message.contains(&body_text) => match prefix {
+            Some(prefix) => format!("{prefix} ({status}): {body_text}"),
+            None => format!("{status}: {body_text}"),
+        },
+        _ => match prefix {
+            Some(prefix) => format!("{prefix} ({status}): {sdk_message}"),
+            None => sdk_message,
+        },
+    }
+}
+
+pub fn openai_completions_provider_error_from_body(status: u16, body: &str) -> String {
     let mut message = openai_provider_error_from_body(status, body, None);
     // OpenRouter tucks the upstream reason under error.metadata.raw; append it
-    // only when the surfaced body does not already carry it (pi dedups).
-    if let Some(raw) = parse_json_with_repair::<Value>(body)
+    // only when the surfaced body does not already carry it (pi dedups,
+    // coercing scalar raw values like JS template interpolation).
+    if let Some(raw) = serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|value| {
             value
                 .pointer("/error/metadata/raw")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
+                .and_then(|raw| match raw {
+                    Value::String(text) => Some(text.clone()),
+                    Value::Number(number) => Some(number.to_string()),
+                    Value::Bool(flag) => Some(flag.to_string()),
+                    _ => None,
+                })
         })
         .filter(|raw| !raw.is_empty())
         && !message.contains(&raw)
@@ -2618,22 +3020,26 @@ fn openai_completions_provider_error_from_body(status: u16, body: &str) -> Strin
     message
 }
 
-fn provider_error_from_body(status: u16, body: &str) -> String {
-    parse_json_with_repair::<Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .pointer("/error/message")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| {
-                    value
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-        })
-        .unwrap_or_else(|| format!("Provider returned HTTP {status}: {body}"))
+/// Mirrors @google/genai `throwErrorIfNotOK` (pi surfaces the SDK message
+/// unchanged via `formatProviderError`): JSON responses re-serialize the
+/// whole body, other responses wrap the raw text with the status/statusText.
+pub fn google_provider_error_from_body(
+    status: u16,
+    status_text: &str,
+    json_content_type: bool,
+    body: &str,
+) -> String {
+    if json_content_type {
+        return match serde_json::from_str::<Value>(body) {
+            Ok(value) => value.to_string(),
+            // `response.json()` rejection surfaces as the parse error text.
+            Err(error) => error.to_string(),
+        };
+    }
+    serde_json::json!({
+        "error": { "message": body, "code": status, "status": status_text },
+    })
+    .to_string()
 }
 
 fn push_abort_if_requested(
