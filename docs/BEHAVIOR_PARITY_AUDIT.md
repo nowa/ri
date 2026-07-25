@@ -126,6 +126,38 @@ The three gaps the audit deferred are now implemented:
   loop uses `Number()` and does fall through to dates, so the two paths
   differ on that input in pi too.
 
+## Cross-implementation interop (stage 4)
+
+Fixtures written by pi's own `JsonlSessionStorage` are committed under
+`crates/ri-agent-core/tests/fixtures/` and read back by ri in
+`tests/interop_pi_fixtures.rs`; the reverse direction writes a session from
+ri (`tests/interop_write_for_pi.rs`) and has pi's reader confirm it.
+`tools/interop/verify.sh` runs both halves — regenerate the fixtures with
+`generate-pi-fixtures.ts` only as a deliberate step when syncing baselines.
+
+Feeding real pi bytes through ri immediately surfaced four defects that no
+amount of same-side testing had caught, all now fixed:
+
+- **`auth.json` credentials were unreadable.** ri's `Credential` enum derived
+  its type tags from the variant names, emitting/expecting `o_auth` where pi
+  writes `oauth` — so every OAuth credential in a pi-written `auth.json`
+  failed to deserialize, and ri-written credentials were unreadable by pi.
+- **`firstKeptEntryId` is optional in pi.** ri modeled it as a required
+  `String`, so a pi session whose compaction kept nothing at all failed to
+  open with an "invalid entry" error.
+- **`retainedTail` was dropped on read.** pi stores the kept messages on the
+  compaction entry and replays them after the summary; ri had no field, so a
+  branch rooted at a retained-tail compaction silently lost those messages
+  from the model context. ri now models the tail, stops the branch walk at
+  such a compaction, and expands `summary + retainedTail` exactly like pi —
+  closing the last outstanding gap from the earlier audits.
+- **The tail's wire type is pi's `AgentMessage`**, not ri's tagged
+  context-message type; modeling it with the wrong shape rejected otherwise
+  valid pi files.
+
+ri appends and never rewrites existing lines, which the interop test pins:
+fields ri does not model stay byte-intact on disk for pi to read back.
+
 ## Empirical confirmations worth recording
 
 - groq `qwen/qwen3*` hardcoded `reasoning_effort: "default"` matches pi's

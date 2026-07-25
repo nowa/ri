@@ -1,0 +1,7 @@
+{"type":"session","version":3,"id":"01998f1e-0000-7000-8000-0000000f0f0f","timestamp":"2026-07-25T16:40:06.391Z","cwd":"/workspace/project"}
+{"type":"message","id":"f0000001","parentId":null,"timestamp":"2026-07-26T00:00:21.000Z","message":{"role":"user","content":"hi","timestamp":1784000021000}}
+{"type":"compaction","id":"f0000002","parentId":"f0000001","timestamp":"2026-07-26T00:00:22.000Z","summary":"Compacted without a kept entry.","tokensBefore":999}
+{"type":"custom_message","id":"f0000003","parentId":"f0000002","timestamp":"2026-07-26T00:00:23.000Z","customType":"note","content":"plain string content","display":false}
+{"type":"label","id":"f0000004","parentId":"f0000003","timestamp":"2026-07-26T00:00:24.000Z","targetId":"f0000001"}
+{"type":"session_info","id":"f0000005","parentId":"f0000004","timestamp":"2026-07-26T00:00:25.000Z"}
+{"type":"leaf","id":"29b631de","parentId":"f0000005","timestamp":"2026-07-25T16:40:06.391Z","targetId":null}

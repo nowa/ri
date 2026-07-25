@@ -321,10 +321,24 @@ pub enum SessionTreeEntry {
         parent_id: Option<String>,
         timestamp: String,
         summary: String,
-        #[serde(rename = "firstKeptEntryId")]
-        first_kept_entry_id: String,
+        /// pi leaves this unset when nothing before the compaction is kept.
+        #[serde(
+            rename = "firstKeptEntryId",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        first_kept_entry_id: Option<String>,
         #[serde(rename = "tokensBefore")]
         tokens_before: u64,
+        /// Messages pi kept verbatim after the summary. When present it
+        /// replaces the `firstKeptEntryId` walk entirely (pi
+        /// `defaultContextEntryTransform`).
+        #[serde(
+            rename = "retainedTail",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        retained_tail: Option<Vec<SessionEntryMessage>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         details: Option<Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -907,10 +921,16 @@ pub(crate) fn get_path_to_root_or_compaction(
         }
         if let SessionTreeEntry::Compaction {
             first_kept_entry_id,
+            retained_tail,
             ..
         } = &current
         {
-            stop_at_entry_id = Some(first_kept_entry_id.clone());
+            // pi stops at a retained-tail compaction and otherwise walks on to
+            // `firstKeptEntryId`; an absent id means "no stop".
+            if retained_tail.is_some() {
+                break;
+            }
+            stop_at_entry_id = first_kept_entry_id.clone();
         }
         let Some(parent_id) = current.parent_id().map(str::to_owned) else {
             break;
@@ -1178,6 +1198,30 @@ impl Session {
         from_hook: Option<bool>,
         usage: Option<Usage>,
     ) -> Result<String, SessionError> {
+        self.append_compaction_entry(
+            summary,
+            Some(first_kept_entry_id.into()),
+            tokens_before,
+            None,
+            details,
+            from_hook,
+            usage,
+        )
+    }
+
+    /// Full pi-shaped compaction append: `firstKeptEntryId` is optional and a
+    /// `retainedTail` may carry the kept messages on the entry itself.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_compaction_entry(
+        &mut self,
+        summary: impl Into<String>,
+        first_kept_entry_id: Option<String>,
+        tokens_before: u64,
+        retained_tail: Option<Vec<SessionEntryMessage>>,
+        details: Option<Value>,
+        from_hook: Option<bool>,
+        usage: Option<Usage>,
+    ) -> Result<String, SessionError> {
         let id = self.storage.lock().create_entry_id();
         let parent_id = self.storage.lock().leaf_id()?;
         self.append_entry(SessionTreeEntry::Compaction {
@@ -1185,8 +1229,9 @@ impl Session {
             parent_id,
             timestamp: now_iso(),
             summary: summary.into(),
-            first_kept_entry_id: first_kept_entry_id.into(),
+            first_kept_entry_id,
             tokens_before,
+            retained_tail,
             details,
             usage,
             from_hook,
@@ -1669,6 +1714,7 @@ pub fn default_context_entry_transform(path_entries: &[SessionTreeEntry]) -> Vec
     let SessionTreeEntry::Compaction {
         id,
         first_kept_entry_id,
+        retained_tail,
         ..
     } = compaction_entry
     else {
@@ -1679,13 +1725,21 @@ pub fn default_context_entry_transform(path_entries: &[SessionTreeEntry]) -> Vec
     let Some(compaction_idx) = path_entries.iter().position(|entry| entry.id() == id) else {
         return path_entries.to_vec();
     };
-    let mut found_first_kept = false;
-    for entry in &path_entries[..compaction_idx] {
-        if entry.id() == first_kept_entry_id {
-            found_first_kept = true;
-        }
-        if found_first_kept {
-            entries.push(entry.clone());
+    // A retained tail supersedes the kept-entry walk: the summary carries the
+    // tail messages itself (pi `defaultContextEntryTransform`).
+    if retained_tail.is_some() {
+        entries.extend(path_entries[compaction_idx + 1..].iter().cloned());
+        return entries;
+    }
+    if let Some(first_kept_entry_id) = first_kept_entry_id {
+        let mut found_first_kept = false;
+        for entry in &path_entries[..compaction_idx] {
+            if entry.id() == first_kept_entry_id {
+                found_first_kept = true;
+            }
+            if found_first_kept {
+                entries.push(entry.clone());
+            }
         }
     }
     for entry in &path_entries[compaction_idx + 1..] {
@@ -1717,12 +1771,27 @@ pub fn session_entry_to_context_messages(
             summary,
             tokens_before,
             timestamp,
+            retained_tail,
             ..
-        } => messages.push(SessionMessage::CompactionSummary {
-            summary: summary.clone(),
-            tokens_before: *tokens_before,
-            timestamp: parse_timestamp_millis(timestamp),
-        }),
+        } => {
+            messages.push(SessionMessage::CompactionSummary {
+                summary: summary.clone(),
+                tokens_before: *tokens_before,
+                timestamp: parse_timestamp_millis(timestamp),
+            });
+            // pi appends the retained tail straight after the summary
+            // (`[createCompactionSummaryMessage(...), ...retainedTail]`).
+            for message in retained_tail.iter().flatten() {
+                messages.push(match message {
+                    SessionEntryMessage::Llm(message) => SessionMessage::Llm {
+                        message: message.clone(),
+                    },
+                    SessionEntryMessage::BashExecution(message) => {
+                        SessionMessage::BashExecution(message.clone())
+                    }
+                });
+            }
+        }
         SessionTreeEntry::Custom { custom_type, .. } => {
             if let Some(projector) = options.entry_projectors.get(custom_type)
                 && let Some(projected) = projector(entry, index, entries)

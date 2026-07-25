@@ -45,9 +45,12 @@ pub struct OAuthCredential {
 
 /// One type-tagged credential per provider — the shape of today's auth.json.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type")]
 pub enum Credential {
+    // pi's on-disk tags are exactly `api_key` and `oauth`.
+    #[serde(rename = "api_key")]
     ApiKey(ApiKeyCredential),
+    #[serde(rename = "oauth")]
     OAuth(OAuthCredential),
 }
 

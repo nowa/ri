@@ -1568,7 +1568,10 @@ async fn agent_harness_compacts_session_and_persists_summary() {
         })
         .expect("compaction entry");
     assert!(compaction.0.contains("Harness summary"));
-    assert_eq!(compaction.1, &result.first_kept_entry_id);
+    assert_eq!(
+        compaction.1.as_deref(),
+        Some(result.first_kept_entry_id.as_str())
+    );
     assert_eq!(*compaction.2, result.tokens_before);
     let generated_usage = result.usage.as_ref().expect("generated compaction usage");
     assert!(generated_usage.total_tokens > 0);

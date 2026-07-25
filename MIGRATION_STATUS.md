@@ -2474,6 +2474,15 @@ Alignment; the following upstream increments remain open:
   timeout), and canonicalized temp dirs in the execution-env tests — which
   fixes the long-standing macOS-only `/var -> /private/var` failure; the
   workspace suite now passes 1325/1325 locally.
+- Cross-implementation interop (2026-07-26): committed session fixtures
+  written by pi's own JsonlSessionStorage, read back by ri; an ri-written
+  session validated by pi's reader; `tools/interop/verify.sh` runs both
+  directions. Found and fixed four defects same-side testing missed:
+  `Credential` type tag `o_auth` vs pi's `oauth` (auth.json was unusable in
+  both directions), required-vs-optional `firstKeptEntryId`, missing
+  `retainedTail` storage/replay (kept messages were dropped from context),
+  and the tail's `AgentMessage` wire shape. `retainedTail` was the last
+  outstanding gap from the earlier audits. Workspace 1547 passed / 0 failed.
 - Behavior-parity feature gaps closed (2026-07-25): Copilot `/models`
   entitlement fetch + `availableModelIds` filtering via the provider
   `filter_models` hook; Bedrock and Vertex interactive logins plus pi's full

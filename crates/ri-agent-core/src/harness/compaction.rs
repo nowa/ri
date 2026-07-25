@@ -493,9 +493,13 @@ pub fn prepare_compaction(
         } = &path_entries[index]
         {
             previous_summary = Some(summary.clone());
-            boundary_start = path_entries
-                .iter()
-                .position(|entry| entry.id() == first_kept_entry_id)
+            boundary_start = first_kept_entry_id
+                .as_deref()
+                .and_then(|first_kept_entry_id| {
+                    path_entries
+                        .iter()
+                        .position(|entry| entry.id() == first_kept_entry_id)
+                })
                 .unwrap_or(index + 1);
         }
     }

@@ -1,0 +1,36 @@
+{
+  "anthropic": {
+    "type": "oauth",
+    "refresh": "refresh-token",
+    "access": "access-token",
+    "expires": 1784000000000
+  },
+  "openai-codex": {
+    "type": "oauth",
+    "refresh": "codex-refresh",
+    "access": "codex-access",
+    "expires": 1784000100000,
+    "accountId": "acct_123"
+  },
+  "github-copilot": {
+    "type": "oauth",
+    "refresh": "ghu_refresh",
+    "access": "tid=x;proxy-ep=proxy.individual.githubcopilot.com;",
+    "expires": 1784000200000,
+    "enterpriseUrl": "ghe.example.com",
+    "availableModelIds": [
+      "gpt-5.2-codex",
+      "claude-sonnet-4.6"
+    ]
+  },
+  "openai": {
+    "type": "api_key",
+    "key": "sk-test"
+  },
+  "amazon-bedrock": {
+    "type": "api_key",
+    "env": {
+      "AWS_PROFILE": "prod"
+    }
+  }
+}
