@@ -173,6 +173,9 @@ records the exact pi baseline (version and commit), and releases are tagged
 [GitHub Releases](https://github.com/nowa/ri/releases). The crates are not
 published to crates.io yet; consume them as Git dependencies.
 
+Syncing ri to a newer pi release follows
+[docs/SYNC_PROCESS.md](docs/SYNC_PROCESS.md).
+
 ## Quick Start
 
 Add the crates as path dependencies inside this repository or as Git
