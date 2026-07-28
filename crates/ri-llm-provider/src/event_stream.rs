@@ -43,6 +43,27 @@ impl AssistantMessageEventSender {
         }
     }
 
+    /// True when the consumer dropped both the event stream and the result
+    /// future before completion: nothing can observe this request anymore, so
+    /// the network task should stop reading and release the connection
+    /// (upstream gateways count an open stream against the per-key
+    /// concurrency bucket until the socket closes).
+    pub fn is_abandoned(&self) -> bool {
+        let state = self
+            .state
+            .lock()
+            .expect("event stream sender mutex poisoned");
+        if state.done {
+            return false;
+        }
+        let events_gone = state.sender.as_ref().is_none_or(|sender| sender.is_closed());
+        let result_gone = state
+            .result_sender
+            .as_ref()
+            .is_none_or(|sender| sender.is_closed());
+        events_gone && result_gone
+    }
+
     pub fn end(&self, result: AssistantMessage) {
         let mut state = self
             .state

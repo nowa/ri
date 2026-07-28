@@ -307,14 +307,18 @@ async fn stream_pi_messages_sse(
     let status = response.status();
     if !status.is_success() {
         let status_text = status.canonical_reason().unwrap_or_default().to_owned();
+        let retry_after = retry_after_hint_ms(&response);
         let body = response.text().await.map_err(|error| error.to_string())?;
-        return Err(crate::pi_messages::append_pi_messages_response_failure(
-            output,
-            model,
-            url,
-            status.as_u16(),
-            &status_text,
-            &body,
+        return Err(append_retry_after_hint(
+            crate::pi_messages::append_pi_messages_response_failure(
+                output,
+                model,
+                url,
+                status.as_u16(),
+                &status_text,
+                &body,
+            ),
+            retry_after,
         ));
     }
 
@@ -1692,10 +1696,11 @@ async fn stream_openai_completions_sse_json(
     emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
+        let retry_after = retry_after_hint_ms(&response);
         let body = response.text().await.map_err(|error| error.to_string())?;
-        return Err(openai_completions_provider_error_from_body(
-            status.as_u16(),
-            &body,
+        return Err(append_retry_after_hint(
+            openai_completions_provider_error_from_body(status.as_u16(), &body),
+            retry_after,
         ));
     }
 
@@ -1757,16 +1762,16 @@ async fn stream_openai_responses_sse_json(
     emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
+        let retry_after = retry_after_hint_ms(&response);
         let body = response.text().await.map_err(|error| error.to_string())?;
         let prefix = if model.api == "azure-openai-responses" {
             "Azure OpenAI API error"
         } else {
             "OpenAI API error"
         };
-        return Err(openai_provider_error_from_body(
-            status.as_u16(),
-            &body,
-            Some(prefix),
+        return Err(append_retry_after_hint(
+            openai_provider_error_from_body(status.as_u16(), &body, Some(prefix)),
+            retry_after,
         ));
     }
 
@@ -2375,8 +2380,12 @@ async fn stream_anthropic_sse_json(
     emit_simple_response_hooks(model, options, &response).await?;
     let status = response.status();
     if !status.is_success() {
+        let retry_after = retry_after_hint_ms(&response);
         let body = response.text().await.map_err(|error| error.to_string())?;
-        return Err(anthropic_provider_error_from_body(status.as_u16(), &body));
+        return Err(append_retry_after_hint(
+            anthropic_provider_error_from_body(status.as_u16(), &body),
+            retry_after,
+        ));
     }
 
     let mut byte_stream = response.bytes_stream();
@@ -3038,6 +3047,49 @@ fn sdk_api_error_message(status: u16, error_field: Option<&Value>, raw_message: 
     }
 }
 
+/// Gateway retry hint from a non-2xx response's headers, resolved to a
+/// positive delay in ms (`retry-after-ms` wins, then `retry-after` as seconds
+/// or an HTTP date). Must be read before the body consumes the response.
+fn retry_after_hint_ms(response: &reqwest::Response) -> Option<u64> {
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    let retry_after_ms = header("retry-after-ms");
+    let retry_after = header("retry-after");
+    crate::retry::sdk_retry_after_delay_ms(
+        retry_after_ms.as_deref(),
+        retry_after.as_deref(),
+        now_millis() as i64,
+    )
+    .filter(|delay_ms| *delay_ms > 0.0)
+    .map(|delay_ms| delay_ms as u64)
+}
+
+/// Provider errors cross API boundaries as plain strings, so the retry hint
+/// rides inside the message where outer retry loops can parse it back out
+/// (see `parse_retry_after_hint_ms`) instead of falling back to blind backoff.
+fn append_retry_after_hint(message: String, hint_ms: Option<u64>) -> String {
+    match hint_ms {
+        Some(delay_ms) => format!("{message} (retry-after-ms: {delay_ms})"),
+        None => message,
+    }
+}
+
+/// Inverse of `append_retry_after_hint` for consumers holding only the error
+/// text.
+pub fn parse_retry_after_hint_ms(message: &str) -> Option<u64> {
+    let (_, tail) = message.rsplit_once("(retry-after-ms: ")?;
+    let digits: &str = &tail[..tail.find(|c: char| !c.is_ascii_digit()).unwrap_or(tail.len())];
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 /// Mirrors pi's Anthropic SDK error surface (anthropic-messages.ts:752 keeps
 /// `error.message` verbatim): the SDK folds the WHOLE parsed body into
 /// `"<status> <json>"`, an empty body yields
@@ -3131,6 +3183,18 @@ fn push_abort_if_requested(
     options: &SimpleStreamOptions,
     output: &mut AssistantMessage,
 ) -> bool {
+    // A dropped consumer can never observe this stream again; keeping the
+    // socket open only pins an upstream concurrency slot, so treat it like an
+    // abort even without an abort_flag.
+    if sender.is_abandoned() {
+        push_provider_error(
+            sender,
+            output,
+            StopReason::Aborted,
+            "Request was aborted: stream consumer dropped".to_owned(),
+        );
+        return true;
+    }
     if !options
         .stream
         .abort_flag
@@ -3195,5 +3259,47 @@ mod tests {
             parse_sse_json_body(body),
             vec![serde_json::json!({ "a": 1 })]
         );
+    }
+
+    #[test]
+    fn retry_after_hint_round_trips_through_error_text() {
+        let message = append_retry_after_hint("429: busy".to_owned(), Some(12_500));
+        assert_eq!(message, "429: busy (retry-after-ms: 12500)");
+        assert_eq!(parse_retry_after_hint_ms(&message), Some(12_500));
+        // Outer layers may wrap the message; trailing text must not break it.
+        let wrapped = format!("transient LLM error: {message} [attempt 3]");
+        assert_eq!(parse_retry_after_hint_ms(&wrapped), Some(12_500));
+        assert_eq!(parse_retry_after_hint_ms("429: busy"), None);
+        assert_eq!(
+            append_retry_after_hint("500: oops".to_owned(), None),
+            "500: oops"
+        );
+    }
+
+    #[test]
+    fn abandoned_stream_consumer_aborts_the_request_loop() {
+        let (sender, stream) = crate::assistant_message_event_stream();
+        assert!(!sender.is_abandoned());
+        drop(stream);
+        assert!(sender.is_abandoned());
+
+        let options = SimpleStreamOptions::default();
+        let mut output = empty_assistant_message(&Model {
+            id: "test-model".to_owned(),
+            name: "test-model".to_owned(),
+            api: "openai-completions".to_owned(),
+            provider: "test".to_owned(),
+            base_url: "https://example.invalid".to_owned(),
+            reasoning: false,
+            thinking_level_map: BTreeMap::new(),
+            input: Vec::new(),
+            cost: Default::default(),
+            context_window: 0,
+            max_tokens: 0,
+            headers: BTreeMap::new(),
+            compat: None,
+        });
+        assert!(push_abort_if_requested(&sender, &options, &mut output));
+        assert_eq!(output.stop_reason, StopReason::Aborted);
     }
 }
