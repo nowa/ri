@@ -155,6 +155,16 @@ async fn record_event(events: &mut Vec<AgentEvent>, config: &AgentLoopConfig, ev
     if let Some(sink) = &config.event_sink {
         sink.on_event(&event).await;
     }
+    // Per-delta MessageUpdate events are delivered to the sink above but NOT
+    // retained in the returned event log: each one owns two full deep copies
+    // of the partial assistant message (the `message` field plus the
+    // `partial` inside `assistant_message_event`), so retaining them makes
+    // the buffer grow quadratically with streamed output — hundreds of MB of
+    // RSS per long round, all discarded unread at the end of the run. The
+    // final content is still fully represented by MessageStart/MessageEnd.
+    if matches!(event, AgentEvent::MessageUpdate { .. }) {
+        return;
+    }
     events.push(event);
 }
 

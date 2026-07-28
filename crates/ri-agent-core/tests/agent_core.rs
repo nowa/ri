@@ -881,7 +881,10 @@ async fn agent_loop_emits_lifecycle_events_and_messages() {
     assert_eq!(text_of(&messages[1]), Some("Hi there!"));
     let event_names: Vec<&str> = events.iter().map(event_name).collect();
     assert!(event_names.starts_with(&["agent_start", "turn_start", "message_start"]));
-    assert!(event_names.contains(&"message_update"));
+    // MessageUpdate is sink-only: retaining per-delta events (each owning two
+    // full partial-message copies) in the returned log grows memory
+    // quadratically with streamed output, so record_event drops them.
+    assert!(!event_names.contains(&"message_update"));
     assert!(event_names.contains(&"turn_end"));
     assert_eq!(event_names.last(), Some(&"agent_end"));
     registration.unregister();
