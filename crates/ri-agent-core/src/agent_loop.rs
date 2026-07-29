@@ -12,7 +12,7 @@ use ri_llm_provider::{
     ToolResultContent, ToolResultMessage, Usage, now_millis, stream_simple,
     validate_tool_arguments_value,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct AgentLoopConfig {
@@ -83,7 +83,6 @@ struct ToolExecutionOutcome {
     tool_name: String,
     result: crate::types::AgentToolResult,
     is_error: bool,
-    update_events: Vec<AgentEvent>,
 }
 
 enum ToolCallPreparation {
@@ -155,14 +154,19 @@ async fn record_event(events: &mut Vec<AgentEvent>, config: &AgentLoopConfig, ev
     if let Some(sink) = &config.event_sink {
         sink.on_event(&event).await;
     }
-    // Per-delta MessageUpdate events are delivered to the sink above but NOT
-    // retained in the returned event log: each one owns two full deep copies
-    // of the partial assistant message (the `message` field plus the
-    // `partial` inside `assistant_message_event`), so retaining them makes
-    // the buffer grow quadratically with streamed output — hundreds of MB of
-    // RSS per long round, all discarded unread at the end of the run. The
-    // final content is still fully represented by MessageStart/MessageEnd.
-    if matches!(event, AgentEvent::MessageUpdate { .. }) {
+    // Per-chunk progress events are delivered to the sink above but NOT
+    // retained in the returned event log: a MessageUpdate owns two full deep
+    // copies of the partial assistant message (the `message` field plus the
+    // `partial` inside `assistant_message_event`) and a ToolExecutionUpdate
+    // owns the partial tool result, so retaining them makes the buffer grow
+    // quadratically with streamed output — hundreds of MB of RSS per long
+    // round, all discarded unread at the end of the run (pi's `agentLoop`
+    // returns messages only). Final content stays fully represented by
+    // MessageStart/MessageEnd and ToolExecutionEnd.
+    if matches!(
+        event,
+        AgentEvent::MessageUpdate { .. } | AgentEvent::ToolExecutionUpdate { .. }
+    ) {
         return;
     }
     events.push(event);
@@ -639,7 +643,6 @@ async fn run_one_turn(
 
             let prepared_outcomes = execute_tool_calls(prepared_calls, config, events).await?;
             for outcome in &prepared_outcomes {
-                events.extend(outcome.update_events.iter().cloned());
                 record_tool_execution_end(events, config, outcome).await;
             }
             execution_outcomes.extend(prepared_outcomes);
@@ -672,7 +675,6 @@ async fn run_one_turn(
                         }
                         ToolCallPreparation::Immediate(outcome) => outcome,
                     };
-                events.extend(outcome.update_events.iter().cloned());
                 record_tool_execution_end(events, config, &outcome).await;
                 let message = tool_result_message_from_outcome(outcome.clone());
                 let tool_result_message = AgentMessage::ToolResult(message.clone());
@@ -957,8 +959,6 @@ async fn execute_prepared_tool_call(
     let update_args = call.event_args.clone();
     let update_tool_call_id = call.tool_call_id.clone();
     let update_tool_name = call.tool_name.clone();
-    let update_events = Arc::new(Mutex::new(Vec::new()));
-    let update_events_ref = update_events.clone();
     // The update callback is scoped to the current execute() invocation; late
     // calls made after the tool settles are ignored.
     let accepting_updates = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -968,7 +968,6 @@ async fn execute_prepared_tool_call(
             return Box::pin(async {});
         }
         let event_sink = event_sink.clone();
-        let update_events = update_events_ref.clone();
         let event = AgentEvent::ToolExecutionUpdate {
             tool_call_id: update_tool_call_id.clone(),
             tool_name: update_tool_name.clone(),
@@ -979,10 +978,6 @@ async fn execute_prepared_tool_call(
             if let Some(sink) = event_sink {
                 sink.on_event(&event).await;
             }
-            update_events
-                .lock()
-                .expect("tool update events")
-                .push(event);
         })
     });
     let mut is_error = false;
@@ -1051,7 +1046,6 @@ async fn execute_prepared_tool_call(
         tool_name: call.tool_name,
         result,
         is_error,
-        update_events: update_events.lock().expect("tool update events").clone(),
     })
 }
 
@@ -1067,7 +1061,6 @@ fn error_tool_execution_outcome(
         tool_name,
         result: error_tool_result(error),
         is_error: true,
-        update_events: Vec::new(),
     }
 }
 

@@ -1055,6 +1055,20 @@ async fn agent_loop_executes_tool_calls_and_appends_results() {
     registration.unregister();
 }
 
+/// Per-chunk progress events (MessageUpdate / ToolExecutionUpdate) are
+/// delivered to the event sink only — the returned log deliberately omits them
+/// so it cannot grow with streamed output.
+struct ProgressRecordingSink {
+    events: Arc<Mutex<Vec<AgentEvent>>>,
+}
+
+#[async_trait::async_trait]
+impl AgentEventSink for ProgressRecordingSink {
+    async fn on_event(&self, event: &AgentEvent) {
+        self.events.lock().expect("sink events").push(event.clone());
+    }
+}
+
 #[tokio::test]
 async fn agent_loop_emits_tool_execution_update_from_tool_callbacks() {
     let registration = register_faux_provider(RegisterFauxProviderOptions::default());
@@ -1100,6 +1114,10 @@ async fn agent_loop_emits_tool_execution_update_from_tool_callbacks() {
     context.tools.push(tool);
     let mut config = AgentLoopConfig::new(registration.get_model());
     config.tool_call_hooks.push(Arc::new(ReplacingToolCallHook));
+    let sink_events = Arc::new(Mutex::new(Vec::new()));
+    config.event_sink = Some(Arc::new(ProgressRecordingSink {
+        events: sink_events.clone(),
+    }));
     let (messages, events) = agent_loop_prompt(context, "run progress tool", config)
         .await
         .expect("loop");
@@ -1108,6 +1126,23 @@ async fn agent_loop_emits_tool_execution_update_from_tool_callbacks() {
     assert_eq!(text_of(&messages[2]), Some("final: hooked"));
     assert_eq!(text_of(&messages[3]), Some("done"));
 
+    // The returned log carries the lifecycle only; per-chunk progress events
+    // are sink-only so the log cannot grow with streamed output.
+    let logged = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                AgentEvent::ToolExecutionStart { .. }
+                    | AgentEvent::ToolExecutionUpdate { .. }
+                    | AgentEvent::ToolExecutionEnd { .. }
+            )
+        })
+        .map(event_name)
+        .collect::<Vec<_>>();
+    assert_eq!(logged, vec!["tool_execution_start", "tool_execution_end"]);
+
+    let events = sink_events.lock().expect("sink events").clone();
     let tool_events = events
         .iter()
         .filter(|event| {
@@ -5064,13 +5099,20 @@ async fn agent_loop_ignores_late_tool_progress_updates() {
 
     let mut context = context_with_model(&registration.get_model());
     context.tools.push(tool);
-    let config = AgentLoopConfig::new(registration.get_model());
+    let mut config = AgentLoopConfig::new(registration.get_model());
+    let sink_events = Arc::new(Mutex::new(Vec::new()));
+    config.event_sink = Some(Arc::new(ProgressRecordingSink {
+        events: sink_events.clone(),
+    }));
 
-    let (_messages, events) = agent_loop_prompt(context, "run tool", config)
+    let (_messages, _events) = agent_loop_prompt(context, "run tool", config)
         .await
         .expect("loop");
 
-    let update_count = events
+    // Progress updates reach the sink (never the returned log).
+    let update_count = sink_events
+        .lock()
+        .expect("sink events")
         .iter()
         .filter(|event| matches!(event, AgentEvent::ToolExecutionUpdate { .. }))
         .count();

@@ -48,6 +48,9 @@ static NON_OVERFLOW_PATTERNS: std::sync::LazyLock<Vec<Regex>> = std::sync::LazyL
 pub fn is_context_overflow(message: &AssistantMessage, context_window: Option<u64>) -> bool {
     if message.stop_reason == StopReason::Error {
         if let Some(error) = &message.error_message {
+            // ri appends the gateway's announced wait to provider error text;
+            // that transport metadata is not part of the provider's message.
+            let error = crate::retry::strip_retry_after_hint(error);
             let non_overflow = NON_OVERFLOW_PATTERNS
                 .iter()
                 .any(|pattern| pattern.is_match(error));

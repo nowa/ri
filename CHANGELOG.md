@@ -16,6 +16,24 @@ When ri syncs to a new pi minor line, the version jumps accordingly
 
 ## [Unreleased]
 
+### Fixed
+
+- Long-running agents no longer accumulate hundreds of MB of RSS: the event
+  log returned by `agent_loop_*` retained one `MessageUpdate` per SSE delta
+  (each owning two copies of the partial assistant message) plus every
+  partial tool result, growing quadratically with streamed output while both
+  in-tree consumers discarded it unread. Progress events still reach the
+  `event_sink` in real time; the returned log keeps the lifecycle events.
+  Reported with production evidence in longbridge/ri#7.
+- Streaming requests release upstream concurrency slots promptly and stop
+  retrying blind against a rate-limited gateway: non-2xx streaming failures
+  now carry the announced wait as a `(retry-after-ms: N)` suffix (parse it
+  back with `parse_retry_after_hint_ms`), and a dropped stream consumer is
+  treated as an abort instead of letting the detached task read the response
+  body to completion. The suffix is stripped before error classification so
+  the delay's digits cannot flip a terminal 4xx into a retryable error.
+  Reported with production evidence in longbridge/ri#8.
+
 ## [0.81.3] - 2026-07-26
 
 Pi baseline: unchanged (v0.81.1, commit

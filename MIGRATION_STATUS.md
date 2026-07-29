@@ -2474,6 +2474,14 @@ Alignment; the following upstream increments remain open:
   timeout), and canonicalized temp dirs in the execution-env tests — which
   fixes the long-standing macOS-only `/var -> /private/var` failure; the
   workspace suite now passes 1325/1325 locally.
+- Production-reported fixes from longbridge/ri#7 and #8 (2026-07-28):
+  the returned agent event log no longer retains per-chunk progress events
+  (quadratic RSS growth in long streaming rounds; pi's agentLoop returns
+  messages only), and streaming provider errors now carry the gateway's
+  `retry-after` as a parseable suffix while an abandoned stream consumer
+  aborts the request so the upstream concurrency slot is released. The
+  suffix is stripped before error classification — its digits would
+  otherwise match the retryable-status patterns.
 - Cross-implementation interop (2026-07-26): committed session fixtures
   written by pi's own JsonlSessionStorage, read back by ri; an ri-written
   session validated by pi's reader; `tools/interop/verify.sh` runs both

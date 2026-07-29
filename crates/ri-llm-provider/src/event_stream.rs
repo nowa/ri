@@ -56,7 +56,10 @@ impl AssistantMessageEventSender {
         if state.done {
             return false;
         }
-        let events_gone = state.sender.as_ref().is_none_or(|sender| sender.is_closed());
+        let events_gone = state
+            .sender
+            .as_ref()
+            .is_none_or(|sender| sender.is_closed());
         let result_gone = state
             .result_sender
             .as_ref()

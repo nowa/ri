@@ -95,6 +95,22 @@ Highest-impact fixes (the audit's justification):
 - **ri-only hardening kept**: agent-loop max-turn cap, WS frame/handshake
   caps, OAuth callback limits, JSON repair on SSE frames (pi throws),
   lazy idle-TTL check instead of a release-armed timer.
+- **Gateway concurrency hardening** (longbridge/ri#8, production incident):
+  non-2xx streaming errors carry the gateway's announced wait as a
+  `(retry-after-ms: N)` suffix so hosts holding only the error string can
+  honor it instead of backing off blindly, and a dropped stream consumer is
+  treated as an abort so the request task stops reading and releases the
+  upstream concurrency slot. The suffix is ri-only transport metadata: it is
+  stripped before any error-classification pattern runs
+  (`retry::strip_retry_after_hint`), because the delay's digits would
+  otherwise match the retryable-status patterns and turn a terminal 4xx into
+  a "retryable" error.
+- **Returned agent event log omits per-chunk progress events**
+  (longbridge/ri#7, production incident): pi's `agentLoop` returns messages
+  only, so ri's extra event log is convenience — and retaining one
+  `MessageUpdate` per SSE delta (each owning two copies of the
+  partial message) grew it quadratically with output. Progress events are
+  delivered to the `event_sink` in real time; the log keeps the lifecycle.
 
 ## Feature gaps closed (2026-07-25, after the audit)
 

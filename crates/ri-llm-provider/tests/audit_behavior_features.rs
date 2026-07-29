@@ -757,3 +757,87 @@ async fn non_retryable_statuses_are_not_retried_even_when_opted_in() {
     assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
     task.abort();
 }
+
+// ---------------------------------------------------------------------------
+// Gateway retry-hint plumbing (longbridge/ri#8) must not leak into the error
+// classifiers: the delay's digits would otherwise match the retryable-status
+// patterns.
+// ---------------------------------------------------------------------------
+
+fn error_message_assistant(text: &str) -> AssistantMessage {
+    AssistantMessage {
+        content: Vec::new(),
+        api: "openai-completions".to_owned(),
+        provider: "openai".to_owned(),
+        model: "gpt-4o-mini".to_owned(),
+        response_model: None,
+        response_id: None,
+        diagnostics: Vec::new(),
+        usage: Usage::zero(),
+        stop_reason: StopReason::Error,
+        error_message: Some(text.to_owned()),
+        timestamp: 0,
+    }
+}
+
+#[test]
+fn retry_after_hint_does_not_change_error_classification() {
+    // A terminal 400 stays terminal even when the gateway announced a wait
+    // whose digits ("5000") contain a retryable status code ("500").
+    let terminal = "OpenAI API error (400): invalid request";
+    assert!(!is_retryable_assistant_error(&error_message_assistant(
+        terminal
+    )));
+    assert!(!is_retryable_assistant_error(&error_message_assistant(
+        &format!("{terminal} (retry-after-ms: 5000)")
+    )));
+
+    // Genuinely retryable errors stay retryable with the hint attached.
+    let retryable = "OpenAI API error (429): rate limit reached";
+    assert!(is_retryable_assistant_error(&error_message_assistant(
+        retryable
+    )));
+    assert!(is_retryable_assistant_error(&error_message_assistant(
+        &format!("{retryable} (retry-after-ms: 1200)")
+    )));
+
+    // Terminal quota limits keep overriding the retryable patterns.
+    let quota = "OpenRouter error (429): insufficient_quota";
+    assert!(!is_retryable_assistant_error(&error_message_assistant(
+        &format!("{quota} (retry-after-ms: 30000)")
+    )));
+
+    // Context-overflow detection is likewise unaffected in both directions.
+    let overflow = "400 status code (no body)";
+    assert!(is_context_overflow(
+        &error_message_assistant(overflow),
+        Some(200_000)
+    ));
+    assert!(is_context_overflow(
+        &error_message_assistant(&format!("{overflow} (retry-after-ms: 900)")),
+        Some(200_000)
+    ));
+    let plain = "OpenAI API error (400): invalid request";
+    assert!(!is_context_overflow(
+        &error_message_assistant(&format!("{plain} (retry-after-ms: 900)")),
+        Some(200_000)
+    ));
+
+    // The hint round-trips for hosts that only hold the error text.
+    assert_eq!(
+        parse_retry_after_hint_ms(&format!("{terminal} (retry-after-ms: 5000)")),
+        Some(5_000)
+    );
+    assert_eq!(parse_retry_after_hint_ms(terminal), None);
+    // Stripping is exact: the suffix goes, the message is untouched.
+    assert_eq!(
+        strip_retry_after_hint(&format!("{terminal} (retry-after-ms: 5000)")),
+        terminal
+    );
+    assert_eq!(strip_retry_after_hint(terminal), terminal);
+    // A partial or unterminated marker is left alone rather than truncating.
+    assert_eq!(
+        strip_retry_after_hint("boom (retry-after-ms: 12"),
+        "boom (retry-after-ms: 12"
+    );
+}

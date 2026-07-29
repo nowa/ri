@@ -219,6 +219,17 @@ pub fn sdk_retry_jitter_sample() -> f64 {
     sample * SDK_RETRY_JITTER_FRACTION
 }
 
+/// Transport metadata ri appends to provider error text (the gateway's
+/// announced `(retry-after-ms: N)` wait) must never reach error-classification
+/// patterns: the delay's digits would otherwise match the retryable-status
+/// patterns and turn a terminal 4xx into a "retryable" error.
+pub fn strip_retry_after_hint(error_message: &str) -> &str {
+    match error_message.rfind(" (retry-after-ms: ") {
+        Some(index) if error_message.ends_with(')') => error_message[..index].trim_end(),
+        _ => error_message,
+    }
+}
+
 pub fn is_non_retryable_provider_limit_error(error_message: &str) -> bool {
     NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.is_match(error_message)
 }
@@ -386,6 +397,7 @@ pub fn is_retryable_assistant_error(message: &AssistantMessage) -> bool {
     if error_message.is_empty() {
         return false;
     }
+    let error_message = strip_retry_after_hint(error_message);
     if NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.is_match(error_message) {
         return false;
     }

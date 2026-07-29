@@ -534,3 +534,70 @@ fn skill_ignore_patterns_support_character_classes() {
     assert_eq!(descriptions, expected);
     let _ = fs::remove_dir_all(&root);
 }
+
+/// longbridge/ri#7: the returned event log must not grow with streamed output.
+/// Per-chunk progress events go to the sink; the log keeps the lifecycle only.
+#[tokio::test]
+async fn returned_event_log_omits_per_chunk_progress_events() {
+    use ri_agent_core::*;
+    use std::sync::{Arc, Mutex};
+
+    struct Sink {
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentEventSink for Sink {
+        async fn on_event(&self, event: &AgentEvent) {
+            let name = match event {
+                AgentEvent::MessageUpdate { .. } => "message_update",
+                AgentEvent::ToolExecutionUpdate { .. } => "tool_execution_update",
+                AgentEvent::MessageEnd { .. } => "message_end",
+                _ => return,
+            };
+            self.events.lock().expect("events").push(name.to_owned());
+        }
+    }
+
+    let registration = register_faux_provider(RegisterFauxProviderOptions::default());
+    registration.set_responses(vec![
+        faux_assistant_message("streamed reply", Default::default()).into(),
+    ]);
+
+    let sink_events = Arc::new(Mutex::new(Vec::new()));
+    let mut config = AgentLoopConfig::new(registration.get_model());
+    config.event_sink = Some(Arc::new(Sink {
+        events: sink_events.clone(),
+    }));
+    let context = AgentContext {
+        system_prompt: String::new(),
+        messages: Vec::new(),
+        tools: Vec::new(),
+    };
+
+    let (_messages, events) = agent_loop_prompt(context, "hello", config)
+        .await
+        .expect("loop");
+
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::MessageUpdate { .. })),
+        "MessageUpdate must never be retained: each one owns two copies of the \
+         partial message, so the log would grow quadratically with output"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::MessageEnd { .. })),
+        "the final message content is still represented in the log"
+    );
+    // The sink saw the streamed deltas the log dropped.
+    let observed = sink_events.lock().expect("events").clone();
+    assert!(
+        observed.contains(&"message_update".to_owned()),
+        "{observed:?}"
+    );
+    assert!(observed.contains(&"message_end".to_owned()), "{observed:?}");
+    registration.unregister();
+}
