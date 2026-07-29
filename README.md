@@ -26,7 +26,7 @@ The workspace contains the Rust implementation and local test coverage for the
 core pi-ai and pi-agent-core behavior that is practical to verify without live
 provider credentials.
 
-As of the latest local verification, `cargo test --workspace` passes 1547
+As of the latest local verification, `cargo test --workspace` passes 1552
 Rust tests with 0 failures. Those numbers are tracked in detail in
 [MIGRATION_STATUS.md](MIGRATION_STATUS.md). Parity with pi has been audited
 from four angles, each with a committed matrix:
@@ -130,9 +130,11 @@ model services where applicable, and manual OAuth flows.
 `ri-agent-core` includes:
 
 - Stateful `Agent` and lower-level `agent_loop` APIs.
-- Event streaming for agent, turn, message, and tool execution events, including
-  partial tool execution updates with Pi-style raw tool-call arguments in
-  start/update events.
+- Event streaming for agent, turn, message, and tool execution events,
+  including partial message and tool execution updates with Pi-style raw
+  tool-call arguments in start/update events. Per-chunk progress events are
+  delivered to the event sink; the event log returned by `agent_loop_*` keeps
+  the lifecycle events so it cannot grow with streamed output.
 - Parallel and sequential tool execution, including per-call lifecycle and
   tool-result event ordering for sequential batches.
 - Tool call and tool result hooks, including pre-execution blocking with error
@@ -178,7 +180,7 @@ tracks the pi release line ri is behavior-compatible with (`0.81` = pi
 0.81.x); the patch component is ri-owned and advances for ri bug fixes and
 small baseline syncs. Each release entry in [CHANGELOG.md](CHANGELOG.md)
 records the exact pi baseline (version and commit), and releases are tagged
-(`v0.81.3`) with matching
+(`v0.81.4`) with matching
 [GitHub Releases](https://github.com/nowa/ri/releases). The crates are not
 published to crates.io yet; consume them as Git dependencies.
 
@@ -192,8 +194,8 @@ dependencies pinned to a release tag:
 
 ```toml
 [dependencies]
-ri-llm-provider = { git = "https://github.com/nowa/ri.git", tag = "v0.81.3" }
-ri-agent-core = { git = "https://github.com/nowa/ri.git", tag = "v0.81.3" }
+ri-llm-provider = { git = "https://github.com/nowa/ri.git", tag = "v0.81.4" }
+ri-agent-core = { git = "https://github.com/nowa/ri.git", tag = "v0.81.4" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
