@@ -219,6 +219,19 @@ pub fn sdk_retry_jitter_sample() -> f64 {
     sample * SDK_RETRY_JITTER_FRACTION
 }
 
+/// Inverse of the `(retry-after-ms: N)` suffix ri appends to streaming
+/// provider errors, for consumers holding only the error text.
+pub fn parse_retry_after_hint_ms(message: &str) -> Option<u64> {
+    let (_, tail) = message.rsplit_once("(retry-after-ms: ")?;
+    let digits: &str = &tail[..tail
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(tail.len())];
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 /// Transport metadata ri appends to provider error text (the gateway's
 /// announced `(retry-after-ms: N)` wait) must never reach error-classification
 /// patterns: the delay's digits would otherwise match the retryable-status
@@ -352,10 +365,15 @@ where
             .clone()
             .unwrap_or_else(|| "Unknown error".to_owned());
         last_retry = Some((attempt, error_message.clone()));
-        let delay_ms = policy
-            .map(|policy| policy.base_delay_ms)
-            .unwrap_or(0)
-            .saturating_mul(1u64 << (attempt - 1).min(62));
+        // When the gateway announced when a slot frees up, wait exactly that
+        // long: blind exponential backoff lands while the bucket is still
+        // full and re-collides on every beat (longbridge/ri#8).
+        let delay_ms = parse_retry_after_hint_ms(&error_message).unwrap_or_else(|| {
+            policy
+                .map(|policy| policy.base_delay_ms)
+                .unwrap_or(0)
+                .saturating_mul(1u64 << (attempt - 1).min(62))
+        });
         if let Some(callbacks) = callbacks
             && let Some(on_retry_scheduled) = &callbacks.on_retry_scheduled
         {

@@ -841,3 +841,61 @@ fn retry_after_hint_does_not_change_error_classification() {
         "boom (retry-after-ms: 12"
     );
 }
+
+#[tokio::test]
+async fn internal_retry_waits_the_gateway_announced_delay() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let scheduled = Arc::new(Mutex::new(Vec::new()));
+    let seen = scheduled.clone();
+    let mut callbacks = RetryCallbacks::default();
+    callbacks.on_retry_scheduled = Some(Arc::new(move |attempt, _max, delay_ms, _error| {
+        seen.lock().expect("scheduled").push((attempt, delay_ms));
+    }));
+    let policy = RetryPolicy {
+        enabled: true,
+        max_retries: 2,
+        // Blind backoff would wait 30s then 60s here; the gateway's announced
+        // wait must win instead (longbridge/ri#8).
+        base_delay_ms: 30_000,
+    };
+
+    let calls = attempts.clone();
+    let message = retry_assistant_call(
+        move || {
+            let attempt = calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                let text = if attempt == 0 {
+                    "500: {\"message\":\"Concurrency limit exceeded for user, please retry later\"} (retry-after-ms: 20)"
+                } else {
+                    "ok"
+                };
+                Ok::<_, String>(if attempt == 0 {
+                    error_message_assistant(text)
+                } else {
+                    let mut done = error_message_assistant("");
+                    done.stop_reason = StopReason::Stop;
+                    done.error_message = None;
+                    done
+                })
+            }
+        },
+        Some(&policy),
+        None,
+        Some(&callbacks),
+    )
+    .await
+    .expect("retry");
+
+    assert_eq!(message.stop_reason, StopReason::Stop);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        scheduled.lock().expect("scheduled").as_slice(),
+        [(1, 20)],
+        "the announced 20ms wait replaces the 30s blind backoff"
+    );
+}

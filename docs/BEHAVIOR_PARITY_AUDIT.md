@@ -104,7 +104,10 @@ Highest-impact fixes (the audit's justification):
   stripped before any error-classification pattern runs
   (`retry::strip_retry_after_hint`), because the delay's digits would
   otherwise match the retryable-status patterns and turn a terminal 4xx into
-  a "retryable" error.
+  a "retryable" error. ri's own `retry_assistant_call` (harness compaction and
+  branch summarization) also prefers the announced delay over its blind
+  exponential backoff — pi's `retry.ts` has no header access and stays blind,
+  so this is deliberate ri-only hardening.
 - **Returned agent event log omits per-chunk progress events**
   (longbridge/ri#7, production incident): pi's `agentLoop` returns messages
   only, so ri's extra event log is convenience — and retaining one

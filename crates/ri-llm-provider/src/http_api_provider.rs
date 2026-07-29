@@ -3079,19 +3079,6 @@ fn append_retry_after_hint(message: String, hint_ms: Option<u64>) -> String {
     }
 }
 
-/// Inverse of `append_retry_after_hint` for consumers holding only the error
-/// text.
-pub fn parse_retry_after_hint_ms(message: &str) -> Option<u64> {
-    let (_, tail) = message.rsplit_once("(retry-after-ms: ")?;
-    let digits: &str = &tail[..tail
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(tail.len())];
-    if digits.is_empty() {
-        return None;
-    }
-    digits.parse().ok()
-}
-
 /// Mirrors pi's Anthropic SDK error surface (anthropic-messages.ts:752 keeps
 /// `error.message` verbatim): the SDK folds the WHOLE parsed body into
 /// `"<status> <json>"`, an empty body yields
@@ -3253,6 +3240,7 @@ fn empty_assistant_message(model: &Model) -> AssistantMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::retry::parse_retry_after_hint_ms;
 
     #[test]
     fn parses_sse_json_body_and_ignores_done() {

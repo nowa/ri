@@ -31,7 +31,9 @@ When ri syncs to a new pi minor line, the version jumps accordingly
   back with `parse_retry_after_hint_ms`), and a dropped stream consumer is
   treated as an abort instead of letting the detached task read the response
   body to completion. The suffix is stripped before error classification so
-  the delay's digits cannot flip a terminal 4xx into a retryable error.
+  the delay's digits cannot flip a terminal 4xx into a retryable error, and
+  ri's own bounded retry loop (harness compaction and branch summarization)
+  now waits the announced delay instead of its blind exponential backoff.
   Reported with production evidence in longbridge/ri#8.
 
 ## [0.81.3] - 2026-07-26
